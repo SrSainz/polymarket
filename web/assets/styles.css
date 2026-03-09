@@ -151,6 +151,69 @@ button:hover {
   font-weight: 700;
 }
 
+.card-subvalue {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.mini-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mini-panel {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 250, 242, 0.88);
+  backdrop-filter: blur(3px);
+  padding: 12px;
+}
+
+.mini-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.mini-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.mini-item {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 8px;
+}
+
+.mini-item strong {
+  display: block;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+}
+
+.mini-item span {
+  display: block;
+  color: var(--muted);
+  margin-top: 4px;
+  font-size: 0.76rem;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.mini-meta {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
 .panel {
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -164,6 +227,26 @@ button:hover {
   justify-content: space-between;
   align-items: center;
   margin: 0 4px 10px;
+}
+
+.panel-details > summary {
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 8px;
+}
+
+.panel-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-details > summary::after {
+  content: "+";
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--muted);
+}
+
+.panel-details[open] > summary::after {
+  content: "-";
 }
 
 h2 {
@@ -268,6 +351,10 @@ td {
   .cards {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .mini-panels {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
@@ -297,6 +384,10 @@ td {
 
   .panel-head {
     margin: 0 2px 8px;
+  }
+
+  .mini-panel {
+    padding: 10px;
   }
 
   .table-wrap {
@@ -374,5 +465,9 @@ td {
 
   .cards {
     grid-template-columns: 1fr;
+  }
+
+  .mini-item strong {
+    font-size: 0.76rem;
   }
 }

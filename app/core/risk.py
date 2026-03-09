@@ -32,6 +32,12 @@ class RiskManager:
             return False, "category blocked by allowed_tags/blocked_tags"
 
         if instruction.side == TradeSide.BUY:
+            if instruction.price < self.config.min_price:
+                return False, "min_price filter"
+
+            if instruction.price > self.config.max_price:
+                return False, "max_price filter"
+
             if daily_pnl <= -abs(self.config.max_daily_loss):
                 return False, "max_daily_loss reached"
 

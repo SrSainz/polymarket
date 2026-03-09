@@ -35,16 +35,36 @@
           <p class="card-value" id="openPositions">-</p>
         </article>
         <article class="card">
-          <p class="card-label">Exposición (USDC)</p>
+          <p class="card-label">Exposicion (USDC)</p>
           <p class="card-value" id="exposure">-</p>
         </article>
         <article class="card">
-          <p class="card-label">PnL acumulado</p>
+          <p class="card-label">PnL total</p>
           <p class="card-value" id="pnl">-</p>
+          <p class="card-subvalue" id="pnlBreakdown">realized - / unrealized -</p>
         </article>
         <article class="card">
-          <p class="card-label">Señales pendientes</p>
+          <p class="card-label">Senales pendientes</p>
           <p class="card-value" id="pendingSignals">-</p>
+        </article>
+      </section>
+
+      <section class="mini-panels">
+        <article class="mini-panel">
+          <div class="mini-head">
+            <h2>Wallets activas</h2>
+            <span id="selectedWalletsCount" class="badge">0</span>
+          </div>
+          <ul id="selectedWalletsList" class="mini-list"></ul>
+          <p id="selectedWalletsMeta" class="mini-meta">sin datos</p>
+        </article>
+        <article class="mini-panel">
+          <div class="mini-head">
+            <h2>Bloqueos riesgo</h2>
+            <span id="riskBlocksCount" class="badge">0</span>
+          </div>
+          <ul id="riskBlocksList" class="mini-list"></ul>
+          <p id="riskBlocksMeta" class="mini-meta">sin datos</p>
         </article>
       </section>
 
@@ -69,18 +89,18 @@
         </div>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
+      <details class="panel panel-details">
+        <summary class="panel-head">
           <h2>Ejecuciones recientes</h2>
-          <span class="badge">Últimas 50</span>
-        </div>
+          <span class="badge">Ultimas 50</span>
+        </summary>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Hora UTC</th>
                 <th>Modo</th>
-                <th>Acción</th>
+                <th>Accion</th>
                 <th>Lado</th>
                 <th>Size</th>
                 <th>Price</th>
@@ -90,19 +110,19 @@
             <tbody id="executionsBody"></tbody>
           </table>
         </div>
-      </section>
+      </details>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Señales</h2>
-          <span class="badge">Últimas 100</span>
-        </div>
+      <details class="panel panel-details">
+        <summary class="panel-head">
+          <h2>Senales</h2>
+          <span class="badge">Ultimas 100</span>
+        </summary>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Hora UTC</th>
-                <th>Acción</th>
+                <th>Accion</th>
                 <th>Prev</th>
                 <th>New</th>
                 <th>Delta</th>
@@ -113,11 +133,11 @@
             <tbody id="signalsBody"></tbody>
           </table>
         </div>
-      </section>
+      </details>
     </main>
 
     <footer class="footer">
-      <p id="lastUpdated">Última actualización: -</p>
+      <p id="lastUpdated">Ultima actualizacion: -</p>
     </footer>
 
     <script src="/assets/app.js"></script>

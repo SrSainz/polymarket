@@ -2,21 +2,33 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import requests
 
-def run_dashboard_server(db_path: Path, static_dir: Path, host: str = "127.0.0.1", port: int = 8765) -> None:
-    handler_class = _build_handler(db_path=db_path, static_dir=static_dir)
+_MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
+_MIDPOINT_CACHE_TTL_SECONDS = 20
+
+
+def run_dashboard_server(
+    db_path: Path,
+    static_dir: Path,
+    clob_host: str,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+) -> None:
+    handler_class = _build_handler(db_path=db_path, static_dir=static_dir, clob_host=clob_host)
     server = ThreadingHTTPServer((host, port), handler_class)
     print(f"dashboard => http://{host}:{port}")
     server.serve_forever()
 
 
-def _build_handler(db_path: Path, static_dir: Path):
+def _build_handler(db_path: Path, static_dir: Path, clob_host: str):
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_OPTIONS(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -46,10 +58,10 @@ def _build_handler(db_path: Path, static_dir: Path):
                 self._json({"ok": True})
                 return
             if path == "/api/summary":
-                self._json(_summary_payload(db_path))
+                self._json(_summary_payload(db_path, clob_host=clob_host))
                 return
             if path == "/api/positions":
-                self._json(_positions_payload(db_path))
+                self._json(_positions_payload(db_path, clob_host=clob_host))
                 return
             if path == "/api/executions":
                 query = parse_qs(parsed.query)
@@ -60,6 +72,17 @@ def _build_handler(db_path: Path, static_dir: Path):
                 query = parse_qs(parsed.query)
                 limit = _safe_int(query.get("limit", ["100"])[0], default=100, minimum=1, maximum=500)
                 self._json(_signals_payload(db_path, limit=limit))
+                return
+            if path == "/api/selected-wallets":
+                query = parse_qs(parsed.query)
+                limit = _safe_int(query.get("limit", ["5"])[0], default=5, minimum=1, maximum=20)
+                self._json(_selected_wallets_payload(db_path, limit=limit))
+                return
+            if path == "/api/risk-blocks":
+                query = parse_qs(parsed.query)
+                limit = _safe_int(query.get("limit", ["5"])[0], default=5, minimum=1, maximum=20)
+                hours = _safe_int(query.get("hours", ["24"])[0], default=24, minimum=1, maximum=24 * 30)
+                self._json(_risk_blocks_payload(db_path, limit=limit, hours=hours))
                 return
 
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
@@ -100,27 +123,48 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _summary_payload(db_path: Path) -> dict:
+def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
     with _connect(db_path) as conn:
         open_positions = _single_float(conn, "SELECT COUNT(*) AS value FROM copy_positions")
         exposure = _single_float(conn, "SELECT COALESCE(SUM(ABS(size * avg_price)), 0) AS value FROM copy_positions")
-        cumulative_pnl = _single_float(conn, "SELECT COALESCE(SUM(pnl), 0) AS value FROM daily_pnl")
+        realized_pnl = _single_float(conn, "SELECT COALESCE(SUM(pnl), 0) AS value FROM daily_pnl")
         pending_signals = _single_float(conn, "SELECT COUNT(*) AS value FROM signals WHERE status='pending'")
         executed_signals = _single_float(conn, "SELECT COUNT(*) AS value FROM signals WHERE status='executed'")
         failed_signals = _single_float(conn, "SELECT COUNT(*) AS value FROM signals WHERE status='failed'")
+        positions = conn.execute(
+            "SELECT asset, size, avg_price FROM copy_positions"
+        ).fetchall()
+
+    unrealized_pnl = 0.0
+    exposure_mark = 0.0
+    for row in positions:
+        asset = str(row["asset"])
+        size = float(row["size"])
+        avg_price = float(row["avg_price"])
+        mark_price = _midpoint_for_asset(clob_host=clob_host, asset=asset)
+        if mark_price is None:
+            mark_price = avg_price
+        unrealized_pnl += (mark_price - avg_price) * size
+        exposure_mark += abs(size * mark_price)
+
+    pnl_total = realized_pnl + unrealized_pnl
 
     return {
         "timestamp_utc": datetime.utcnow().isoformat(),
         "open_positions": int(open_positions),
         "exposure": round(exposure, 4),
-        "cumulative_pnl": round(cumulative_pnl, 4),
+        "exposure_mark": round(exposure_mark, 4),
+        "cumulative_pnl": round(realized_pnl, 4),
+        "realized_pnl": round(realized_pnl, 4),
+        "unrealized_pnl": round(unrealized_pnl, 4),
+        "pnl_total": round(pnl_total, 4),
         "pending_signals": int(pending_signals),
         "executed_signals": int(executed_signals),
         "failed_signals": int(failed_signals),
     }
 
 
-def _positions_payload(db_path: Path) -> dict:
+def _positions_payload(db_path: Path, *, clob_host: str) -> dict:
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -146,6 +190,11 @@ def _positions_payload(db_path: Path) -> dict:
                 "category": row["category"] or "",
             }
         )
+        mark_price = _midpoint_for_asset(clob_host=clob_host, asset=str(row["asset"]))
+        if mark_price is None:
+            mark_price = float(row["avg_price"])
+        positions[-1]["mark_price"] = float(mark_price)
+        positions[-1]["unrealized_pnl"] = float((mark_price - float(row["avg_price"])) * float(row["size"]))
     return {"items": positions}
 
 
@@ -225,8 +274,62 @@ def _signals_payload(db_path: Path, limit: int) -> dict:
     return {"items": items}
 
 
-def _single_float(conn: sqlite3.Connection, query: str) -> float:
-    row = conn.execute(query).fetchone()
+def _selected_wallets_payload(db_path: Path, limit: int) -> dict:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT wallet, rank, score, win_rate, recent_trades, pnl, selected_at
+            FROM selected_wallets
+            ORDER BY rank ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    items = []
+    for row in rows:
+        items.append(
+            {
+                "wallet": row["wallet"],
+                "rank": int(row["rank"]),
+                "score": float(row["score"]),
+                "win_rate": float(row["win_rate"]),
+                "recent_trades": int(row["recent_trades"]),
+                "pnl": float(row["pnl"]),
+                "selected_at": int(row["selected_at"]),
+            }
+        )
+    return {"items": items}
+
+
+def _risk_blocks_payload(db_path: Path, *, limit: int, hours: int) -> dict:
+    cutoff = int(time.time()) - (hours * 3600)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT note, COUNT(*) AS total
+            FROM signals
+            WHERE status = 'blocked' AND detected_at >= ? AND note <> ''
+            GROUP BY note
+            ORDER BY total DESC
+            LIMIT ?
+            """,
+            (cutoff, limit),
+        ).fetchall()
+        blocked_total = _single_float(
+            conn,
+            "SELECT COUNT(*) AS value FROM signals WHERE status = 'blocked' AND detected_at >= ?",
+            (cutoff,),
+        )
+
+    items = []
+    for row in rows:
+        items.append({"reason": row["note"], "count": int(row["total"])})
+    return {"items": items, "hours": hours, "blocked_total": int(blocked_total)}
+
+
+def _single_float(conn: sqlite3.Connection, query: str, params: tuple = ()) -> float:
+    row = conn.execute(query, params).fetchone()
     if row is None:
         return 0.0
     value = row["value"]
@@ -241,3 +344,29 @@ def _safe_int(raw: str, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(minimum, min(maximum, value))
+
+
+def _midpoint_for_asset(*, clob_host: str, asset: str) -> float | None:
+    now = time.time()
+    cached = _MIDPOINT_CACHE.get(asset)
+    if cached and now < cached[1]:
+        return cached[0]
+
+    midpoint: float | None = None
+    try:
+        response = requests.get(
+            f"{clob_host.rstrip('/')}/midpoint",
+            params={"token_id": asset},
+            timeout=4,
+        )
+        if response.status_code != 404:
+            response.raise_for_status()
+            payload = response.json()
+            raw_mid = payload.get("mid")
+            if raw_mid is not None:
+                midpoint = float(raw_mid)
+    except requests.RequestException:
+        midpoint = None
+
+    _MIDPOINT_CACHE[asset] = (midpoint, now + _MIDPOINT_CACHE_TTL_SECONDS)
+    return midpoint

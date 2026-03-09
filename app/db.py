@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS daily_pnl (
     day TEXT PRIMARY KEY,
     pnl REAL NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS selected_wallets (
+    wallet TEXT PRIMARY KEY,
+    rank INTEGER NOT NULL,
+    score REAL NOT NULL DEFAULT 0,
+    win_rate REAL NOT NULL DEFAULT 0,
+    recent_trades INTEGER NOT NULL DEFAULT 0,
+    pnl REAL NOT NULL DEFAULT 0,
+    selected_at INTEGER NOT NULL
+);
 """
 
 
@@ -136,6 +146,16 @@ class Database:
                 observed_at=int(row["updated_at"]),
             )
         return output
+
+    def list_source_wallets(self) -> list[str]:
+        rows = self.conn.execute(
+            """
+            SELECT DISTINCT wallet
+            FROM source_positions_current
+            ORDER BY wallet ASC
+            """
+        ).fetchall()
+        return [str(row["wallet"]) for row in rows]
 
     def replace_source_positions(self, wallet: str, positions: list[SourcePosition], run_id: str) -> None:
         now_ts = int(time.time())
@@ -182,6 +202,32 @@ class Database:
                         position.outcome,
                         position.category,
                         position.observed_at,
+                    ),
+                )
+
+    def delete_source_wallet_positions(self, wallet: str) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM source_positions_current WHERE wallet = ?", (wallet,))
+
+    def replace_selected_wallets(self, rows: list[dict[str, float | int | str]]) -> None:
+        now_ts = int(time.time())
+        with self.conn:
+            self.conn.execute("DELETE FROM selected_wallets")
+            for rank, row in enumerate(rows, start=1):
+                self.conn.execute(
+                    """
+                    INSERT INTO selected_wallets (
+                        wallet, rank, score, win_rate, recent_trades, pnl, selected_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(row.get("wallet") or "").strip().lower(),
+                        rank,
+                        float(row.get("score") or 0.0),
+                        float(row.get("win_rate") or 0.0),
+                        int(row.get("recent_trades") or 0),
+                        float(row.get("pnl") or 0.0),
+                        now_ts,
                     ),
                 )
 

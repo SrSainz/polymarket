@@ -92,6 +92,7 @@ Edita `config/settings.yaml`:
 - `sizing_mode`: `fixed_amount_per_trade` o `proportional_to_source`
 - `fixed_amount_per_trade`: notional fijo por trade
 - `proportional_scale`: multiplicador de copia proporcional
+- `min_price` / `max_price`: filtro de entrada por precio (evita mercados extremos de 0.00x o 0.99x)
 - `max_position_per_market`
 - `max_total_exposure`
 - `max_daily_loss`
@@ -121,7 +122,7 @@ python run.py dashboard
 Ejemplo real de `once`:
 
 ```text
-sync => wallets=3 snapshots=9 new_signals=3
+sync => wallets=3 snapshots=9 new_signals=3 dropped_wallets=0 rebalance_signals=0
 execute => pending=3 filled=3 blocked=0 skipped=0 failed=0
 ```
 
@@ -140,11 +141,17 @@ execute => pending=3 filled=3 blocked=0 skipped=0 failed=0
 - Modo public API (si no existe backend local): lee `data-api.polymarket.com` directo en browser
 - Wallet en modo public: `/?wallet=0x...`
 - Forzar API remota del bot (ej. Vercel -> NAS): `/?api=https://tu-api-bot`
+- Incluye:
+  - wallets top seleccionadas (score, winrate, actividad)
+  - bloqueos de riesgo agregados (ventana 24h)
+  - PnL total = realized + unrealized (mark-to-market por `clob midpoint`)
 - Endpoints:
   - `/api/summary`
   - `/api/positions`
   - `/api/executions`
   - `/api/signals`
+  - `/api/selected-wallets`
+  - `/api/risk-blocks`
 
 ## Vercel
 
@@ -181,6 +188,7 @@ SQLite `data/bot.db`:
 - `copy_positions`
 - `executions`
 - `daily_pnl`
+- `selected_wallets`
 
 ## Logs y reportes
 

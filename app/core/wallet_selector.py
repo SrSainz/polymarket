@@ -27,22 +27,38 @@ class WalletSelector:
         self.config = config
         self.logger = logger
         self._cached_wallets: list[str] = []
+        self._cached_scores: list[WalletScore] = []
         self._next_refresh_ts: float = 0.0
 
     def resolve_wallets(self) -> list[str]:
         if not self.config.auto_select_wallets:
-            return self.config.watched_wallets
+            self._cached_wallets = list(self.config.watched_wallets)
+            self._cached_scores = self._fallback_scores(self._cached_wallets)
+            return self._cached_wallets
 
         now = time.time()
         if self._cached_wallets and now < self._next_refresh_ts:
             return self._cached_wallets
 
-        selected = self._select_wallets_from_market_data()
+        selected, selected_scores = self._select_wallets_from_market_data()
         self._cached_wallets = selected
+        self._cached_scores = selected_scores
         self._next_refresh_ts = now + (self.config.wallet_selection_refresh_minutes * 60)
         return selected
 
-    def _select_wallets_from_market_data(self) -> list[str]:
+    def get_last_selection_rows(self) -> list[dict[str, float | int | str]]:
+        return [
+            {
+                "wallet": row.wallet,
+                "score": row.score,
+                "win_rate": row.win_rate,
+                "recent_trades": row.recent_trades,
+                "pnl": row.pnl,
+            }
+            for row in self._cached_scores
+        ]
+
+    def _select_wallets_from_market_data(self) -> tuple[list[str], list[WalletScore]]:
         leaderboard = self.activity_client.get_leaderboard(
             category=self.config.leaderboard_category,
             time_period=self.config.leaderboard_time_period,
@@ -50,7 +66,8 @@ class WalletSelector:
         )
         if not leaderboard:
             self.logger.warning("wallet-selector: leaderboard returned no results, falling back to configured wallets")
-            return self.config.watched_wallets
+            fallback = list(self.config.watched_wallets)
+            return fallback, self._fallback_scores(fallback)
 
         max_positive_pnl = max(
             [max(_to_float(item.get("pnl")), 0.0) for item in leaderboard],
@@ -100,14 +117,16 @@ class WalletSelector:
 
         scored.sort(key=lambda row: (row.score, row.win_rate, row.recent_trades, row.pnl), reverse=True)
         selected = [row.wallet for row in scored[: self.config.top_wallets_to_copy]]
+        selected_scores = scored[: self.config.top_wallets_to_copy]
 
         if not selected:
             self.logger.warning(
                 "wallet-selector: no wallet passed filters (winrate/activity), falling back to configured wallets"
             )
-            return self.config.watched_wallets
+            fallback = list(self.config.watched_wallets)
+            return fallback, self._fallback_scores(fallback)
 
-        for row in scored[: self.config.top_wallets_to_copy]:
+        for row in selected_scores:
             self.logger.info(
                 "wallet-selector: wallet=%s score=%.4f win_rate=%.2f recent_trades=%s pnl=%.2f",
                 row.wallet,
@@ -116,12 +135,24 @@ class WalletSelector:
                 row.recent_trades,
                 row.pnl,
             )
-        return selected
+        return selected, selected_scores
 
     def _count_recent_trades(self, wallet: str) -> int:
         trades = self.activity_client.get_trades(wallet=wallet, limit=self.config.recent_trades_limit_per_wallet)
         cutoff = int(time.time()) - (self.config.recent_trade_lookback_hours * 3600)
         return sum(1 for trade in trades if int(_to_float(trade.get("timestamp"))) >= cutoff)
+
+    def _fallback_scores(self, wallets: list[str]) -> list[WalletScore]:
+        return [
+            WalletScore(
+                wallet=wallet,
+                win_rate=0.0,
+                recent_trades=0,
+                pnl=0.0,
+                score=0.0,
+            )
+            for wallet in wallets
+        ]
 
 
 def _wins_losses_from_closed_positions(closed_positions: list[dict]) -> tuple[int, int]:

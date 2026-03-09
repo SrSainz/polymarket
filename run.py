@@ -68,7 +68,9 @@ def run_once(sync_service: SyncWalletsService, execute_service: ExecuteCopyServi
     print(
         "sync => "
         f"wallets={sync_stats.get('wallets', 0)} snapshots={sync_stats['snapshots']} "
-        f"new_signals={sync_stats['signals']}"
+        f"new_signals={sync_stats['signals']} "
+        f"dropped_wallets={sync_stats.get('dropped_wallets', 0)} "
+        f"rebalance_signals={sync_stats.get('rebalance_signals', 0)}"
     )
     exec_stats = execute_service.run(mode=mode)
     print(
@@ -100,7 +102,9 @@ def main() -> int:
             print(
                 "sync => "
                 f"wallets={stats.get('wallets', 0)} snapshots={stats['snapshots']} "
-                f"new_signals={stats['signals']}"
+                f"new_signals={stats['signals']} "
+                f"dropped_wallets={stats.get('dropped_wallets', 0)} "
+                f"rebalance_signals={stats.get('rebalance_signals', 0)}"
             )
             return 0
 
@@ -113,6 +117,7 @@ def main() -> int:
             run_dashboard_server(
                 db_path=settings.paths.db_path,
                 static_dir=settings.paths.root / "web",
+                clob_host=settings.env.clob_host,
                 host=settings.env.dashboard_host,
                 port=settings.env.dashboard_port,
             )

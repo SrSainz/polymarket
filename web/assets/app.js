@@ -31,10 +31,24 @@ function escapeHtml(raw) {
     .replaceAll(">", "&gt;");
 }
 
+function shortWallet(wallet) {
+  const value = String(wallet || "");
+  if (value.length <= 14) return value;
+  return `${value.slice(0, 8)}...${value.slice(-6)}`;
+}
+
 async function getJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
+}
+
+async function safeGetJson(url, fallback) {
+  try {
+    return await getJson(url);
+  } catch (_error) {
+    return fallback;
+  }
 }
 
 function buildApiUrl(path) {
@@ -70,7 +84,13 @@ function saveApiBase(value) {
 function paintSummary(summary) {
   document.getElementById("openPositions").textContent = String(summary.open_positions ?? 0);
   document.getElementById("exposure").textContent = fmt(summary.exposure, 2);
-  document.getElementById("pnl").textContent = fmt(summary.cumulative_pnl, 2);
+
+  const pnlTotal = Number(summary.pnl_total ?? summary.cumulative_pnl ?? 0);
+  const realized = Number(summary.realized_pnl ?? summary.cumulative_pnl ?? 0);
+  const unrealized = Number(summary.unrealized_pnl ?? 0);
+  document.getElementById("pnl").textContent = fmt(pnlTotal, 2);
+  document.getElementById("pnlBreakdown").textContent = `realized ${fmt(realized, 2)} / unrealized ${fmt(unrealized, 2)}`;
+
   document.getElementById("pendingSignals").textContent = String(summary.pending_signals ?? "-");
 
   const modeText =
@@ -80,6 +100,56 @@ function paintSummary(summary) {
       ? `public api fallback (${watchedWallet})`
       : `public api mode (${watchedWallet})`;
   document.getElementById("lastUpdated").textContent = `Ultima actualizacion: ${new Date().toISOString().replace(".000Z", "Z")} | ${modeText}`;
+}
+
+function paintSelectedWallets(items) {
+  const body = document.getElementById("selectedWalletsList");
+  document.getElementById("selectedWalletsCount").textContent = String(items.length);
+  if (!items.length) {
+    body.innerHTML = `<li class="mini-item"><strong>Sin wallets seleccionadas</strong><span>Revisa filtros y API</span></li>`;
+    document.getElementById("selectedWalletsMeta").textContent = "sin datos de seleccion";
+    return;
+  }
+
+  body.innerHTML = items
+    .map(
+      (item) => `
+      <li class="mini-item">
+        <strong>#${Number(item.rank || 0)} ${escapeHtml(shortWallet(item.wallet))}</strong>
+        <span>score ${fmt(item.score, 3)} | win ${fmt((Number(item.win_rate) || 0) * 100, 1)}% | 24h ${Number(item.recent_trades || 0)}</span>
+      </li>
+    `
+    )
+    .join("");
+
+  document.getElementById("selectedWalletsMeta").textContent = "Top por score (winrate + actividad + pnl)";
+}
+
+function paintRiskBlocks(payload) {
+  const items = payload.items || [];
+  const hours = Number(payload.hours || 24);
+  const blockedTotal = Number(payload.blocked_total || 0);
+  const body = document.getElementById("riskBlocksList");
+  document.getElementById("riskBlocksCount").textContent = String(blockedTotal);
+
+  if (!items.length) {
+    body.innerHTML = `<li class="mini-item"><strong>Sin bloqueos recientes</strong><span>La estrategia no detecto frenos de riesgo</span></li>`;
+    document.getElementById("riskBlocksMeta").textContent = `ventana ${hours}h`;
+    return;
+  }
+
+  body.innerHTML = items
+    .map(
+      (item) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(item.reason)}</strong>
+        <span>${Number(item.count || 0)} bloqueos</span>
+      </li>
+    `
+    )
+    .join("");
+
+  document.getElementById("riskBlocksMeta").textContent = `ventana ${hours}h`;
 }
 
 function paintPositions(items) {
@@ -133,7 +203,7 @@ function paintExecutions(items) {
 function paintSignals(items) {
   const body = document.getElementById("signalsBody");
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="7">No hay señales todavía.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7">No hay senales todavia.</td></tr>`;
     return;
   }
 
@@ -157,17 +227,25 @@ function paintSignals(items) {
 async function refreshAll() {
   try {
     if (runtimeMode === "local") {
-      const [summary, positions, executions, signals] = await Promise.all([
+      const [summary, positions, executions, signals, selectedWallets, riskBlocks] = await Promise.all([
         getJson(withCacheBust(buildApiUrl("/api/summary"))),
         getJson(withCacheBust(buildApiUrl("/api/positions"))),
         getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
         getJson(withCacheBust(buildApiUrl("/api/signals?limit=100"))),
+        safeGetJson(withCacheBust(buildApiUrl("/api/selected-wallets?limit=3")), { items: [] }),
+        safeGetJson(withCacheBust(buildApiUrl("/api/risk-blocks?hours=24&limit=3")), {
+          items: [],
+          hours: 24,
+          blocked_total: 0,
+        }),
       ]);
 
       paintSummary(summary);
       paintPositions(positions.items || []);
       paintExecutions(executions.items || []);
       paintSignals(signals.items || []);
+      paintSelectedWallets(selectedWallets.items || []);
+      paintRiskBlocks(riskBlocks || {});
       return;
     }
 
@@ -198,10 +276,14 @@ async function refreshAll() {
       pnl_delta: 0,
     }));
 
+    const realized = positions.reduce((acc, item) => acc + Number(item.realized_pnl || 0), 0);
     const summary = {
       open_positions: positions.length,
       exposure: positions.reduce((acc, item) => acc + item.size * item.avg_price, 0),
-      cumulative_pnl: positions.reduce((acc, item) => acc + Number(item.realized_pnl || 0), 0),
+      cumulative_pnl: realized,
+      realized_pnl: realized,
+      unrealized_pnl: 0,
+      pnl_total: realized,
       pending_signals: "-",
     };
 
@@ -209,8 +291,10 @@ async function refreshAll() {
     paintPositions(positions);
     paintExecutions(executions);
     paintSignals([]);
+    paintSelectedWallets([]);
+    paintRiskBlocks({ items: [], hours: 24, blocked_total: 0 });
   } catch (error) {
-    document.getElementById("lastUpdated").textContent = `Error de actualización: ${error.message}`;
+    document.getElementById("lastUpdated").textContent = `Error de actualizacion: ${error.message}`;
   }
 }
 

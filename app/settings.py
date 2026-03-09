@@ -36,6 +36,8 @@ class BotConfig(BaseModel):
     proportional_scale: float = 0.15
     noise_threshold_shares: float = 1.0
     min_trade_amount: float = 5.0
+    min_price: float = 0.0
+    max_price: float = 1.0
 
     max_position_per_market: float = 75.0
     max_total_exposure: float = 250.0
@@ -68,6 +70,12 @@ class BotConfig(BaseModel):
     def validate_copy_sources(self) -> "BotConfig":
         if not self.auto_select_wallets and not self.watched_wallets:
             raise ValueError("Either enable auto_select_wallets or provide watched_wallets")
+        if self.min_price < 0 or self.min_price > 1:
+            raise ValueError("min_price must be between 0 and 1")
+        if self.max_price < 0 or self.max_price > 1:
+            raise ValueError("max_price must be between 0 and 1")
+        if self.min_price > self.max_price:
+            raise ValueError("min_price cannot be greater than max_price")
         return self
 
 

@@ -23,6 +23,8 @@ fixed_amount_per_trade: 25.0
 proportional_scale: 0.15
 noise_threshold_shares: 1.0
 min_trade_amount: 5.0
+min_price: 0.03
+max_price: 0.97
 
 max_position_per_market: 120.0
 max_total_exposure: 900.0
