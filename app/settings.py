@@ -7,18 +7,30 @@ from typing import Literal
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class BotConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     watched_wallets: list[str] = Field(default_factory=list)
+    auto_select_wallets: bool = True
+    top_wallets_to_copy: int = 3
+    leaderboard_category: Literal["OVERALL", "CRYPTO", "POLITICS", "SPORTS"] = "OVERALL"
+    leaderboard_time_period: Literal["DAY", "WEEK", "MONTH", "ALL"] = "MONTH"
+    leaderboard_candidate_limit: int = 25
+    wallet_selection_refresh_minutes: int = 30
+    min_wallet_win_rate: float = 0.55
+    min_closed_positions_for_scoring: int = 10
+    min_recent_trades: int = 8
+    recent_trade_lookback_hours: int = 24
+    recent_trades_limit_per_wallet: int = 200
+    closed_positions_limit: int = 200
     polling_interval_seconds: int = 45
     execution_mode: Literal["paper", "live"] = "paper"
     dry_run: bool = True
 
-    bankroll: float = 500.0
+    bankroll: float = 1000.0
     sizing_mode: Literal["fixed_amount_per_trade", "proportional_to_source"] = "proportional_to_source"
     fixed_amount_per_trade: float = 25.0
     proportional_scale: float = 0.15
@@ -37,14 +49,12 @@ class BotConfig(BaseModel):
     @classmethod
     def validate_wallets(cls, value: list[str]) -> list[str]:
         if not value:
-            raise ValueError("watched_wallets cannot be empty")
+            return []
         normalized = []
         for wallet in value:
             wallet = wallet.strip().lower()
             if wallet and wallet not in normalized:
                 normalized.append(wallet)
-        if not normalized:
-            raise ValueError("watched_wallets cannot be empty")
         return normalized
 
     @field_validator("allowed_tags", "blocked_tags", mode="before")
@@ -53,6 +63,12 @@ class BotConfig(BaseModel):
         if not value:
             return []
         return [item.strip().lower() for item in value if item and item.strip()]
+
+    @model_validator(mode="after")
+    def validate_copy_sources(self) -> "BotConfig":
+        if not self.auto_select_wallets and not self.watched_wallets:
+            raise ValueError("Either enable auto_select_wallets or provide watched_wallets")
+        return self
 
 
 class EnvSettings(BaseModel):

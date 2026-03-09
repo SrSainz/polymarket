@@ -31,8 +31,32 @@ class ActivityClient:
         payload = self._get("/activity", {"user": wallet, "limit": limit, "offset": offset})
         return payload if isinstance(payload, list) else []
 
-    def get_trades(self, wallet: str, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
-        payload = self._get("/trades", {"user": wallet, "limit": limit, "offset": offset})
+    def get_trades(self, wallet: str | None = None, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if wallet:
+            params["user"] = wallet
+        payload = self._get("/trades", params)
+        return payload if isinstance(payload, list) else []
+
+    def get_closed_positions(self, wallet: str, limit: int = 500, offset: int = 0) -> list[dict[str, Any]]:
+        payload = self._get("/closed-positions", {"user": wallet, "limit": limit, "offset": offset})
+        return payload if isinstance(payload, list) else []
+
+    def get_leaderboard(
+        self,
+        *,
+        category: str = "OVERALL",
+        time_period: str = "MONTH",
+        limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        payload = self._get(
+            "/v1/leaderboard",
+            {
+                "category": category,
+                "timePeriod": time_period,
+                "limit": limit,
+            },
+        )
         return payload if isinstance(payload, list) else []
 
     def _get(self, path: str, params: dict[str, Any]) -> Any:

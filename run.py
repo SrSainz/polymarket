@@ -12,6 +12,7 @@ from app.core.reconciler import Reconciler
 from app.core.risk import RiskManager
 from app.core.sizing import SizingEngine
 from app.core.tracker import SourceTracker
+from app.core.wallet_selector import WalletSelector
 from app.db import Database
 from app.logger import setup_logger
 from app.polymarket.activity_client import ActivityClient
@@ -37,8 +38,9 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
     clob_client = CLOBClient(settings.env.clob_host, settings.env)
 
     tracker = SourceTracker(activity_client, gamma_client, logger)
+    wallet_selector = WalletSelector(activity_client, settings.config, logger)
     detect_changes = DetectChangesService(settings.config.noise_threshold_shares)
-    sync_service = SyncWalletsService(db, tracker, detect_changes, settings.config, logger)
+    sync_service = SyncWalletsService(db, tracker, wallet_selector, detect_changes, settings.config, logger)
 
     risk = RiskManager(settings.config)
     sizing = SizingEngine(settings.config)
@@ -63,7 +65,11 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
 
 def run_once(sync_service: SyncWalletsService, execute_service: ExecuteCopyService, mode: str) -> None:
     sync_stats = sync_service.run()
-    print(f"sync => snapshots={sync_stats['snapshots']} new_signals={sync_stats['signals']}")
+    print(
+        "sync => "
+        f"wallets={sync_stats.get('wallets', 0)} snapshots={sync_stats['snapshots']} "
+        f"new_signals={sync_stats['signals']}"
+    )
     exec_stats = execute_service.run(mode=mode)
     print(
         "execute => "
@@ -91,7 +97,11 @@ def main() -> int:
     try:
         if args.command == "sync":
             stats = sync_service.run()
-            print(f"sync => snapshots={stats['snapshots']} new_signals={stats['signals']}")
+            print(
+                "sync => "
+                f"wallets={stats.get('wallets', 0)} snapshots={stats['snapshots']} "
+                f"new_signals={stats['signals']}"
+            )
             return 0
 
         if args.command == "report":

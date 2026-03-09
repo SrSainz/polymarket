@@ -37,6 +37,7 @@ polymarket_copy_bot/
       __init__.py
       watchlist.py
       tracker.py
+      wallet_selector.py
       normalizer.py
       risk.py
       sizing.py
@@ -58,6 +59,7 @@ polymarket_copy_bot/
     test_sizing.py
     test_risk.py
     test_normalizer.py
+    test_wallet_selector.py
 ```
 
 ## Requisitos
@@ -79,9 +81,14 @@ copy .env.example .env
 Edita `config/settings.yaml`:
 
 - `watched_wallets`: wallets origen a copiar
+- `auto_select_wallets`: seleccion automatica de wallets top
+- `top_wallets_to_copy`: numero de wallets seleccionadas
+- `leaderboard_category` + `leaderboard_time_period`: universo de ranking
+- `min_wallet_win_rate`: winrate minimo requerido
+- `min_recent_trades`: actividad minima reciente
 - `polling_interval_seconds`: frecuencia de polling
 - `execution_mode`: `paper` o `live`
-- `bankroll`: capital de referencia del bot
+- `bankroll`: capital de referencia del bot (default 1000)
 - `sizing_mode`: `fixed_amount_per_trade` o `proportional_to_source`
 - `fixed_amount_per_trade`: notional fijo por trade
 - `proportional_scale`: multiplicador de copia proporcional
@@ -114,7 +121,7 @@ python run.py dashboard
 Ejemplo real de `once`:
 
 ```text
-sync => snapshots=3 new_signals=3
+sync => wallets=3 snapshots=9 new_signals=3
 execute => pending=3 filled=3 blocked=0 skipped=0 failed=0
 ```
 
@@ -196,6 +203,9 @@ Cobertura minima incluida:
 - `https://data-api.polymarket.com/positions?user=...`
 - `https://data-api.polymarket.com/activity?user=...`
 - `https://data-api.polymarket.com/trades?user=...`
+- `https://data-api.polymarket.com/trades?limit=...` (actividad global)
+- `https://data-api.polymarket.com/closed-positions?user=...`
+- `https://data-api.polymarket.com/v1/leaderboard?category=...&timePeriod=...`
 - `https://gamma-api.polymarket.com/markets?slug=...`
 - `https://clob.polymarket.com/midpoint?token_id=...`
 - `https://clob.polymarket.com/book?token_id=...`

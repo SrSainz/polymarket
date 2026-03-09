@@ -1,11 +1,23 @@
 watched_wallets:
   - "0xa81f087970a7ce196eacb3271e96e89294d91bb8"
+auto_select_wallets: true
+top_wallets_to_copy: 3
+leaderboard_category: "OVERALL"
+leaderboard_time_period: "MONTH"
+leaderboard_candidate_limit: 25
+wallet_selection_refresh_minutes: 30
+min_wallet_win_rate: 0.55
+min_closed_positions_for_scoring: 10
+min_recent_trades: 8
+recent_trade_lookback_hours: 24
+recent_trades_limit_per_wallet: 200
+closed_positions_limit: 200
 
 polling_interval_seconds: 45
 execution_mode: "paper"
 dry_run: true
 
-bankroll: 500.0
+bankroll: 1000.0
 sizing_mode: "proportional_to_source"
 fixed_amount_per_trade: 25.0
 proportional_scale: 0.15
