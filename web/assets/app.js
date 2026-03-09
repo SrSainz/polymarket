@@ -1,5 +1,6 @@
 const DEFAULT_WALLET = "0xa81f087970a7ce196eacb3271e96e89294d91bb8";
 const DATA_API = "https://data-api.polymarket.com";
+const API_BASE_STORAGE_KEY = "polymarket_bot_api_base";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -41,14 +42,44 @@ function buildApiUrl(path) {
   return `${apiBase}${path}`;
 }
 
+function withCacheBust(url) {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}_t=${Date.now()}`;
+}
+
+function loadSavedApiBase() {
+  try {
+    return (window.localStorage.getItem(API_BASE_STORAGE_KEY) || "").trim();
+  } catch (_error) {
+    return "";
+  }
+}
+
+function saveApiBase(value) {
+  try {
+    if (!value) {
+      window.localStorage.removeItem(API_BASE_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(API_BASE_STORAGE_KEY, value);
+  } catch (_error) {
+    // Ignore storage failures.
+  }
+}
+
 function paintSummary(summary) {
   document.getElementById("openPositions").textContent = String(summary.open_positions ?? 0);
   document.getElementById("exposure").textContent = fmt(summary.exposure, 2);
   document.getElementById("pnl").textContent = fmt(summary.cumulative_pnl, 2);
   document.getElementById("pendingSignals").textContent = String(summary.pending_signals ?? "-");
 
-  const modeText = runtimeMode === "local" ? "local db mode" : `public api mode (${watchedWallet})`;
-  document.getElementById("lastUpdated").textContent = `Última actualización: ${new Date().toISOString().replace(".000Z", "Z")} | ${modeText}`;
+  const modeText =
+    runtimeMode === "local"
+      ? "local db mode"
+      : runtimeMode === "public-fallback"
+      ? `public api fallback (${watchedWallet})`
+      : `public api mode (${watchedWallet})`;
+  document.getElementById("lastUpdated").textContent = `Ultima actualizacion: ${new Date().toISOString().replace(".000Z", "Z")} | ${modeText}`;
 }
 
 function paintPositions(items) {
@@ -64,11 +95,11 @@ function paintPositions(items) {
     .map(
       (item) => `
       <tr>
-        <td>${escapeHtml(item.title || item.slug || item.asset)}</td>
-        <td>${escapeHtml(item.outcome || "-")}</td>
-        <td>${fmt(item.size)}</td>
-        <td>${fmt(item.avg_price)}</td>
-        <td>${fmt(item.realized_pnl)}</td>
+        <td data-label="Mercado">${escapeHtml(item.title || item.slug || item.asset)}</td>
+        <td data-label="Outcome">${escapeHtml(item.outcome || "-")}</td>
+        <td data-label="Size">${fmt(item.size)}</td>
+        <td data-label="Avg Price">${fmt(item.avg_price)}</td>
+        <td data-label="Realized PnL">${fmt(item.realized_pnl)}</td>
       </tr>
     `
     )
@@ -86,13 +117,13 @@ function paintExecutions(items) {
     .map(
       (item) => `
       <tr>
-        <td>${tsToIso(item.ts)}</td>
-        <td>${escapeHtml(item.mode)}</td>
-        <td>${escapeHtml(item.action)}</td>
-        <td>${escapeHtml(item.side)}</td>
-        <td>${fmt(item.size)}</td>
-        <td>${fmt(item.price)}</td>
-        <td>${fmt(item.pnl_delta)}</td>
+        <td data-label="Hora UTC">${tsToIso(item.ts)}</td>
+        <td data-label="Modo">${escapeHtml(item.mode)}</td>
+        <td data-label="Accion">${escapeHtml(item.action)}</td>
+        <td data-label="Lado">${escapeHtml(item.side)}</td>
+        <td data-label="Size">${fmt(item.size)}</td>
+        <td data-label="Price">${fmt(item.price)}</td>
+        <td data-label="PnL Delta">${fmt(item.pnl_delta)}</td>
       </tr>
     `
     )
@@ -110,13 +141,13 @@ function paintSignals(items) {
     .map(
       (item) => `
       <tr>
-        <td>${tsToIso(item.detected_at)}</td>
-        <td>${escapeHtml(item.action)}</td>
-        <td>${fmt(item.prev_size)}</td>
-        <td>${fmt(item.new_size)}</td>
-        <td>${fmt(item.delta_size)}</td>
-        <td>${statusPill(item.status)}</td>
-        <td>${escapeHtml(item.note || "")}</td>
+        <td data-label="Hora UTC">${tsToIso(item.detected_at)}</td>
+        <td data-label="Accion">${escapeHtml(item.action)}</td>
+        <td data-label="Prev">${fmt(item.prev_size)}</td>
+        <td data-label="New">${fmt(item.new_size)}</td>
+        <td data-label="Delta">${fmt(item.delta_size)}</td>
+        <td data-label="Status">${statusPill(item.status)}</td>
+        <td data-label="Nota">${escapeHtml(item.note || "")}</td>
       </tr>
     `
     )
@@ -127,10 +158,10 @@ async function refreshAll() {
   try {
     if (runtimeMode === "local") {
       const [summary, positions, executions, signals] = await Promise.all([
-        getJson(buildApiUrl("/api/summary")),
-        getJson(buildApiUrl("/api/positions")),
-        getJson(buildApiUrl("/api/executions?limit=50")),
-        getJson(buildApiUrl("/api/signals?limit=100")),
+        getJson(withCacheBust(buildApiUrl("/api/summary"))),
+        getJson(withCacheBust(buildApiUrl("/api/positions"))),
+        getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
+        getJson(withCacheBust(buildApiUrl("/api/signals?limit=100"))),
       ]);
 
       paintSummary(summary);
@@ -141,8 +172,8 @@ async function refreshAll() {
     }
 
     const [positionsRaw, activityRaw] = await Promise.all([
-      getJson(`${DATA_API}/positions?user=${encodeURIComponent(watchedWallet)}&limit=200`),
-      getJson(`${DATA_API}/activity?user=${encodeURIComponent(watchedWallet)}&limit=100`),
+      getJson(withCacheBust(`${DATA_API}/positions?user=${encodeURIComponent(watchedWallet)}&limit=200`)),
+      getJson(withCacheBust(`${DATA_API}/activity?user=${encodeURIComponent(watchedWallet)}&limit=100`)),
     ]);
 
     const positions = (positionsRaw || []).map((item) => ({
@@ -198,9 +229,18 @@ function configureAutoRefresh() {
   }, safeSeconds * 1000);
 }
 
-document.getElementById("refreshBtn").addEventListener("click", () => {
-  refreshAll();
-  configureAutoRefresh();
+document.getElementById("refreshBtn").addEventListener("click", async () => {
+  const button = document.getElementById("refreshBtn");
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Refrescando...";
+  try {
+    await refreshAll();
+    configureAutoRefresh();
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel || "Refrescar";
+  }
 });
 
 document.getElementById("refreshSeconds").addEventListener("change", () => {
@@ -210,20 +250,28 @@ document.getElementById("refreshSeconds").addEventListener("change", () => {
 async function bootstrap() {
   const params = new URLSearchParams(window.location.search);
   watchedWallet = (params.get("wallet") || DEFAULT_WALLET).toLowerCase();
-  const apiParam = (params.get("api") || "").trim();
-  if (apiParam) {
-    apiBase = apiParam.replace(/\/+$/, "");
-  }
+  const apiParam = (params.get("api") || "").trim().replace(/\/+$/, "");
+  const savedApiBase = loadSavedApiBase();
+  apiBase = apiParam || savedApiBase;
+  saveApiBase(apiBase);
 
   try {
-    await getJson(buildApiUrl("/api/health"));
+    await getJson(withCacheBust(buildApiUrl("/api/health")));
     runtimeMode = "local";
-  } catch (_error) {
-    runtimeMode = "public";
+  } catch (error) {
+    runtimeMode = apiBase ? "public-fallback" : "public";
+    if (apiBase) {
+      document.getElementById("lastUpdated").textContent =
+        `No conecta con API local (${apiBase}): ${error.message}. Mostrando fallback publico.`;
+    }
   }
 
   document.querySelector(".kicker").textContent =
-    runtimeMode === "local" ? "Copy Trading Monitor (Local DB)" : "Copy Trading Monitor (Public API)";
+    runtimeMode === "local"
+      ? "Copy Trading Monitor (Local DB)"
+      : runtimeMode === "public-fallback"
+      ? "Copy Trading Monitor (Public API Fallback)"
+      : "Copy Trading Monitor (Public API)";
 
   await refreshAll();
   configureAutoRefresh();
