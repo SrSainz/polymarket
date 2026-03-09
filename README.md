@@ -129,11 +129,20 @@ execute => pending=3 filled=3 blocked=0 skipped=0 failed=0
 
 - Arranque: `python run.py dashboard`
 - URL por defecto: `http://127.0.0.1:8765`
+- Modo local: lee SQLite del bot (señales/ejecuciones reales del bot)
+- Modo public API (si no existe backend local): lee `data-api.polymarket.com` directo en browser
+- Wallet en modo public: `/?wallet=0x...`
 - Endpoints:
   - `/api/summary`
   - `/api/positions`
   - `/api/executions`
   - `/api/signals`
+
+## Vercel
+
+- Incluye `vercel.json` para servir `web/index.html` y assets.
+- En Vercel funcionará en modo **public API** automaticamente (sin tu SQLite local).
+- Si quieres mostrar datos privados/persistentes de tu bot en Vercel, necesitas una base remota (por ejemplo Postgres) y API backend.
 
 ## Modo Live (desacoplado, apagado)
 

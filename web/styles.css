@@ -232,6 +232,11 @@ td {
   color: #94630b;
 }
 
+.pill.observed {
+  background: #e2efff;
+  color: #265f99;
+}
+
 .pill.failed,
 .pill.blocked {
   background: #ffe2e2;
