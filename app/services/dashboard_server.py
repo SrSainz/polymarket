@@ -26,10 +26,10 @@ def _build_handler(db_path: Path, static_dir: Path):
                 self._serve_file(static_dir / "index.html", "text/html; charset=utf-8")
                 return
             if path == "/assets/styles.css":
-                self._serve_file(static_dir / "styles.css", "text/css; charset=utf-8")
+                self._serve_file(static_dir / "assets" / "styles.css", "text/css; charset=utf-8")
                 return
             if path == "/assets/app.js":
-                self._serve_file(static_dir / "app.js", "text/javascript; charset=utf-8")
+                self._serve_file(static_dir / "assets" / "app.js", "text/javascript; charset=utf-8")
                 return
             if path == "/api/health":
                 self._json({"ok": True})
