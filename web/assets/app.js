@@ -1,6 +1,9 @@
 const DEFAULT_WALLET = "0xa81f087970a7ce196eacb3271e96e89294d91bb8";
 const DATA_API = "https://data-api.polymarket.com";
 const API_BASE_STORAGE_KEY = "polymarket_bot_api_base";
+const DEFAULT_REMOTE_API_BY_HOST = {
+  "polymarket-fawn.vercel.app": "https://scores-trade-kept-developed.trycloudflare.com",
+};
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -336,7 +339,8 @@ async function bootstrap() {
   watchedWallet = (params.get("wallet") || DEFAULT_WALLET).toLowerCase();
   const apiParam = (params.get("api") || "").trim().replace(/\/+$/, "");
   const savedApiBase = loadSavedApiBase();
-  apiBase = apiParam || savedApiBase;
+  const hostDefaultApi = DEFAULT_REMOTE_API_BY_HOST[window.location.hostname] || "";
+  apiBase = apiParam || savedApiBase || hostDefaultApi;
   saveApiBase(apiBase);
 
   try {
