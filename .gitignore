@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+tmp/
+data/bot.db
+data/logs/*.log
+data/reports/*.md
+!data/reports/example_report.md

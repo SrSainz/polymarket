@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Polymarket Copy Bot Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape shape-a"></div>
+    <div class="bg-shape shape-b"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <p class="kicker">Copy Trading Monitor</p>
+        <h1>Polymarket Bot</h1>
+      </div>
+      <div class="toolbar">
+        <label class="refresh-label" for="refreshSeconds">Auto-refresh (s)</label>
+        <input id="refreshSeconds" type="number" min="3" max="300" value="10" />
+        <button id="refreshBtn" type="button">Refrescar</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="cards">
+        <article class="card accent">
+          <p class="card-label">Posiciones abiertas</p>
+          <p class="card-value" id="openPositions">-</p>
+        </article>
+        <article class="card">
+          <p class="card-label">Exposición (USDC)</p>
+          <p class="card-value" id="exposure">-</p>
+        </article>
+        <article class="card">
+          <p class="card-label">PnL acumulado</p>
+          <p class="card-value" id="pnl">-</p>
+        </article>
+        <article class="card">
+          <p class="card-label">Señales pendientes</p>
+          <p class="card-value" id="pendingSignals">-</p>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Posiciones copiadas</h2>
+          <span id="positionsCount" class="badge">0</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Mercado</th>
+                <th>Outcome</th>
+                <th>Size</th>
+                <th>Avg Price</th>
+                <th>Realized PnL</th>
+              </tr>
+            </thead>
+            <tbody id="positionsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Ejecuciones recientes</h2>
+          <span class="badge">Últimas 50</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hora UTC</th>
+                <th>Modo</th>
+                <th>Acción</th>
+                <th>Lado</th>
+                <th>Size</th>
+                <th>Price</th>
+                <th>PnL Delta</th>
+              </tr>
+            </thead>
+            <tbody id="executionsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Señales</h2>
+          <span class="badge">Últimas 100</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Hora UTC</th>
+                <th>Acción</th>
+                <th>Prev</th>
+                <th>New</th>
+                <th>Delta</th>
+                <th>Status</th>
+                <th>Nota</th>
+              </tr>
+            </thead>
+            <tbody id="signalsBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p id="lastUpdated">Última actualización: -</p>
+    </footer>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

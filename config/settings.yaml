@@ -1,0 +1,21 @@
+watched_wallets:
+  - "0xa81f087970a7ce196eacb3271e96e89294d91bb8"
+
+polling_interval_seconds: 45
+execution_mode: "paper"
+dry_run: true
+
+bankroll: 500.0
+sizing_mode: "proportional_to_source"
+fixed_amount_per_trade: 25.0
+proportional_scale: 0.15
+noise_threshold_shares: 1.0
+min_trade_amount: 5.0
+
+max_position_per_market: 75.0
+max_total_exposure: 250.0
+max_daily_loss: 40.0
+slippage_limit: 0.03
+
+allowed_tags: []
+blocked_tags: []
