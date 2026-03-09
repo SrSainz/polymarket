@@ -132,6 +132,7 @@ execute => pending=3 filled=3 blocked=0 skipped=0 failed=0
 - Modo local: lee SQLite del bot (señales/ejecuciones reales del bot)
 - Modo public API (si no existe backend local): lee `data-api.polymarket.com` directo en browser
 - Wallet en modo public: `/?wallet=0x...`
+- Forzar API remota del bot (ej. Vercel -> NAS): `/?api=https://tu-api-bot`
 - Endpoints:
   - `/api/summary`
   - `/api/positions`

@@ -3,6 +3,7 @@ const DATA_API = "https://data-api.polymarket.com";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
+let apiBase = "";
 
 const fmt = (value, digits = 4) => {
   const asNumber = Number(value);
@@ -33,6 +34,11 @@ async function getJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
+}
+
+function buildApiUrl(path) {
+  if (!apiBase) return path;
+  return `${apiBase}${path}`;
 }
 
 function paintSummary(summary) {
@@ -121,10 +127,10 @@ async function refreshAll() {
   try {
     if (runtimeMode === "local") {
       const [summary, positions, executions, signals] = await Promise.all([
-        getJson("/api/summary"),
-        getJson("/api/positions"),
-        getJson("/api/executions?limit=50"),
-        getJson("/api/signals?limit=100"),
+        getJson(buildApiUrl("/api/summary")),
+        getJson(buildApiUrl("/api/positions")),
+        getJson(buildApiUrl("/api/executions?limit=50")),
+        getJson(buildApiUrl("/api/signals?limit=100")),
       ]);
 
       paintSummary(summary);
@@ -204,9 +210,13 @@ document.getElementById("refreshSeconds").addEventListener("change", () => {
 async function bootstrap() {
   const params = new URLSearchParams(window.location.search);
   watchedWallet = (params.get("wallet") || DEFAULT_WALLET).toLowerCase();
+  const apiParam = (params.get("api") || "").trim();
+  if (apiParam) {
+    apiBase = apiParam.replace(/\/+$/, "");
+  }
 
   try {
-    await getJson("/api/health");
+    await getJson(buildApiUrl("/api/health"));
     runtimeMode = "local";
   } catch (_error) {
     runtimeMode = "public";

@@ -18,6 +18,17 @@ def run_dashboard_server(db_path: Path, static_dir: Path, host: str = "127.0.0.1
 
 def _build_handler(db_path: Path, static_dir: Path):
     class DashboardHandler(BaseHTTPRequestHandler):
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            if parsed.path.startswith("/api/"):
+                self.send_response(HTTPStatus.NO_CONTENT)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+                self.end_headers()
+                return
+            self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = parsed.path
@@ -73,6 +84,9 @@ def _build_handler(db_path: Path, static_dir: Path):
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
