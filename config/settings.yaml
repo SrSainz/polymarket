@@ -1,20 +1,20 @@
 watched_wallets:
   - "0xa81f087970a7ce196eacb3271e96e89294d91bb8"
 auto_select_wallets: true
-top_wallets_to_copy: 3
+top_wallets_to_copy: 10
 leaderboard_category: "OVERALL"
 leaderboard_time_period: "MONTH"
-leaderboard_candidate_limit: 25
+leaderboard_candidate_limit: 100
 prioritize_dynamic_wallets: true
-dynamic_wallet_slots: 1
+dynamic_wallet_slots: 2
 dynamic_leaderboard_category: "CRYPTO"
 dynamic_leaderboard_time_period: "DAY"
 min_dynamic_recent_trades: 1
 min_dynamic_trade_share: 0.02
 wallet_selection_refresh_minutes: 30
-min_wallet_win_rate: 0.55
-min_closed_positions_for_scoring: 10
-min_recent_trades: 8
+min_wallet_win_rate: 0.52
+min_closed_positions_for_scoring: 5
+min_recent_trades: 5
 recent_trade_lookback_hours: 24
 recent_trades_limit_per_wallet: 200
 closed_positions_limit: 200
