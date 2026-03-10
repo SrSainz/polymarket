@@ -20,7 +20,7 @@ dry_run: true
 bankroll: 1000.0
 sizing_mode: "proportional_to_source"
 fixed_amount_per_trade: 25.0
-proportional_scale: 0.15
+proportional_scale: 0.10
 noise_threshold_shares: 1.0
 min_trade_amount: 5.0
 min_price: 0.03
@@ -38,9 +38,9 @@ confirmation_end_hour: 20
 confirmation_timeout_minutes: 30
 confirmation_timezone: "Europe/Madrid"
 
-max_position_per_market: 120.0
-max_total_exposure: 900.0
-max_daily_loss: 120.0
+max_position_per_market: 1000.0
+max_total_exposure: 1000.0
+max_daily_loss: 1000.0
 slippage_limit: 0.03
 
 allowed_tags: []
