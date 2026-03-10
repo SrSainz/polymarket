@@ -214,6 +214,69 @@ button:hover {
   font-size: 0.76rem;
 }
 
+.donut-row {
+  display: grid;
+  grid-template-columns: 94px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.donut-chart {
+  width: 94px;
+  height: 94px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: conic-gradient(#d6d6d6 0deg 360deg);
+  position: relative;
+}
+
+.donut-chart::after {
+  content: "";
+  position: absolute;
+  inset: 18px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+
+.donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.donut-legend li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.76rem;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.pnl-pos {
+  color: var(--success);
+}
+
+.pnl-neg {
+  color: var(--danger);
+}
+
+.pnl-flat {
+  color: var(--muted);
+}
+
 .panel {
   border: 1px solid var(--line);
   border-radius: 16px;
@@ -388,6 +451,19 @@ td {
 
   .mini-panel {
     padding: 10px;
+  }
+
+  .donut-row {
+    grid-template-columns: 84px 1fr;
+  }
+
+  .donut-chart {
+    width: 84px;
+    height: 84px;
+  }
+
+  .donut-chart::after {
+    inset: 16px;
   }
 
   .table-wrap {
