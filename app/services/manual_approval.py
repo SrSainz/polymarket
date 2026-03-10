@@ -242,6 +242,12 @@ class ManualApprovalService:
             )
             if source_signal_id > 0:
                 self.db.mark_signal_status(source_signal_id, "skipped", "rejected by user")
+            self._send_followup_message(
+                approval_id=approval_id,
+                decision="SALTAR",
+                market=str(approval["title"] or approval["asset"] or ""),
+                outcome=str(approval["outcome"] or "-"),
+            )
             return "Saltada"
 
         if action not in {"buy", "sell"}:
@@ -255,7 +261,35 @@ class ManualApprovalService:
         )
         if source_signal_id > 0:
             self.db.mark_signal_status(source_signal_id, "awaiting_execution", f"user selected {action}")
+        self._send_followup_message(
+            approval_id=approval_id,
+            decision="COMPRAR" if action == "buy" else "VENDER",
+            market=str(approval["title"] or approval["asset"] or ""),
+            outcome=str(approval["outcome"] or "-"),
+        )
         return "Decision recibida"
+
+    def _send_followup_message(self, *, approval_id: int, decision: str, market: str, outcome: str) -> None:
+        text = (
+            "Accion recibida\n"
+            f"id: {approval_id}\n"
+            f"decision: {decision}\n"
+            f"mercado: {market or '-'}\n"
+            f"outcome: {outcome or '-'}"
+        )
+        payload = {
+            "chat_id": self.env.telegram_chat_id,
+            "text": text,
+        }
+        try:
+            response = self.session.post(
+                f"https://api.telegram.org/bot{self.env.telegram_bot_token}/sendMessage",
+                json=payload,
+                timeout=10,
+            )
+            response.raise_for_status()
+        except requests.RequestException as error:
+            self.logger.warning("telegram followup sendMessage error: %s", error)
 
     def _answer_callback(self, callback_id: str, text: str) -> None:
         payload = {
