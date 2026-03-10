@@ -44,6 +44,7 @@ class RiskManager:
         current_market_notional: float,
         current_total_exposure: float,
         current_dynamic_exposure: float = 0.0,
+        current_btc5m_exposure: float = 0.0,
         daily_pnl: float,
         daily_profit_gross: float,
         effective_bankroll: float | None = None,
@@ -69,6 +70,24 @@ class RiskManager:
                 return False, "max_position_per_market exceeded"
 
             exposure_limit = min(self.config.max_total_exposure, bankroll)
+            market_is_btc5m = self.config.btc5m_reserve_enabled and is_dynamic_market(
+                title=instruction.title,
+                slug=instruction.slug,
+                category=instruction.category,
+                keywords=self.config.btc5m_reserve_keywords,
+            )
+            btc5m_cap = min(self.config.btc5m_reserved_notional, bankroll) if self.config.btc5m_reserve_enabled else 0.0
+            if market_is_btc5m:
+                resulting_btc5m_exposure = current_btc5m_exposure + instruction.notional
+                if resulting_btc5m_exposure > btc5m_cap:
+                    return False, "btc5m_reserved_cap exceeded"
+            elif self.config.btc5m_reserve_enabled and btc5m_cap > 0:
+                non_btc5m_cap = max(exposure_limit - btc5m_cap, 0.0)
+                current_non_btc5m_exposure = max(current_total_exposure - current_btc5m_exposure, 0.0)
+                resulting_non_btc5m_exposure = current_non_btc5m_exposure + instruction.notional
+                if resulting_non_btc5m_exposure > non_btc5m_cap:
+                    return False, "reserved_for_btc5m"
+
             resulting_exposure = current_total_exposure + instruction.notional
             if resulting_exposure > exposure_limit:
                 return False, "max_total_exposure exceeded"

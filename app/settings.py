@@ -74,6 +74,16 @@ class BotConfig(BaseModel):
     )
     dynamic_max_allocation_pct: float = 0.20
     dynamic_skip_manual_confirmation: bool = True
+    btc5m_reserve_enabled: bool = False
+    btc5m_reserved_notional: float = 200.0
+    btc5m_reserve_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "btc 5 minute up or down",
+            "bitcoin up or down -",
+            "btc-updown-5m",
+            "5 minute up or down",
+        ]
+    )
 
     autonomous_decisions_enabled: bool = False
     autonomous_take_profit_pct: float = 0.15
@@ -113,7 +123,14 @@ class BotConfig(BaseModel):
                 normalized.append(wallet)
         return normalized
 
-    @field_validator("allowed_tags", "blocked_tags", "dynamic_keywords", "forced_include_market_keywords", mode="before")
+    @field_validator(
+        "allowed_tags",
+        "blocked_tags",
+        "dynamic_keywords",
+        "forced_include_market_keywords",
+        "btc5m_reserve_keywords",
+        mode="before",
+    )
     @classmethod
     def normalize_tags(cls, value: list[str]) -> list[str]:
         if not value:
@@ -144,6 +161,8 @@ class BotConfig(BaseModel):
             raise ValueError("max_market_horizon_days must be >= 1")
         if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
+        if self.btc5m_reserved_notional < 0:
+            raise ValueError("btc5m_reserved_notional must be >= 0")
         if self.autonomous_take_profit_pct < 0:
             raise ValueError("autonomous_take_profit_pct must be >= 0")
         if self.autonomous_stop_loss_pct < 0:

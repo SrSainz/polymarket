@@ -74,6 +74,7 @@ class ExecuteCopyService:
                 copy_avg_price = float(copy_position["avg_price"]) if copy_position else execution_price
                 total_exposure = self.db.get_total_exposure()
                 dynamic_exposure = self._get_dynamic_exposure()
+                btc5m_exposure = self._get_btc5m_exposure()
                 daily_pnl = self.db.get_daily_pnl(today)
                 daily_profit_gross = self.db.get_daily_profit_gross(today)
 
@@ -84,6 +85,7 @@ class ExecuteCopyService:
                     execution_price=execution_price,
                     current_total_exposure=total_exposure,
                     current_dynamic_exposure=dynamic_exposure,
+                    current_btc5m_exposure=btc5m_exposure,
                     daily_pnl=daily_pnl,
                     daily_profit_gross=daily_profit_gross,
                     effective_bankroll=effective_bankroll,
@@ -129,6 +131,18 @@ class ExecuteCopyService:
                 slug=str(row["slug"] or ""),
                 category=str(row["category"] or ""),
                 keywords=self.settings.config.dynamic_keywords,
+            ):
+                exposure += abs(float(row["size"]) * float(row["avg_price"]))
+        return exposure
+
+    def _get_btc5m_exposure(self) -> float:
+        exposure = 0.0
+        for row in self.db.list_copy_positions():
+            if is_dynamic_market(
+                title=str(row["title"] or ""),
+                slug=str(row["slug"] or ""),
+                category=str(row["category"] or ""),
+                keywords=self.settings.config.btc5m_reserve_keywords,
             ):
                 exposure += abs(float(row["size"]) * float(row["avg_price"]))
         return exposure

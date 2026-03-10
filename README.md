@@ -107,6 +107,9 @@ Edita `config/settings.yaml`:
 - `dynamic_keywords`: palabras clave para detectar mercados dinamicos (ej. BTC, 5m, 15m)
 - `dynamic_max_allocation_pct`: porcentaje maximo de capital en mercados dinamicos (ej. `0.20`)
 - `dynamic_skip_manual_confirmation`: si `true`, no pide confirmacion manual en mercados dinamicos
+- `btc5m_reserve_enabled`: activa reserva exclusiva para BTC 5m
+- `btc5m_reserved_notional`: capital reservado para BTC 5m (ej. `200` USDC)
+- `btc5m_reserve_keywords`: patrones para identificar ese mercado reservado
 - `autonomous_decisions_enabled`: activa decisiones propias de salida
 - `autonomous_take_profit_pct`: cierre por beneficio objetivo
 - `autonomous_stop_loss_pct`: cierre por perdida maxima
