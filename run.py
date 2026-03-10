@@ -22,6 +22,7 @@ from app.polymarket.gamma_client import GammaClient
 from app.services.detect_changes import DetectChangesService
 from app.services.dashboard_server import run_dashboard_server
 from app.services.execute_copy import ExecuteCopyService
+from app.services.manual_approval import ManualApprovalService
 from app.services.report import ReportService
 from app.services.sync_wallets import SyncWalletsService
 from app.settings import AppSettings, load_settings
@@ -48,6 +49,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
     reconciler = Reconciler()
     copier = Copier(sizing, risk, reconciler)
     autonomous_decider = AutonomousDecider(settings.config, db)
+    manual_approval = ManualApprovalService(db, settings.config, settings.env, logger)
 
     paper_broker = PaperBroker(db)
     live_broker = LiveBroker(db, clob_client, settings.env)
@@ -58,6 +60,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
         live_broker,
         clob_client,
         autonomous_decider,
+        manual_approval,
         settings,
         logger,
     )
@@ -81,7 +84,11 @@ def run_once(sync_service: SyncWalletsService, execute_service: ExecuteCopyServi
         f"pending={exec_stats['pending']} filled={exec_stats['filled']} "
         f"blocked={exec_stats['blocked']} skipped={exec_stats['skipped']} failed={exec_stats['failed']} "
         f"auto_candidates={exec_stats.get('auto_candidates', 0)} "
-        f"auto_filled={exec_stats.get('auto_filled', 0)} auto_failed={exec_stats.get('auto_failed', 0)}"
+        f"auto_filled={exec_stats.get('auto_filled', 0)} auto_failed={exec_stats.get('auto_failed', 0)} "
+        f"approvals_requested={exec_stats.get('approvals_requested', 0)} "
+        f"approvals_user_filled={exec_stats.get('approvals_user_filled', 0)} "
+        f"approvals_timeout_filled={exec_stats.get('approvals_timeout_filled', 0)} "
+        f"approvals_failed={exec_stats.get('approvals_failed', 0)}"
     )
 
 

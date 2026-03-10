@@ -100,6 +100,10 @@ Edita `config/settings.yaml`:
 - `autonomous_depreciation_threshold_pct`: umbral de depreciacion para reducir
 - `autonomous_reduce_fraction`: porcentaje de reduccion en depreciacion
 - `autonomous_cooldown_minutes`: evita sobreoperar el mismo activo
+- `manual_confirmation_enabled`: pedir confirmacion manual antes de ejecutar en ventana horaria
+- `confirmation_start_hour` / `confirmation_end_hour`: franja de confirmacion (hora local)
+- `confirmation_timeout_minutes`: si no respondes a tiempo, ejecuta automatico
+- `confirmation_timezone`: zona horaria para la ventana (ej. `Europe/Madrid`)
 - `max_position_per_market`
 - `max_total_exposure`
 - `max_daily_loss`
@@ -131,6 +135,7 @@ Ejemplo real de `once`:
 ```text
 sync => wallets=3 snapshots=9 new_signals=3 dropped_wallets=0 rebalance_signals=0
 execute => pending=3 filled=3 blocked=0 skipped=0 failed=0 auto_candidates=0 auto_filled=0 auto_failed=0
+          approvals_requested=0 approvals_user_filled=0 approvals_timeout_filled=0 approvals_failed=0
 ```
 
 ## Modo Paper (default)
@@ -183,6 +188,15 @@ Variables live:
 - `POLYMARKET_API_KEY`
 - `POLYMARKET_API_SECRET`
 - `POLYMARKET_API_PASSPHRASE`
+
+Variables de confirmacion manual por Telegram:
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+
+Flujo de confirmacion manual:
+1. Si hay señal en la franja configurada (por defecto 08:00-20:00), el bot envia mensaje Telegram.
+2. Puedes pulsar `Comprar`, `Vender` o `Saltar`.
+3. Si no respondes en `confirmation_timeout_minutes` (por defecto 30), ejecuta automatico como hasta ahora.
 
 Si faltan credenciales reales o `py-clob-client`, el modo live fallara de forma explicita sin tocar paper.
 

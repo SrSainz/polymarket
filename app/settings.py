@@ -47,6 +47,12 @@ class BotConfig(BaseModel):
     autonomous_reduce_fraction: float = 0.50
     autonomous_cooldown_minutes: int = 30
 
+    manual_confirmation_enabled: bool = False
+    confirmation_start_hour: int = 8
+    confirmation_end_hour: int = 20
+    confirmation_timeout_minutes: int = 30
+    confirmation_timezone: str = "Europe/Madrid"
+
     max_position_per_market: float = 75.0
     max_total_exposure: float = 250.0
     max_daily_loss: float = 40.0
@@ -96,6 +102,14 @@ class BotConfig(BaseModel):
             raise ValueError("autonomous_reduce_fraction must be in (0, 1]")
         if self.autonomous_cooldown_minutes < 0:
             raise ValueError("autonomous_cooldown_minutes must be >= 0")
+        if not (0 <= self.confirmation_start_hour <= 23):
+            raise ValueError("confirmation_start_hour must be between 0 and 23")
+        if not (1 <= self.confirmation_end_hour <= 24):
+            raise ValueError("confirmation_end_hour must be between 1 and 24")
+        if self.confirmation_start_hour >= self.confirmation_end_hour:
+            raise ValueError("confirmation_start_hour must be lower than confirmation_end_hour")
+        if self.confirmation_timeout_minutes < 1:
+            raise ValueError("confirmation_timeout_minutes must be >= 1")
         return self
 
 
@@ -123,6 +137,9 @@ class EnvSettings(BaseModel):
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 8765
 
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
     @classmethod
     def from_env(cls) -> "EnvSettings":
         return cls(
@@ -141,6 +158,8 @@ class EnvSettings(BaseModel):
             polymarket_api_passphrase=os.getenv("POLYMARKET_API_PASSPHRASE", ""),
             dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
             dashboard_port=int(os.getenv("DASHBOARD_PORT", "8765")),
+            telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
         )
 
 

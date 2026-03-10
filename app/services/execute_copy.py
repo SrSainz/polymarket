@@ -8,8 +8,10 @@ from app.core.copier import Copier
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
 from app.db import Database
+from app.models import CopyInstruction
 from app.models import SignalAction
 from app.polymarket.clob_client import CLOBClient
+from app.services.manual_approval import ManualApprovalService
 from app.settings import AppSettings
 
 
@@ -22,6 +24,7 @@ class ExecuteCopyService:
         live_broker: LiveBroker,
         clob_client: CLOBClient,
         autonomous_decider: AutonomousDecider,
+        manual_approval: ManualApprovalService,
         settings: AppSettings,
         logger: logging.Logger,
     ) -> None:
@@ -31,6 +34,7 @@ class ExecuteCopyService:
         self.live_broker = live_broker
         self.clob_client = clob_client
         self.autonomous_decider = autonomous_decider
+        self.manual_approval = manual_approval
         self.settings = settings
         self.logger = logger
 
@@ -47,7 +51,13 @@ class ExecuteCopyService:
             "auto_candidates": 0,
             "auto_filled": 0,
             "auto_failed": 0,
+            "approvals_requested": 0,
+            "approvals_user_filled": 0,
+            "approvals_timeout_filled": 0,
+            "approvals_failed": 0,
         }
+
+        self.manual_approval.sync_user_decisions()
 
         for signal in pending_signals:
             try:
@@ -75,11 +85,12 @@ class ExecuteCopyService:
                     stats[status] += 1
                     continue
 
-                if mode == "live":
-                    result = self.live_broker.execute(instruction)
-                else:
-                    result = self.paper_broker.execute(instruction)
+                if self.manual_approval.request_confirmation(instruction, signal.id):
+                    self.db.mark_signal_status(signal.id or 0, "awaiting_approval", "manual confirmation pending")
+                    stats["approvals_requested"] += 1
+                    continue
 
+                result = self._execute_instruction(mode=mode, instruction=instruction)
                 self.db.mark_signal_status(signal.id or 0, "executed", result.message)
                 if result.status == "filled":
                     stats["filled"] += 1
@@ -92,6 +103,8 @@ class ExecuteCopyService:
                 self.logger.exception("signal_id=%s failed: %s", signal.id, error)
 
         self._run_autonomous_exits(mode=mode, stats=stats)
+        self.manual_approval.sync_user_decisions()
+        self._execute_ready_approvals(mode=mode, stats=stats)
         return stats
 
     def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:
@@ -125,14 +138,54 @@ class ExecuteCopyService:
 
             stats["auto_candidates"] += 1
             try:
-                if mode == "live":
-                    result = self.live_broker.execute(instruction)
-                else:
-                    result = self.paper_broker.execute(instruction)
+                if self.manual_approval.request_confirmation(instruction, source_signal_id=None):
+                    stats["approvals_requested"] += 1
+                    continue
 
+                result = self._execute_instruction(mode=mode, instruction=instruction)
                 if result.status == "filled":
                     stats["auto_filled"] += 1
                     self.logger.info("autonomous fill asset=%s reason=%s", asset, instruction.reason)
             except Exception as error:  # noqa: BLE001
                 stats["auto_failed"] += 1
                 self.logger.exception("autonomous execution failed asset=%s: %s", asset, error)
+
+    def _execute_ready_approvals(self, *, mode: str, stats: dict[str, int]) -> None:
+        ready_rows = self.manual_approval.collect_ready_approvals()
+        for row in ready_rows:
+            approval_id = int(row["id"])
+            source_signal_id = int(row["source_signal_id"]) if row["source_signal_id"] is not None else 0
+            decision_source = str(row["decision_source"] or "")
+            instruction = self.manual_approval.instruction_from_approval(row)
+            if instruction is None:
+                self.db.mark_trade_approval_failed(approval_id, "invalid approval payload")
+                if source_signal_id > 0:
+                    self.db.mark_signal_status(source_signal_id, "failed", "invalid approval payload")
+                stats["approvals_failed"] += 1
+                continue
+
+            try:
+                result = self._execute_instruction(mode=mode, instruction=instruction)
+                if result.status == "filled":
+                    if source_signal_id > 0:
+                        self.db.mark_signal_status(source_signal_id, "executed", result.message)
+                    self.db.mark_trade_approval_executed(approval_id, result.message)
+                    if decision_source == "timeout_auto":
+                        stats["approvals_timeout_filled"] += 1
+                    else:
+                        stats["approvals_user_filled"] += 1
+                else:
+                    self.db.mark_trade_approval_failed(approval_id, f"not filled: {result.message}")
+                    if source_signal_id > 0:
+                        self.db.mark_signal_status(source_signal_id, "skipped", result.message)
+            except Exception as error:  # noqa: BLE001
+                self.db.mark_trade_approval_failed(approval_id, str(error))
+                if source_signal_id > 0:
+                    self.db.mark_signal_status(source_signal_id, "failed", str(error))
+                stats["approvals_failed"] += 1
+                self.logger.exception("approval execution failed id=%s: %s", approval_id, error)
+
+    def _execute_instruction(self, *, mode: str, instruction: CopyInstruction):
+        if mode == "live":
+            return self.live_broker.execute(instruction)
+        return self.paper_broker.execute(instruction)

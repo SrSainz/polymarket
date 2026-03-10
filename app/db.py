@@ -114,6 +114,40 @@ CREATE TABLE IF NOT EXISTS position_mark_history (
 
 CREATE INDEX IF NOT EXISTS idx_position_mark_history_asset_ts
 ON position_mark_history(asset, ts);
+
+CREATE TABLE IF NOT EXISTS trade_approvals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    source_signal_id INTEGER,
+    asset TEXT NOT NULL,
+    condition_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    side_proposed TEXT NOT NULL,
+    side_decided TEXT,
+    size REAL NOT NULL,
+    price REAL NOT NULL,
+    notional REAL NOT NULL,
+    source_wallet TEXT NOT NULL,
+    title TEXT,
+    slug TEXT,
+    outcome TEXT,
+    category TEXT,
+    reason TEXT NOT NULL DEFAULT '',
+    decision_source TEXT,
+    message_id INTEGER,
+    decision_note TEXT NOT NULL DEFAULT '',
+    decided_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_trade_approvals_status_expires
+ON trade_approvals(status, expires_at);
+
+CREATE TABLE IF NOT EXISTS bot_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -280,6 +314,148 @@ class Database:
         if row is None:
             return None
         return int(row["ts"])
+
+    def create_trade_approval(
+        self,
+        *,
+        source_signal_id: int | None,
+        asset: str,
+        condition_id: str,
+        action: str,
+        side_proposed: str,
+        size: float,
+        price: float,
+        notional: float,
+        source_wallet: str,
+        title: str,
+        slug: str,
+        outcome: str,
+        category: str,
+        reason: str,
+        timeout_minutes: int,
+    ) -> int:
+        now_ts = int(time.time())
+        expires_ts = now_ts + (timeout_minutes * 60)
+        with self.conn:
+            cursor = self.conn.execute(
+                """
+                INSERT INTO trade_approvals (
+                    created_at, expires_at, status, source_signal_id, asset, condition_id, action, side_proposed,
+                    size, price, notional, source_wallet, title, slug, outcome, category, reason
+                ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    now_ts,
+                    expires_ts,
+                    source_signal_id,
+                    asset,
+                    condition_id,
+                    action,
+                    side_proposed,
+                    size,
+                    price,
+                    notional,
+                    source_wallet,
+                    title,
+                    slug,
+                    outcome,
+                    category,
+                    reason,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def list_pending_trade_approvals(self, limit: int = 200) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT *
+            FROM trade_approvals
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    def get_trade_approval(self, approval_id: int) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM trade_approvals WHERE id = ?",
+            (approval_id,),
+        ).fetchone()
+
+    def set_trade_approval_message_id(self, approval_id: int, message_id: int) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE trade_approvals SET message_id = ? WHERE id = ?",
+                (message_id, approval_id),
+            )
+
+    def set_trade_approval_decision(
+        self,
+        *,
+        approval_id: int,
+        side_decided: str,
+        decision_source: str,
+        decision_note: str = "",
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE trade_approvals
+                SET side_decided = ?, decision_source = ?, decision_note = ?, decided_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (side_decided, decision_source, decision_note, int(time.time()), approval_id),
+            )
+
+    def reject_trade_approval(self, approval_id: int, decision_source: str, decision_note: str = "") -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE trade_approvals
+                SET status = 'rejected', decision_source = ?, decision_note = ?, decided_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (decision_source, decision_note, int(time.time()), approval_id),
+            )
+
+    def mark_trade_approval_executed(self, approval_id: int, decision_note: str = "") -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE trade_approvals
+                SET status = 'executed', decision_note = CASE WHEN decision_note = '' THEN ? ELSE decision_note END
+                WHERE id = ?
+                """,
+                (decision_note, approval_id),
+            )
+
+    def mark_trade_approval_failed(self, approval_id: int, decision_note: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE trade_approvals
+                SET status = 'failed', decision_note = ?
+                WHERE id = ?
+                """,
+                (decision_note, approval_id),
+            )
+
+    def get_bot_state(self, key: str) -> str | None:
+        row = self.conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        return str(row["value"])
+
+    def set_bot_state(self, key: str, value: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO bot_state (key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
 
     def insert_signal(self, signal: NormalizedSignal) -> bool:
         try:

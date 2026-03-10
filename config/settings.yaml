@@ -32,6 +32,11 @@ autonomous_depreciation_window_minutes: 45
 autonomous_depreciation_threshold_pct: 0.03
 autonomous_reduce_fraction: 0.50
 autonomous_cooldown_minutes: 30
+manual_confirmation_enabled: true
+confirmation_start_hour: 8
+confirmation_end_hour: 20
+confirmation_timeout_minutes: 30
+confirmation_timezone: "Europe/Madrid"
 
 max_position_per_market: 120.0
 max_total_exposure: 900.0

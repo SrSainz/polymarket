@@ -128,7 +128,14 @@ def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
         open_positions = _single_float(conn, "SELECT COUNT(*) AS value FROM copy_positions")
         exposure = _single_float(conn, "SELECT COALESCE(SUM(ABS(size * avg_price)), 0) AS value FROM copy_positions")
         realized_pnl = _single_float(conn, "SELECT COALESCE(SUM(pnl), 0) AS value FROM daily_pnl")
-        pending_signals = _single_float(conn, "SELECT COUNT(*) AS value FROM signals WHERE status='pending'")
+        pending_signals = _single_float(
+            conn,
+            """
+            SELECT COUNT(*) AS value
+            FROM signals
+            WHERE status IN ('pending', 'awaiting_approval', 'awaiting_execution')
+            """,
+        )
         executed_signals = _single_float(conn, "SELECT COUNT(*) AS value FROM signals WHERE status='executed'")
         failed_signals = _single_float(conn, "SELECT COUNT(*) AS value FROM signals WHERE status='failed'")
         positions = conn.execute(
