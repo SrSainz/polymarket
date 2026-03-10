@@ -78,6 +78,7 @@ def run_once(sync_service: SyncWalletsService, execute_service: ExecuteCopyServi
         "sync => "
         f"wallets={sync_stats.get('wallets', 0)} snapshots={sync_stats['snapshots']} "
         f"new_signals={sync_stats['signals']} "
+        f"seeded_wallets={sync_stats.get('seeded_wallets', 0)} "
         f"dropped_wallets={sync_stats.get('dropped_wallets', 0)} "
         f"rebalance_signals={sync_stats.get('rebalance_signals', 0)}"
     )
@@ -118,6 +119,7 @@ def main() -> int:
                 "sync => "
                 f"wallets={stats.get('wallets', 0)} snapshots={stats['snapshots']} "
                 f"new_signals={stats['signals']} "
+                f"seeded_wallets={stats.get('seeded_wallets', 0)} "
                 f"dropped_wallets={stats.get('dropped_wallets', 0)} "
                 f"rebalance_signals={stats.get('rebalance_signals', 0)}"
             )

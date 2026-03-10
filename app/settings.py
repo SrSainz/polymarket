@@ -32,6 +32,7 @@ class BotConfig(BaseModel):
     recent_trade_lookback_hours: int = 24
     recent_trades_limit_per_wallet: int = 200
     closed_positions_limit: int = 200
+    seed_new_wallets_without_backfill: bool = True
     polling_interval_seconds: int = 45
     execution_mode: Literal["paper", "live"] = "paper"
     dry_run: bool = True

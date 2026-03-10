@@ -31,6 +31,7 @@ class SyncWalletsService:
     def run(self) -> dict[str, int]:
         inserted_signals = 0
         snapshots = 0
+        seeded_wallets = 0
 
         run_id = str(int(time.time()))
         previous_wallets = set(self.db.list_source_wallets())
@@ -42,11 +43,20 @@ class SyncWalletsService:
             current_positions = self.tracker.fetch_wallet_positions(wallet)
             current_map = {position.asset: position for position in current_positions}
 
-            signals = self.detect_changes_service.run(
-                wallet=wallet,
-                previous=previous,
-                current=current_map,
-            )
+            if self.config.seed_new_wallets_without_backfill and not previous:
+                signals: list[NormalizedSignal] = []
+                seeded_wallets += 1
+                self.logger.info(
+                    "wallet=%s seeded_baseline_only=true positions=%s",
+                    wallet,
+                    len(current_positions),
+                )
+            else:
+                signals = self.detect_changes_service.run(
+                    wallet=wallet,
+                    previous=previous,
+                    current=current_map,
+                )
 
             self.db.replace_source_positions(wallet, current_positions, run_id)
             snapshots += len(current_positions)
@@ -74,6 +84,7 @@ class SyncWalletsService:
             "signals": inserted_signals,
             "snapshots": snapshots,
             "wallets": len(active_wallets),
+            "seeded_wallets": seeded_wallets,
             "dropped_wallets": dropped_wallets,
             "rebalance_signals": rebalance_signals,
         }

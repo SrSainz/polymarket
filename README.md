@@ -91,6 +91,7 @@ Edita `config/settings.yaml`:
 - `min_dynamic_trade_share`: porcentaje minimo de trades dinamicos dentro de su actividad reciente
 - `min_wallet_win_rate`: winrate minimo requerido
 - `min_recent_trades`: actividad minima reciente
+- `seed_new_wallets_without_backfill`: al entrar una wallet nueva, toma baseline y evita copiar posiciones antiguas
 - `polling_interval_seconds`: frecuencia de polling
 - `execution_mode`: `paper` o `live`
 - `bankroll`: capital de referencia del bot (default 1000)
