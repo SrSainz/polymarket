@@ -77,6 +77,8 @@ class BotConfig(BaseModel):
     btc5m_reserve_protected_pct: float = 0.35
     btc5m_ignore_global_exposure_limit: bool = True
     btc5m_relaxed_risk: bool = True
+    live_only_btc5m: bool = False
+    live_btc5m_ticket_allocation_pct: float = 0.10
     btc5m_reserve_keywords: list[str] = Field(
         default_factory=lambda: [
             "btc 5 minute up or down",
@@ -176,6 +178,8 @@ class BotConfig(BaseModel):
             raise ValueError("btc5m_reserved_allocation_pct must be between 0 and 1")
         if self.btc5m_reserve_protected_pct < 0 or self.btc5m_reserve_protected_pct > 1:
             raise ValueError("btc5m_reserve_protected_pct must be between 0 and 1")
+        if self.live_btc5m_ticket_allocation_pct <= 0 or self.live_btc5m_ticket_allocation_pct > 1:
+            raise ValueError("live_btc5m_ticket_allocation_pct must be in (0, 1]")
         if self.autonomous_take_profit_pct < 0:
             raise ValueError("autonomous_take_profit_pct must be >= 0")
         if self.autonomous_stop_loss_pct < 0:

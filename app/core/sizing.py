@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, ROUND_DOWN
 
+from app.core.market_classifier import is_btc5m_market
 from app.models import NormalizedSignal, SignalAction
 from app.settings import BotConfig
 
@@ -14,6 +15,7 @@ class SizingEngine:
         self,
         signal: NormalizedSignal,
         *,
+        mode: str = "paper",
         execution_price: float,
         current_total_exposure: float,
         effective_bankroll: float | None = None,
@@ -30,6 +32,13 @@ class SizingEngine:
             ratio = (bankroll * self.config.proportional_scale) / source_position_notional
             ratio = max(0.0, min(1.0, ratio))
             desired_notional = abs(signal.delta_size) * signal.reference_price * ratio
+
+        if (
+            mode == "live"
+            and self.config.live_only_btc5m
+            and is_btc5m_market(title=signal.title, slug=signal.slug, category=signal.category)
+        ):
+            desired_notional = min(desired_notional, bankroll * self.config.live_btc5m_ticket_allocation_pct)
 
         budget_left = max(bankroll - current_total_exposure, 0.0)
         desired_notional = min(desired_notional, budget_left)

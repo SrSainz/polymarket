@@ -87,3 +87,41 @@ def test_proportional_sizing_uses_effective_bankroll_override() -> None:
     )
 
     assert size_compounded > size_base
+
+
+def test_live_btc5m_ticket_is_capped_to_small_fraction_of_bankroll() -> None:
+    cfg = BotConfig(
+        watched_wallets=["0xabc"],
+        sizing_mode="fixed_amount_per_trade",
+        fixed_amount_per_trade=1000.0,
+        bankroll=1000.0,
+        min_trade_amount=1.0,
+        live_only_btc5m=True,
+        live_btc5m_ticket_allocation_pct=0.10,
+    )
+    sizing = SizingEngine(cfg)
+    signal = NormalizedSignal(
+        event_key="evt-btc",
+        wallet="0xabc",
+        asset="asset",
+        condition_id="cond",
+        action=SignalAction.OPEN,
+        prev_size=0,
+        new_size=1000,
+        delta_size=1000,
+        reference_price=0.5,
+        title="BTC 5 Minute Up or Down",
+        slug="btc-updown-5m",
+        outcome="Yes",
+        category="crypto",
+        detected_at=1,
+    )
+
+    size = sizing.calculate_buy_size(
+        signal,
+        mode="live",
+        execution_price=0.5,
+        current_total_exposure=0.0,
+    )
+
+    assert size == 200.0

@@ -15,6 +15,7 @@ class Copier:
     def build_instruction(
         self,
         *,
+        mode: str = "paper",
         signal: NormalizedSignal,
         copy_position_size: float,
         copy_position_avg_price: float,
@@ -31,6 +32,7 @@ class Copier:
         if action in (SignalAction.OPEN, SignalAction.ADD):
             size = self.sizing.calculate_buy_size(
                 signal,
+                mode=mode,
                 execution_price=execution_price,
                 current_total_exposure=current_total_exposure,
                 effective_bankroll=effective_bankroll,

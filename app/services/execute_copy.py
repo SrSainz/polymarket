@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from app.core.autonomous_decider import AutonomousDecider
 from app.core.copier import Copier
+from app.core.market_classifier import is_btc5m_market
 from app.core.live_broker import LiveBroker
 from app.core.market_classifier import is_dynamic_market
 from app.core.paper_broker import PaperBroker
@@ -85,6 +86,11 @@ class ExecuteCopyService:
 
         for signal in pending_signals:
             try:
+                if self._should_skip_signal_for_mode(signal=signal, mode=mode):
+                    self.db.mark_signal_status(signal.id or 0, "skipped", "live_only_btc5m")
+                    stats["skipped"] += 1
+                    continue
+
                 execution_price = self.clob_client.get_midpoint(signal.asset) or signal.reference_price
                 copy_position = self.db.get_copy_position(signal.asset)
                 copy_size = float(copy_position["size"]) if copy_position else 0.0
@@ -96,6 +102,7 @@ class ExecuteCopyService:
                 daily_profit_gross = self.db.get_daily_profit_gross(today)
 
                 instruction, reason = self.copier.build_instruction(
+                    mode=mode,
                     signal=signal,
                     copy_position_size=copy_size,
                     copy_position_avg_price=copy_avg_price,
@@ -139,6 +146,13 @@ class ExecuteCopyService:
             self._execute_ready_approvals(mode=mode, stats=stats)
         self.daily_summary.send_if_due()
         return stats
+
+    def _should_skip_signal_for_mode(self, *, signal, mode: str) -> bool:
+        if mode != "live" or not self.settings.config.live_only_btc5m:
+            return False
+        if signal.action not in (SignalAction.OPEN, SignalAction.ADD):
+            return False
+        return not is_btc5m_market(title=signal.title, slug=signal.slug, category=signal.category)
 
     def _get_dynamic_exposure(self) -> float:
         exposure = 0.0

@@ -57,6 +57,8 @@ btc5m_reserved_allocation_pct: 0.50
 btc5m_reserve_protected_pct: 0.0
 btc5m_ignore_global_exposure_limit: true
 btc5m_relaxed_risk: true
+live_only_btc5m: true
+live_btc5m_ticket_allocation_pct: 0.10
 btc5m_reserve_keywords:
   - "btc 5 minute up or down"
   - "bitcoin 5 minute up or down"
