@@ -25,6 +25,8 @@ noise_threshold_shares: 1.0
 min_trade_amount: 5.0
 min_price: 0.03
 max_price: 0.97
+skip_expired_source_positions: true
+expired_market_grace_hours: 6
 dynamic_keywords:
   - "bitcoin"
   - "btc"

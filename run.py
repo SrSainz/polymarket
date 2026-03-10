@@ -39,7 +39,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
     gamma_client = GammaClient(settings.env.gamma_api_host)
     clob_client = CLOBClient(settings.env.clob_host, settings.env)
 
-    tracker = SourceTracker(activity_client, gamma_client, logger)
+    tracker = SourceTracker(activity_client, gamma_client, settings.config, logger)
     wallet_selector = WalletSelector(activity_client, settings.config, logger)
     detect_changes = DetectChangesService(settings.config.noise_threshold_shares)
     sync_service = SyncWalletsService(db, tracker, wallet_selector, detect_changes, settings.config, logger)

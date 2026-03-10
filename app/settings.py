@@ -38,6 +38,8 @@ class BotConfig(BaseModel):
     min_trade_amount: float = 5.0
     min_price: float = 0.0
     max_price: float = 1.0
+    skip_expired_source_positions: bool = True
+    expired_market_grace_hours: int = 6
     dynamic_keywords: list[str] = Field(
         default_factory=lambda: [
             "bitcoin",
@@ -107,6 +109,8 @@ class BotConfig(BaseModel):
             raise ValueError("max_price must be between 0 and 1")
         if self.min_price > self.max_price:
             raise ValueError("min_price cannot be greater than max_price")
+        if self.expired_market_grace_hours < 0:
+            raise ValueError("expired_market_grace_hours must be >= 0")
         if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
         if self.autonomous_take_profit_pct < 0:
