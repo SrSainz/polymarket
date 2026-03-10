@@ -70,6 +70,9 @@ class BotConfig(BaseModel):
     confirmation_end_hour: int = 20
     confirmation_timeout_minutes: int = 30
     confirmation_timezone: str = "Europe/Madrid"
+    telegram_daily_summary_enabled: bool = True
+    telegram_daily_summary_hour: int = 20
+    telegram_daily_summary_timezone: str = "Europe/Madrid"
 
     max_position_per_market: float = 75.0
     max_total_exposure: float = 250.0
@@ -133,6 +136,8 @@ class BotConfig(BaseModel):
             raise ValueError("confirmation_start_hour must be lower than confirmation_end_hour")
         if self.confirmation_timeout_minutes < 1:
             raise ValueError("confirmation_timeout_minutes must be >= 1")
+        if not (0 <= self.telegram_daily_summary_hour <= 23):
+            raise ValueError("telegram_daily_summary_hour must be between 0 and 23")
         if self.max_daily_loss_pct <= 0 or self.max_daily_loss_pct > 1:
             raise ValueError("max_daily_loss_pct must be in (0, 1]")
         return self

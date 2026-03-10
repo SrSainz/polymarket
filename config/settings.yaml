@@ -52,6 +52,9 @@ confirmation_start_hour: 8
 confirmation_end_hour: 20
 confirmation_timeout_minutes: 30
 confirmation_timezone: "Europe/Madrid"
+telegram_daily_summary_enabled: true
+telegram_daily_summary_hour: 20
+telegram_daily_summary_timezone: "Europe/Madrid"
 
 max_position_per_market: 1000.0
 max_total_exposure: 1000.0

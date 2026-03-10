@@ -663,6 +663,26 @@ class Database:
             return 0.0
         return float(row["loss"])
 
+    def get_daily_execution_counts(self, day: str) -> dict[str, int]:
+        row = self.conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN side = 'buy' THEN 1 ELSE 0 END) AS buys,
+                SUM(CASE WHEN side = 'sell' THEN 1 ELSE 0 END) AS sells
+            FROM executions
+            WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (day,),
+        ).fetchone()
+        if row is None:
+            return {"total": 0, "buys": 0, "sells": 0}
+        return {
+            "total": int(row["total"] or 0),
+            "buys": int(row["buys"] or 0),
+            "sells": int(row["sells"] or 0),
+        }
+
     def add_daily_pnl(self, day: str, delta: float) -> None:
         current = self.get_daily_pnl(day)
         with self.conn:

@@ -13,6 +13,7 @@ from app.models import CopyInstruction
 from app.models import SignalAction
 from app.polymarket.clob_client import CLOBClient
 from app.services.manual_approval import ManualApprovalService
+from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.settings import AppSettings
 
 
@@ -26,6 +27,7 @@ class ExecuteCopyService:
         clob_client: CLOBClient,
         autonomous_decider: AutonomousDecider,
         manual_approval: ManualApprovalService,
+        daily_summary: TelegramDailySummaryService,
         settings: AppSettings,
         logger: logging.Logger,
     ) -> None:
@@ -36,6 +38,7 @@ class ExecuteCopyService:
         self.clob_client = clob_client
         self.autonomous_decider = autonomous_decider
         self.manual_approval = manual_approval
+        self.daily_summary = daily_summary
         self.settings = settings
         self.logger = logger
 
@@ -60,7 +63,8 @@ class ExecuteCopyService:
             "approvals_failed": 0,
         }
 
-        self.manual_approval.sync_user_decisions()
+        if mode == "live":
+            self.manual_approval.sync_user_decisions()
 
         for signal in pending_signals:
             try:
@@ -93,7 +97,7 @@ class ExecuteCopyService:
                     stats[status] += 1
                     continue
 
-                if self.manual_approval.request_confirmation(instruction, signal.id):
+                if mode == "live" and self.manual_approval.request_confirmation(instruction, signal.id):
                     self.db.mark_signal_status(signal.id or 0, "awaiting_approval", "manual confirmation pending")
                     stats["approvals_requested"] += 1
                     continue
@@ -111,8 +115,10 @@ class ExecuteCopyService:
                 self.logger.exception("signal_id=%s failed: %s", signal.id, error)
 
         self._run_autonomous_exits(mode=mode, stats=stats)
-        self.manual_approval.sync_user_decisions()
-        self._execute_ready_approvals(mode=mode, stats=stats)
+        if mode == "live":
+            self.manual_approval.sync_user_decisions()
+            self._execute_ready_approvals(mode=mode, stats=stats)
+        self.daily_summary.send_if_due()
         return stats
 
     def _get_dynamic_exposure(self) -> float:
@@ -158,7 +164,7 @@ class ExecuteCopyService:
 
             stats["auto_candidates"] += 1
             try:
-                if self.manual_approval.request_confirmation(instruction, source_signal_id=None):
+                if mode == "live" and self.manual_approval.request_confirmation(instruction, source_signal_id=None):
                     stats["approvals_requested"] += 1
                     continue
 

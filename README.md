@@ -107,9 +107,13 @@ Edita `config/settings.yaml`:
 - `autonomous_reduce_fraction`: porcentaje de reduccion en depreciacion
 - `autonomous_cooldown_minutes`: evita sobreoperar el mismo activo
 - `manual_confirmation_enabled`: pedir confirmacion manual antes de ejecutar en ventana horaria
+  - en este build, la confirmacion manual solo se aplica en `live`; en `paper` ejecuta automatico
 - `confirmation_start_hour` / `confirmation_end_hour`: franja de confirmacion (hora local)
 - `confirmation_timeout_minutes`: si no respondes a tiempo, ejecuta automatico
 - `confirmation_timezone`: zona horaria para la ventana (ej. `Europe/Madrid`)
+- `telegram_daily_summary_enabled`: envio diario de resumen por Telegram
+- `telegram_daily_summary_hour`: hora local para enviar resumen diario
+- `telegram_daily_summary_timezone`: zona horaria del resumen diario
 - `max_position_per_market`
 - `max_total_exposure`
 - `max_daily_loss`
@@ -204,9 +208,13 @@ Variables de confirmacion manual por Telegram:
 - `TELEGRAM_CHAT_ID`
 
 Flujo de confirmacion manual:
-1. Si hay señal en la franja configurada (por defecto 08:00-20:00), el bot envia mensaje Telegram.
+1. En `live`, si hay señal en la franja configurada (por defecto 08:00-20:00), el bot envia mensaje Telegram.
 2. Puedes pulsar `Comprar`, `Vender` o `Saltar`.
 3. Si no respondes en `confirmation_timeout_minutes` (por defecto 30), ejecuta automatico como hasta ahora.
+
+Resumen diario Telegram:
+1. Si `telegram_daily_summary_enabled=true` y hay credenciales Telegram, el bot envia 1 mensaje diario.
+2. Contiene PnL neto del dia, ganancias/perdidas brutas, numero de operaciones y exposicion.
 
 Si faltan credenciales reales o `py-clob-client`, el modo live fallara de forma explicita sin tocar paper.
 

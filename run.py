@@ -25,6 +25,7 @@ from app.services.execute_copy import ExecuteCopyService
 from app.services.manual_approval import ManualApprovalService
 from app.services.report import ReportService
 from app.services.sync_wallets import SyncWalletsService
+from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.settings import AppSettings, load_settings
 
 
@@ -50,6 +51,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
     copier = Copier(sizing, risk, reconciler)
     autonomous_decider = AutonomousDecider(settings.config, db)
     manual_approval = ManualApprovalService(db, settings.config, settings.env, logger)
+    daily_summary = TelegramDailySummaryService(db, settings.config, settings.env, logger)
 
     paper_broker = PaperBroker(db)
     live_broker = LiveBroker(db, clob_client, settings.env)
@@ -61,6 +63,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
         clob_client,
         autonomous_decider,
         manual_approval,
+        daily_summary,
         settings,
         logger,
     )
