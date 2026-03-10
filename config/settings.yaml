@@ -19,6 +19,9 @@ recent_trade_lookback_hours: 24
 recent_trades_limit_per_wallet: 200
 closed_positions_limit: 200
 seed_new_wallets_without_backfill: true
+require_recent_trade_for_position: true
+position_recent_trade_lookback_hours: 168
+position_recent_trades_limit: 300
 
 polling_interval_seconds: 45
 execution_mode: "paper"

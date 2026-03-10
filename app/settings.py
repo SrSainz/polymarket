@@ -33,6 +33,9 @@ class BotConfig(BaseModel):
     recent_trades_limit_per_wallet: int = 200
     closed_positions_limit: int = 200
     seed_new_wallets_without_backfill: bool = True
+    require_recent_trade_for_position: bool = False
+    position_recent_trade_lookback_hours: int = 72
+    position_recent_trades_limit: int = 300
     polling_interval_seconds: int = 45
     execution_mode: Literal["paper", "live"] = "paper"
     dry_run: bool = True
@@ -162,6 +165,10 @@ class BotConfig(BaseModel):
             raise ValueError("expired_market_grace_hours must be >= 0")
         if self.max_market_horizon_days < 1:
             raise ValueError("max_market_horizon_days must be >= 1")
+        if self.position_recent_trade_lookback_hours < 1:
+            raise ValueError("position_recent_trade_lookback_hours must be >= 1")
+        if self.position_recent_trades_limit < 1:
+            raise ValueError("position_recent_trades_limit must be >= 1")
         if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
         if self.btc5m_reserved_notional < 0:

@@ -26,10 +26,12 @@ class SourceTracker:
     def fetch_wallet_positions(self, wallet: str) -> list[SourcePosition]:
         raw_positions = self.activity_client.get_positions(wallet)
         observed_at = int(time.time())
+        recent_trade_assets, recent_trade_conditions = self._recent_trade_indexes(wallet, observed_at)
 
         normalized: list[SourcePosition] = []
         skipped_expired = 0
         skipped_long_horizon = 0
+        skipped_without_recent_trade = 0
         for item in raw_positions:
             size = _to_float(item.get("size"))
             if size <= 0:
@@ -54,6 +56,13 @@ class SourceTracker:
             ):
                 if not is_market_within_horizon(end_date, max_horizon_days=self.config.max_market_horizon_days):
                     skipped_long_horizon += 1
+                    continue
+
+            if self.config.require_recent_trade_for_position:
+                asset = str(item.get("asset") or "")
+                condition_id = str(item.get("conditionId") or "")
+                if asset not in recent_trade_assets and condition_id not in recent_trade_conditions:
+                    skipped_without_recent_trade += 1
                     continue
 
             category = self.gamma_client.get_category(slug) if slug else ""
@@ -85,13 +94,39 @@ class SourceTracker:
             )
 
         self.logger.info(
-            "wallet=%s positions_fetched=%s skipped_expired=%s skipped_long_horizon=%s",
+            "wallet=%s positions_fetched=%s skipped_expired=%s skipped_long_horizon=%s skipped_no_recent_trade=%s",
             wallet,
             len(normalized),
             skipped_expired,
             skipped_long_horizon,
+            skipped_without_recent_trade,
         )
         return normalized
+
+    def _recent_trade_indexes(self, wallet: str, observed_at: int) -> tuple[set[str], set[str]]:
+        if not self.config.require_recent_trade_for_position:
+            return set(), set()
+
+        cutoff_ts = observed_at - (self.config.position_recent_trade_lookback_hours * 3600)
+        asset_ids: set[str] = set()
+        condition_ids: set[str] = set()
+
+        trades = self.activity_client.get_trades(
+            wallet=wallet,
+            limit=self.config.position_recent_trades_limit,
+            offset=0,
+        )
+        for item in trades:
+            timestamp = int(_to_float(item.get("timestamp")))
+            if timestamp <= 0 or timestamp < cutoff_ts:
+                continue
+            asset = str(item.get("asset") or "")
+            condition_id = str(item.get("conditionId") or "")
+            if asset:
+                asset_ids.add(asset)
+            if condition_id:
+                condition_ids.add(condition_id)
+        return asset_ids, condition_ids
 
 
 def _to_float(value: object) -> float:

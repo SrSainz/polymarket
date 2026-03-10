@@ -92,6 +92,9 @@ Edita `config/settings.yaml`:
 - `min_wallet_win_rate`: winrate minimo requerido
 - `min_recent_trades`: actividad minima reciente
 - `seed_new_wallets_without_backfill`: al entrar una wallet nueva, toma baseline y evita copiar posiciones antiguas
+- `require_recent_trade_for_position`: exige trade reciente de la wallet fuente para mantener/copiar una posicion
+- `position_recent_trade_lookback_hours`: ventana (horas) para considerar una posicion como "viva"
+- `position_recent_trades_limit`: numero de trades leidos por wallet para ese filtro
 - `polling_interval_seconds`: frecuencia de polling
 - `execution_mode`: `paper` o `live`
 - `bankroll`: capital de referencia del bot (default 1000)
