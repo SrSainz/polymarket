@@ -22,6 +22,7 @@ class Copier:
         current_total_exposure: float,
         daily_pnl: float,
         daily_profit_gross: float,
+        effective_bankroll: float | None = None,
     ) -> tuple[CopyInstruction | None, str]:
         action, _ = self.reconciler.decide(signal, copy_position_size)
 
@@ -30,6 +31,7 @@ class Copier:
                 signal,
                 execution_price=execution_price,
                 current_total_exposure=current_total_exposure,
+                effective_bankroll=effective_bankroll,
             )
             side = TradeSide.BUY
         else:
@@ -64,6 +66,7 @@ class Copier:
             current_total_exposure=current_total_exposure,
             daily_pnl=daily_pnl,
             daily_profit_gross=daily_profit_gross,
+            effective_bankroll=effective_bankroll,
             reference_price=signal.reference_price,
         )
         if not allowed:

@@ -25,6 +25,7 @@ def _instruction(notional: float = 20.0, side: TradeSide = TradeSide.BUY, catego
 def test_blocks_max_exposure() -> None:
     config = BotConfig(
         watched_wallets=["0xabc"],
+        bankroll=100.0,
         max_total_exposure=100.0,
         max_position_per_market=100.0,
         max_daily_loss=50.0,
@@ -200,3 +201,28 @@ def test_daily_loss_limit_expands_with_realized_daily_gains() -> None:
     )
     assert not allowed2
     assert "max_daily_loss" in reason2
+
+
+def test_exposure_limit_scales_with_effective_bankroll() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=1000.0,
+        max_total_exposure=1000.0,
+        max_daily_loss=500.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.3,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=40.0)
+
+    allowed, _ = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=1030.0,
+        current_total_exposure=1030.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        effective_bankroll=1100.0,
+        reference_price=0.5,
+    )
+    assert allowed

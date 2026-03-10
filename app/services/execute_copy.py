@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.core.autonomous_decider import AutonomousDecider
 from app.core.copier import Copier
@@ -40,7 +40,9 @@ class ExecuteCopyService:
 
     def run(self, mode: str = "paper") -> dict[str, int]:
         pending_signals = self.db.list_pending_signals()
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
+        prior_realized_pnl = self.db.get_cumulative_pnl_before(today)
+        effective_bankroll = self.settings.config.bankroll + max(prior_realized_pnl, 0.0)
 
         stats = {
             "pending": len(pending_signals),
@@ -77,6 +79,7 @@ class ExecuteCopyService:
                     current_total_exposure=total_exposure,
                     daily_pnl=daily_pnl,
                     daily_profit_gross=daily_profit_gross,
+                    effective_bankroll=effective_bankroll,
                 )
 
                 if instruction is None:

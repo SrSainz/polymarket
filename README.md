@@ -89,6 +89,7 @@ Edita `config/settings.yaml`:
 - `polling_interval_seconds`: frecuencia de polling
 - `execution_mode`: `paper` o `live`
 - `bankroll`: capital de referencia del bot (default 1000)
+  - capital operativo diario = `bankroll + max(pnl_realizado_hasta_ayer, 0)`
 - `sizing_mode`: `fixed_amount_per_trade` o `proportional_to_source`
 - `fixed_amount_per_trade`: notional fijo por trade
 - `proportional_scale`: multiplicador de copia proporcional
@@ -108,7 +109,7 @@ Edita `config/settings.yaml`:
 - `max_total_exposure`
 - `max_daily_loss`
 - `max_daily_loss_pct` (cap porcentual del bankroll para perdida diaria, por ejemplo `0.10`)
-  - limite diario efectivo = `min(max_daily_loss, bankroll * max_daily_loss_pct) + ganancias_realizadas_del_dia`
+  - limite diario efectivo = `min(max_daily_loss, capital_operativo * max_daily_loss_pct) + ganancias_realizadas_del_dia`
 - `slippage_limit`
 - `allowed_tags` / `blocked_tags`
 

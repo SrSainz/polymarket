@@ -60,3 +60,30 @@ def test_reduce_size_fractional() -> None:
 
     size = sizing.calculate_reduce_size(signal, copy_position_size=20)
     assert size == 8.0
+
+
+def test_proportional_sizing_uses_effective_bankroll_override() -> None:
+    cfg = BotConfig(
+        watched_wallets=["0xabc"],
+        sizing_mode="proportional_to_source",
+        proportional_scale=0.10,
+        bankroll=1000.0,
+        min_trade_amount=5.0,
+    )
+    sizing = SizingEngine(cfg)
+    signal = _signal(SignalAction.OPEN, 0, 1000, 1000)
+
+    size_base = sizing.calculate_buy_size(
+        signal,
+        execution_price=0.5,
+        current_total_exposure=0.0,
+        effective_bankroll=1000.0,
+    )
+    size_compounded = sizing.calculate_buy_size(
+        signal,
+        execution_price=0.5,
+        current_total_exposure=0.0,
+        effective_bankroll=1200.0,
+    )
+
+    assert size_compounded > size_base

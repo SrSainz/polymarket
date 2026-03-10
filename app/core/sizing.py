@@ -16,19 +16,22 @@ class SizingEngine:
         *,
         execution_price: float,
         current_total_exposure: float,
+        effective_bankroll: float | None = None,
     ) -> float:
         if execution_price <= 0:
             return 0.0
+        bankroll = float(effective_bankroll) if effective_bankroll is not None else self.config.bankroll
+        bankroll = max(bankroll, 0.0)
 
         if self.config.sizing_mode == "fixed_amount_per_trade":
             desired_notional = self.config.fixed_amount_per_trade
         else:
             source_position_notional = max(signal.new_size * signal.reference_price, 1e-9)
-            ratio = (self.config.bankroll * self.config.proportional_scale) / source_position_notional
+            ratio = (bankroll * self.config.proportional_scale) / source_position_notional
             ratio = max(0.0, min(1.0, ratio))
             desired_notional = abs(signal.delta_size) * signal.reference_price * ratio
 
-        budget_left = max(self.config.bankroll - current_total_exposure, 0.0)
+        budget_left = max(bankroll - current_total_exposure, 0.0)
         desired_notional = min(desired_notional, budget_left)
 
         if desired_notional < self.config.min_trade_amount:

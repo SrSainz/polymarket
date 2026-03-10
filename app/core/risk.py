@@ -8,11 +8,22 @@ class RiskManager:
     def __init__(self, config: BotConfig) -> None:
         self.config = config
 
-    def daily_loss_limit(self, daily_profit_gross: float = 0.0) -> float:
+    def daily_loss_limit(
+        self,
+        daily_profit_gross: float = 0.0,
+        *,
+        effective_bankroll: float | None = None,
+    ) -> float:
+        bankroll = self._resolve_bankroll(effective_bankroll)
         absolute_limit = abs(self.config.max_daily_loss)
-        pct_limit = self.config.bankroll * self.config.max_daily_loss_pct
+        pct_limit = bankroll * self.config.max_daily_loss_pct
         base_limit = min(absolute_limit, pct_limit)
         return base_limit + max(daily_profit_gross, 0.0)
+
+    def _resolve_bankroll(self, effective_bankroll: float | None) -> float:
+        if effective_bankroll is None:
+            return self.config.bankroll
+        return max(float(effective_bankroll), self.config.bankroll)
 
     def is_tag_allowed(self, category: str) -> bool:
         category = (category or "").strip().lower()
@@ -33,8 +44,10 @@ class RiskManager:
         current_total_exposure: float,
         daily_pnl: float,
         daily_profit_gross: float,
+        effective_bankroll: float | None = None,
         reference_price: float,
     ) -> tuple[bool, str]:
+        bankroll = self._resolve_bankroll(effective_bankroll)
         if not self.is_tag_allowed(instruction.category):
             return False, "category blocked by allowed_tags/blocked_tags"
 
@@ -45,15 +58,17 @@ class RiskManager:
             if instruction.price > self.config.max_price:
                 return False, "max_price filter"
 
-            if daily_pnl <= -self.daily_loss_limit(daily_profit_gross):
+            if daily_pnl <= -self.daily_loss_limit(daily_profit_gross, effective_bankroll=bankroll):
                 return False, "max_daily_loss reached"
 
+            market_limit = max(self.config.max_position_per_market, bankroll)
             resulting_market_notional = current_market_notional + instruction.notional
-            if resulting_market_notional > self.config.max_position_per_market:
+            if resulting_market_notional > market_limit:
                 return False, "max_position_per_market exceeded"
 
+            exposure_limit = max(self.config.max_total_exposure, bankroll)
             resulting_exposure = current_total_exposure + instruction.notional
-            if resulting_exposure > self.config.max_total_exposure:
+            if resulting_exposure > exposure_limit:
                 return False, "max_total_exposure exceeded"
 
         if reference_price > 0:
