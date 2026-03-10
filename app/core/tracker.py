@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.core.market_expiry import is_market_expired
+from app.core.market_expiry import is_market_expired, is_market_within_horizon
 from app.models import SourcePosition
 from app.polymarket.activity_client import ActivityClient
 from app.polymarket.gamma_client import GammaClient
@@ -29,6 +29,7 @@ class SourceTracker:
 
         normalized: list[SourcePosition] = []
         skipped_expired = 0
+        skipped_long_horizon = 0
         for item in raw_positions:
             size = _to_float(item.get("size"))
             if size <= 0:
@@ -43,6 +44,18 @@ class SourceTracker:
                 continue
 
             slug = str(item.get("slug") or "")
+            event_slug = str(item.get("eventSlug") or "")
+            title = str(item.get("title") or "")
+            if self.config.short_horizon_only and not _matches_forced_keywords(
+                title=title,
+                slug=slug,
+                event_slug=event_slug,
+                keywords=self.config.forced_include_market_keywords,
+            ):
+                if not is_market_within_horizon(end_date, max_horizon_days=self.config.max_market_horizon_days):
+                    skipped_long_horizon += 1
+                    continue
+
             category = self.gamma_client.get_category(slug) if slug else ""
 
             avg_price = _to_float(item.get("avgPrice"))
@@ -63,7 +76,7 @@ class SourceTracker:
                     size=size,
                     avg_price=avg_price,
                     current_price=current_price,
-                    title=str(item.get("title") or ""),
+                    title=title,
                     slug=slug,
                     outcome=str(item.get("outcome") or ""),
                     category=category,
@@ -72,10 +85,11 @@ class SourceTracker:
             )
 
         self.logger.info(
-            "wallet=%s positions_fetched=%s skipped_expired=%s",
+            "wallet=%s positions_fetched=%s skipped_expired=%s skipped_long_horizon=%s",
             wallet,
             len(normalized),
             skipped_expired,
+            skipped_long_horizon,
         )
         return normalized
 
@@ -94,4 +108,17 @@ def _is_missing(value: object) -> bool:
         return True
     if isinstance(value, str) and not value.strip():
         return True
+    return False
+
+
+def _matches_forced_keywords(*, title: str, slug: str, event_slug: str, keywords: list[str]) -> bool:
+    if not keywords:
+        return False
+    haystack = " ".join([title or "", slug or "", event_slug or ""]).strip().lower()
+    if not haystack:
+        return False
+    for raw_keyword in keywords:
+        keyword = (raw_keyword or "").strip().lower()
+        if keyword and keyword in haystack:
+            return True
     return False

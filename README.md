@@ -101,6 +101,9 @@ Edita `config/settings.yaml`:
 - `min_price` / `max_price`: filtro de entrada por precio (evita mercados extremos de 0.00x o 0.99x)
 - `skip_expired_source_positions`: ignora posiciones de origen en mercados ya concluidos
 - `expired_market_grace_hours`: margen (horas) tras `endDate` antes de considerar un mercado expirado
+- `short_horizon_only`: copia solo mercados con vencimiento cercano
+- `max_market_horizon_days`: horizonte maximo (ej. `7` para daily/weekly)
+- `forced_include_market_keywords`: excepciones de inclusion (ej. `BTC 5 Minute Up or Down`)
 - `dynamic_keywords`: palabras clave para detectar mercados dinamicos (ej. BTC, 5m, 15m)
 - `dynamic_max_allocation_pct`: porcentaje maximo de capital en mercados dinamicos (ej. `0.20`)
 - `dynamic_skip_manual_confirmation`: si `true`, no pide confirmacion manual en mercados dinamicos

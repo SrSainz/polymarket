@@ -3,14 +3,14 @@ watched_wallets:
 auto_select_wallets: true
 top_wallets_to_copy: 3
 leaderboard_category: "OVERALL"
-leaderboard_time_period: "DAY"
+leaderboard_time_period: "MONTH"
 leaderboard_candidate_limit: 25
 prioritize_dynamic_wallets: true
 dynamic_wallet_slots: 1
 dynamic_leaderboard_category: "CRYPTO"
 dynamic_leaderboard_time_period: "DAY"
-min_dynamic_recent_trades: 5
-min_dynamic_trade_share: 0.20
+min_dynamic_recent_trades: 1
+min_dynamic_trade_share: 0.02
 wallet_selection_refresh_minutes: 30
 min_wallet_win_rate: 0.55
 min_closed_positions_for_scoring: 10
@@ -33,20 +33,17 @@ min_price: 0.03
 max_price: 0.97
 skip_expired_source_positions: true
 expired_market_grace_hours: 6
+short_horizon_only: true
+max_market_horizon_days: 7
+forced_include_market_keywords:
+  - "btc 5 minute up or down"
+  - "bitcoin up or down -"
+  - "btc-updown-5m"
 dynamic_keywords:
-  - "bitcoin"
-  - "btc"
-  - "ethereum"
-  - "eth"
-  - "5m"
-  - "5 min"
-  - "5 minutes"
-  - "5-minute"
-  - "next 5 minutes"
-  - "15m"
-  - "15 min"
-  - "1h"
-  - "up or down"
+  - "btc 5 minute up or down"
+  - "bitcoin up or down -"
+  - "btc-updown-5m"
+  - "5 minute up or down"
 dynamic_max_allocation_pct: 0.20
 dynamic_skip_manual_confirmation: true
 autonomous_decisions_enabled: true

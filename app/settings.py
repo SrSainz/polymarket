@@ -46,6 +46,15 @@ class BotConfig(BaseModel):
     max_price: float = 1.0
     skip_expired_source_positions: bool = True
     expired_market_grace_hours: int = 6
+    short_horizon_only: bool = True
+    max_market_horizon_days: int = 7
+    forced_include_market_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "btc 5 minute up or down",
+            "bitcoin up or down -",
+            "btc-updown-5m",
+        ]
+    )
     dynamic_keywords: list[str] = Field(
         default_factory=lambda: [
             "bitcoin",
@@ -104,7 +113,7 @@ class BotConfig(BaseModel):
                 normalized.append(wallet)
         return normalized
 
-    @field_validator("allowed_tags", "blocked_tags", "dynamic_keywords", mode="before")
+    @field_validator("allowed_tags", "blocked_tags", "dynamic_keywords", "forced_include_market_keywords", mode="before")
     @classmethod
     def normalize_tags(cls, value: list[str]) -> list[str]:
         if not value:
@@ -131,6 +140,8 @@ class BotConfig(BaseModel):
             raise ValueError("min_price cannot be greater than max_price")
         if self.expired_market_grace_hours < 0:
             raise ValueError("expired_market_grace_hours must be >= 0")
+        if self.max_market_horizon_days < 1:
+            raise ValueError("max_market_horizon_days must be >= 1")
         if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
         if self.autonomous_take_profit_pct < 0:
