@@ -118,3 +118,24 @@ def test_tracker_requires_recent_trade_when_enabled() -> None:
     tracker = SourceTracker(_FakeActivityClient(rows, trades), _FakeGammaClient(), cfg, logging.getLogger("test"))
     positions = tracker.fetch_wallet_positions("0xabc")
     assert [position.asset for position in positions] == ["a-live"]
+
+
+def test_tracker_skips_redeemable_positions() -> None:
+    future_date = (datetime.now(timezone.utc) + timedelta(days=2)).date().isoformat()
+    rows = [
+        {
+            "asset": "a-redeemable",
+            "conditionId": "c-redeemable",
+            "size": 10,
+            "avgPrice": 0.5,
+            "curPrice": 0.51,
+            "title": "redeemable market",
+            "slug": "redeemable-market",
+            "outcome": "Yes",
+            "endDate": future_date,
+            "redeemable": True,
+        }
+    ]
+    tracker = SourceTracker(_FakeActivityClient(rows), _FakeGammaClient(), _config(), logging.getLogger("test"))
+    positions = tracker.fetch_wallet_positions("0xabc")
+    assert positions == []

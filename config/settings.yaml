@@ -20,7 +20,7 @@ recent_trades_limit_per_wallet: 200
 closed_positions_limit: 200
 seed_new_wallets_without_backfill: true
 require_recent_trade_for_position: true
-position_recent_trade_lookback_hours: 168
+position_recent_trade_lookback_hours: 24
 position_recent_trades_limit: 300
 
 polling_interval_seconds: 45
@@ -54,6 +54,7 @@ btc5m_reserve_enabled: true
 btc5m_reserved_notional: 200.0
 btc5m_reserve_protected_pct: 0.0
 btc5m_ignore_global_exposure_limit: true
+btc5m_relaxed_risk: true
 btc5m_reserve_keywords:
   - "btc 5 minute up or down"
   - "bitcoin up or down -"

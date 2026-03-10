@@ -29,12 +29,17 @@ class SourceTracker:
         recent_trade_assets, recent_trade_conditions = self._recent_trade_indexes(wallet, observed_at)
 
         normalized: list[SourcePosition] = []
+        skipped_redeemable = 0
         skipped_expired = 0
         skipped_long_horizon = 0
         skipped_without_recent_trade = 0
         for item in raw_positions:
             size = _to_float(item.get("size"))
             if size <= 0:
+                continue
+
+            if _to_bool(item.get("redeemable")):
+                skipped_redeemable += 1
                 continue
 
             end_date = str(item.get("endDate") or "")
@@ -94,9 +99,10 @@ class SourceTracker:
             )
 
         self.logger.info(
-            "wallet=%s positions_fetched=%s skipped_expired=%s skipped_long_horizon=%s skipped_no_recent_trade=%s",
+            "wallet=%s positions_fetched=%s skipped_redeemable=%s skipped_expired=%s skipped_long_horizon=%s skipped_no_recent_trade=%s",
             wallet,
             len(normalized),
+            skipped_redeemable,
             skipped_expired,
             skipped_long_horizon,
             skipped_without_recent_trade,
@@ -136,6 +142,17 @@ def _to_float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _to_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
 
 
 def _is_missing(value: object) -> bool:

@@ -442,3 +442,69 @@ def test_btc5m_can_bypass_global_exposure_limit_when_enabled() -> None:
         reference_price=0.5,
     )
     assert allowed
+
+
+def test_btc5m_relaxed_risk_bypasses_price_and_dynamic_caps() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=20.0,
+        max_total_exposure=50.0,
+        max_daily_loss=20.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.01,
+        min_price=0.2,
+        max_price=0.8,
+        dynamic_keywords=["bitcoin", "5m"],
+        dynamic_max_allocation_pct=0.05,
+        btc5m_reserve_enabled=True,
+        btc5m_reserved_notional=200.0,
+        btc5m_relaxed_risk=True,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=80.0)
+    instruction.title = "BTC 5 Minute Up or Down"
+    instruction.price = 0.95
+
+    allowed, reason = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=200.0,
+        current_total_exposure=980.0,
+        current_dynamic_exposure=195.0,
+        current_btc5m_exposure=100.0,
+        daily_pnl=-200.0,
+        daily_profit_gross=0.0,
+        reference_price=0.70,
+    )
+    assert allowed, reason
+
+
+def test_btc5m_relaxed_risk_still_enforces_reserved_cap() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=20.0,
+        max_total_exposure=50.0,
+        max_daily_loss=20.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.01,
+        btc5m_reserve_enabled=True,
+        btc5m_reserved_notional=200.0,
+        btc5m_relaxed_risk=True,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=30.0)
+    instruction.title = "BTC 5 Minute Up or Down"
+
+    allowed, reason = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=900.0,
+        current_dynamic_exposure=0.0,
+        current_btc5m_exposure=190.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert not allowed
+    assert "btc5m_reserved_cap" in reason

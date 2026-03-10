@@ -82,6 +82,7 @@ class BotConfig(BaseModel):
     btc5m_reserved_notional: float = 200.0
     btc5m_reserve_protected_pct: float = 0.35
     btc5m_ignore_global_exposure_limit: bool = True
+    btc5m_relaxed_risk: bool = True
     btc5m_reserve_keywords: list[str] = Field(
         default_factory=lambda: [
             "btc 5 minute up or down",

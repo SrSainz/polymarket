@@ -54,27 +54,30 @@ class RiskManager:
         if not self.is_tag_allowed(instruction.category):
             return False, "category blocked by allowed_tags/blocked_tags"
 
+        market_is_btc5m = self.config.btc5m_reserve_enabled and is_dynamic_market(
+            title=instruction.title,
+            slug=instruction.slug,
+            category=instruction.category,
+            keywords=self.config.btc5m_reserve_keywords,
+        )
+        btc5m_relaxed = market_is_btc5m and self.config.btc5m_relaxed_risk
+
         if instruction.side == TradeSide.BUY:
-            if instruction.price < self.config.min_price:
-                return False, "min_price filter"
+            if not btc5m_relaxed:
+                if instruction.price < self.config.min_price:
+                    return False, "min_price filter"
 
-            if instruction.price > self.config.max_price:
-                return False, "max_price filter"
+                if instruction.price > self.config.max_price:
+                    return False, "max_price filter"
 
-            if daily_pnl <= -self.daily_loss_limit(daily_profit_gross, effective_bankroll=bankroll):
-                return False, "max_daily_loss reached"
+                if daily_pnl <= -self.daily_loss_limit(daily_profit_gross, effective_bankroll=bankroll):
+                    return False, "max_daily_loss reached"
 
-            market_limit = min(self.config.max_position_per_market, bankroll)
-            resulting_market_notional = current_market_notional + instruction.notional
-            if resulting_market_notional > market_limit:
-                return False, "max_position_per_market exceeded"
+                market_limit = min(self.config.max_position_per_market, bankroll)
+                resulting_market_notional = current_market_notional + instruction.notional
+                if resulting_market_notional > market_limit:
+                    return False, "max_position_per_market exceeded"
 
-            market_is_btc5m = self.config.btc5m_reserve_enabled and is_dynamic_market(
-                title=instruction.title,
-                slug=instruction.slug,
-                category=instruction.category,
-                keywords=self.config.btc5m_reserve_keywords,
-            )
             exposure_limit = min(self.config.max_total_exposure, bankroll)
             btc5m_cap = min(self.config.btc5m_reserved_notional, bankroll) if self.config.btc5m_reserve_enabled else 0.0
             if market_is_btc5m:
@@ -93,12 +96,12 @@ class RiskManager:
                 if resulting_non_btc5m_exposure > non_btc5m_cap:
                     return False, "reserved_for_btc5m"
 
-            if not (market_is_btc5m and self.config.btc5m_ignore_global_exposure_limit):
+            if not btc5m_relaxed and not (market_is_btc5m and self.config.btc5m_ignore_global_exposure_limit):
                 resulting_exposure = current_total_exposure + instruction.notional
                 if resulting_exposure > exposure_limit:
                     return False, "max_total_exposure exceeded"
 
-            if self.config.dynamic_max_allocation_pct > 0:
+            if not btc5m_relaxed and self.config.dynamic_max_allocation_pct > 0:
                 market_is_dynamic = is_dynamic_market(
                     title=instruction.title,
                     slug=instruction.slug,
@@ -111,7 +114,7 @@ class RiskManager:
                     if resulting_dynamic_exposure > dynamic_cap:
                         return False, "dynamic_allocation_cap exceeded"
 
-        if reference_price > 0:
+        if reference_price > 0 and not (instruction.side == TradeSide.BUY and btc5m_relaxed):
             slippage = abs(instruction.price - reference_price) / reference_price
             if slippage > self.config.slippage_limit:
                 return False, "slippage_limit exceeded"
