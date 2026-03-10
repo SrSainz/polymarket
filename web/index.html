@@ -135,6 +135,48 @@
           </article>
         </section>
 
+        <section class="bucket-overview">
+          <article class="panel bucket-summary bucket-summary-btc">
+            <div class="panel-head panel-head-tight">
+              <div>
+                <h2>BTC 5m</h2>
+                <p class="panel-copy">Bucket reservado para Bitcoin 5 Minute Up or Down.</p>
+              </div>
+              <span id="btcBucketCount" class="badge">0 pos.</span>
+            </div>
+            <div class="bucket-stats">
+              <div class="bucket-stat">
+                <span>Exposicion</span>
+                <strong id="btcBucketExposure">-</strong>
+              </div>
+              <div class="bucket-stat">
+                <span>PnL vivo</span>
+                <strong id="btcBucketPnl">-</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel bucket-summary bucket-summary-core">
+            <div class="panel-head panel-head-tight">
+              <div>
+                <h2>General</h2>
+                <p class="panel-copy">Resto del capital en wallets daily / weekly con mejor resultado.</p>
+              </div>
+              <span id="generalBucketCount" class="badge">0 pos.</span>
+            </div>
+            <div class="bucket-stats">
+              <div class="bucket-stat">
+                <span>Exposicion</span>
+                <strong id="generalBucketExposure">-</strong>
+              </div>
+              <div class="bucket-stat">
+                <span>PnL vivo</span>
+                <strong id="generalBucketPnl">-</strong>
+              </div>
+            </div>
+          </article>
+        </section>
+
         <section class="mini-panels">
           <article class="panel">
             <div class="panel-head panel-head-tight">
@@ -157,30 +199,58 @@
           </article>
         </section>
 
-        <section class="panel" id="positionsSection">
-          <div class="panel-head">
-            <div>
-              <h2>Posiciones copiadas</h2>
-              <p class="panel-copy">Lo que hay abierto ahora mismo, con coste medio y PnL en vivo.</p>
+        <section class="bucket-grid" id="positionsSection">
+          <article class="panel bucket-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Posiciones BTC 5m</h2>
+                <p class="panel-copy">Aqui solo debe aparecer el mercado real de Bitcoin a 5 minutos.</p>
+              </div>
+              <span id="positionsBtcCount" class="badge">0</span>
             </div>
-            <span id="positionsCount" class="badge">0</span>
-          </div>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Mercado</th>
-                  <th>Outcome</th>
-                  <th>Monto</th>
-                  <th>Avg</th>
-                  <th>Mark</th>
-                  <th>PnL vivo</th>
-                  <th>Realized</th>
-                </tr>
-              </thead>
-              <tbody id="positionsBody"></tbody>
-            </table>
-          </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Mercado</th>
+                    <th>Outcome</th>
+                    <th>Monto</th>
+                    <th>Avg</th>
+                    <th>Mark</th>
+                    <th>PnL vivo</th>
+                    <th>Realized</th>
+                  </tr>
+                </thead>
+                <tbody id="positionsBtcBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel bucket-panel">
+            <div class="panel-head">
+              <div>
+                <h2>Posiciones General</h2>
+                <p class="panel-copy">Mercados daily / weekly del resto de wallets seleccionadas.</p>
+              </div>
+              <span id="positionsGeneralCount" class="badge">0</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Mercado</th>
+                    <th>Outcome</th>
+                    <th>Monto</th>
+                    <th>Avg</th>
+                    <th>Mark</th>
+                    <th>PnL vivo</th>
+                    <th>Realized</th>
+                  </tr>
+                </thead>
+                <tbody id="positionsGeneralBody"></tbody>
+              </table>
+            </div>
+          </article>
         </section>
 
         <details class="panel panel-details" open>

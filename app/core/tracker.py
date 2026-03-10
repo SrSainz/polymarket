@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
+from app.core.market_classifier import is_btc5m_market, matches_market_keywords
 from app.core.market_expiry import is_market_expired, is_market_within_horizon
 from app.models import SourcePosition
 from app.polymarket.activity_client import ActivityClient
@@ -53,12 +54,13 @@ class SourceTracker:
             slug = str(item.get("slug") or "")
             event_slug = str(item.get("eventSlug") or "")
             title = str(item.get("title") or "")
-            if self.config.short_horizon_only and not _matches_forced_keywords(
+            market_is_forced = is_btc5m_market(title=title, slug=slug, event_slug=event_slug) or matches_market_keywords(
                 title=title,
                 slug=slug,
                 event_slug=event_slug,
                 keywords=self.config.forced_include_market_keywords,
-            ):
+            )
+            if self.config.short_horizon_only and not market_is_forced:
                 if not is_market_within_horizon(end_date, max_horizon_days=self.config.max_market_horizon_days):
                     skipped_long_horizon += 1
                     continue
@@ -160,17 +162,4 @@ def _is_missing(value: object) -> bool:
         return True
     if isinstance(value, str) and not value.strip():
         return True
-    return False
-
-
-def _matches_forced_keywords(*, title: str, slug: str, event_slug: str, keywords: list[str]) -> bool:
-    if not keywords:
-        return False
-    haystack = " ".join([title or "", slug or "", event_slug or ""]).strip().lower()
-    if not haystack:
-        return False
-    for raw_keyword in keywords:
-        keyword = (raw_keyword or "").strip().lower()
-        if keyword and keyword in haystack:
-            return True
     return False

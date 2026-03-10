@@ -77,6 +77,33 @@ function normalizeCategory(raw) {
   return value;
 }
 
+function normalizeMarketText(...parts) {
+  return parts
+    .map((part) => String(part || "").toLowerCase())
+    .join(" ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function isBtc5mMarket(item) {
+  const haystack = normalizeMarketText(item?.title, item?.slug, item?.category, item?.event_slug);
+  if (!haystack) return false;
+
+  const hasBtc = haystack.includes("btc") || haystack.includes("bitcoin");
+  const hasFiveMinuteWindow =
+    haystack.includes("5m") ||
+    haystack.includes("5 min") ||
+    haystack.includes("5 mins") ||
+    haystack.includes("5 minute") ||
+    haystack.includes("5 minutes") ||
+    haystack.includes("next 5 minute") ||
+    haystack.includes("next 5 minutes");
+  const hasDirection =
+    haystack.includes("up or down") || haystack.includes("updown") || haystack.includes("up down");
+
+  return hasBtc && hasFiveMinuteWindow && hasDirection;
+}
+
 async function getJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -297,16 +324,12 @@ function paintOperationPnl(items) {
   meta.textContent = `ultimas ${latest.length}: metido ${fmtUsd(invested, 2)} | resultado ${fmtUsd(sum, 4)}`;
 }
 
-function paintPositions(items) {
-  const body = document.getElementById("positionsBody");
-  document.getElementById("positionsCount").textContent = String(items.length);
-
+function renderPositionRows(items, emptyLabel) {
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="7">No hay posiciones copiadas.</td></tr>`;
-    return;
+    return `<tr><td colspan="7">${escapeHtml(emptyLabel)}</td></tr>`;
   }
 
-  body.innerHTML = items
+  return items
     .map((item) => {
       const notional = Math.abs(Number(item.size || 0) * Number(item.avg_price || 0));
       const unrealized = Number(item.unrealized_pnl || 0);
@@ -324,6 +347,42 @@ function paintPositions(items) {
     `;
     })
     .join("");
+}
+
+function paintPositions(items) {
+  const btcItems = items.filter((item) => isBtc5mMarket(item));
+  const generalItems = items.filter((item) => !isBtc5mMarket(item));
+
+  document.getElementById("positionsBtcCount").textContent = String(btcItems.length);
+  document.getElementById("positionsGeneralCount").textContent = String(generalItems.length);
+  document.getElementById("positionsBtcBody").innerHTML = renderPositionRows(
+    btcItems,
+    "No hay posiciones BTC 5m abiertas."
+  );
+  document.getElementById("positionsGeneralBody").innerHTML = renderPositionRows(
+    generalItems,
+    "No hay posiciones general abiertas."
+  );
+
+  const summarizeBucket = (bucketItems) => {
+    const exposure = bucketItems.reduce(
+      (acc, item) => acc + Math.abs(Number(item.size || 0) * Number(item.avg_price || 0)),
+      0
+    );
+    const unrealized = bucketItems.reduce((acc, item) => acc + Number(item.unrealized_pnl || 0), 0);
+    return { exposure, unrealized };
+  };
+
+  const btcSummary = summarizeBucket(btcItems);
+  const generalSummary = summarizeBucket(generalItems);
+
+  document.getElementById("btcBucketCount").textContent = `${btcItems.length} pos.`;
+  document.getElementById("btcBucketExposure").textContent = fmtUsdPlain(btcSummary.exposure, 2);
+  document.getElementById("btcBucketPnl").textContent = fmtUsd(btcSummary.unrealized, 2);
+
+  document.getElementById("generalBucketCount").textContent = `${generalItems.length} pos.`;
+  document.getElementById("generalBucketExposure").textContent = fmtUsdPlain(generalSummary.exposure, 2);
+  document.getElementById("generalBucketPnl").textContent = fmtUsd(generalSummary.unrealized, 2);
 }
 
 function paintExecutions(items) {

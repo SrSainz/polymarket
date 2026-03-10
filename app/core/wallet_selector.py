@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 
 from app.core.market_expiry import is_market_expired, is_market_within_horizon
-from app.core.market_classifier import is_dynamic_market
+from app.core.market_classifier import is_btc5m_market, matches_market_keywords
 from app.polymarket.activity_client import ActivityClient
 from app.settings import BotConfig
 
@@ -297,9 +297,18 @@ class WalletSelector:
             size = abs(_to_float(trade.get("size")))
             price = abs(_to_float(trade.get("price")))
             recent_notional += size * price
-            if is_dynamic_market(
-                title=str(trade.get("title") or ""),
-                slug=str(trade.get("slug") or trade.get("eventSlug") or ""),
+            title = str(trade.get("title") or "")
+            slug = str(trade.get("slug") or "")
+            event_slug = str(trade.get("eventSlug") or "")
+            if is_btc5m_market(
+                title=title,
+                slug=slug,
+                category=str(trade.get("category") or ""),
+                event_slug=event_slug,
+            ) or matches_market_keywords(
+                title=title,
+                slug=slug,
+                event_slug=event_slug,
                 category=str(trade.get("category") or ""),
                 keywords=self.config.dynamic_keywords,
             ):
@@ -503,7 +512,15 @@ def _realized_pnl_for_keywords(closed_positions: list[dict], keywords: list[str]
         title = str(position.get("title") or "")
         slug = str(position.get("slug") or "")
         event_slug = str(position.get("eventSlug") or "")
-        if not _matches_forced_keywords(title=title, slug=slug, event_slug=event_slug, keywords=keywords):
+        if not (
+            is_btc5m_market(title=title, slug=slug, event_slug=event_slug)
+            or matches_market_keywords(
+                title=title,
+                slug=slug,
+                event_slug=event_slug,
+                keywords=keywords,
+            )
+        ):
             continue
         total += _to_float(position.get("realizedPnl"))
     return total
@@ -530,13 +547,9 @@ def _to_bool(value: object) -> bool:
 
 
 def _matches_forced_keywords(*, title: str, slug: str, event_slug: str, keywords: list[str]) -> bool:
-    if not keywords:
-        return False
-    haystack = " ".join([title or "", slug or "", event_slug or ""]).strip().lower()
-    if not haystack:
-        return False
-    for raw_keyword in keywords:
-        keyword = (raw_keyword or "").strip().lower()
-        if keyword and keyword in haystack:
-            return True
-    return False
+    return is_btc5m_market(title=title, slug=slug, event_slug=event_slug) or matches_market_keywords(
+        title=title,
+        slug=slug,
+        event_slug=event_slug,
+        keywords=keywords,
+    )

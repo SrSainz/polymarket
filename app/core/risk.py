@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.core.market_classifier import is_dynamic_market
+from app.core.market_classifier import is_btc5m_market, is_dynamic_market
 from app.models import CopyInstruction, TradeSide
 from app.settings import BotConfig
 
@@ -54,11 +54,18 @@ class RiskManager:
         if not self.is_tag_allowed(instruction.category):
             return False, "category blocked by allowed_tags/blocked_tags"
 
-        market_is_btc5m = self.config.btc5m_reserve_enabled and is_dynamic_market(
-            title=instruction.title,
-            slug=instruction.slug,
-            category=instruction.category,
-            keywords=self.config.btc5m_reserve_keywords,
+        market_is_btc5m = self.config.btc5m_reserve_enabled and (
+            is_btc5m_market(
+                title=instruction.title,
+                slug=instruction.slug,
+                category=instruction.category,
+            )
+            or is_dynamic_market(
+                title=instruction.title,
+                slug=instruction.slug,
+                category=instruction.category,
+                keywords=self.config.btc5m_reserve_keywords,
+            )
         )
         btc5m_relaxed = market_is_btc5m and self.config.btc5m_relaxed_risk
 

@@ -43,13 +43,12 @@ short_horizon_only: true
 max_market_horizon_days: 7
 forced_include_market_keywords:
   - "btc 5 minute up or down"
-  - "bitcoin up or down -"
+  - "bitcoin 5 minute up or down"
   - "btc-updown-5m"
 dynamic_keywords:
   - "btc 5 minute up or down"
-  - "bitcoin up or down -"
+  - "bitcoin 5 minute up or down"
   - "btc-updown-5m"
-  - "5 minute up or down"
 dynamic_max_allocation_pct: 0.50
 dynamic_skip_manual_confirmation: true
 btc5m_reserve_enabled: true
@@ -60,9 +59,8 @@ btc5m_ignore_global_exposure_limit: true
 btc5m_relaxed_risk: true
 btc5m_reserve_keywords:
   - "btc 5 minute up or down"
-  - "bitcoin up or down -"
+  - "bitcoin 5 minute up or down"
   - "btc-updown-5m"
-  - "5 minute up or down"
 autonomous_decisions_enabled: true
 autonomous_take_profit_pct: 0.12
 autonomous_stop_loss_pct: 0.08

@@ -57,25 +57,16 @@ class BotConfig(BaseModel):
     forced_include_market_keywords: list[str] = Field(
         default_factory=lambda: [
             "btc 5 minute up or down",
-            "bitcoin up or down -",
+            "bitcoin 5 minute up or down",
             "btc-updown-5m",
         ]
     )
     dynamic_keywords: list[str] = Field(
         default_factory=lambda: [
-            "bitcoin",
-            "btc",
-            "ethereum",
-            "eth",
             "5m",
-            "5 min",
-            "5 minutes",
-            "5-minute",
-            "next 5 minutes",
-            "15m",
-            "15 min",
-            "1h",
-            "up or down",
+            "btc 5 minute up or down",
+            "bitcoin 5 minute up or down",
+            "btc-updown-5m",
         ]
     )
     dynamic_max_allocation_pct: float = 0.20
@@ -89,9 +80,8 @@ class BotConfig(BaseModel):
     btc5m_reserve_keywords: list[str] = Field(
         default_factory=lambda: [
             "btc 5 minute up or down",
-            "bitcoin up or down -",
+            "bitcoin 5 minute up or down",
             "btc-updown-5m",
-            "5 minute up or down",
         ]
     )
 
