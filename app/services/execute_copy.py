@@ -67,6 +67,7 @@ class ExecuteCopyService:
                 copy_avg_price = float(copy_position["avg_price"]) if copy_position else execution_price
                 total_exposure = self.db.get_total_exposure()
                 daily_pnl = self.db.get_daily_pnl(today)
+                daily_profit_gross = self.db.get_daily_profit_gross(today)
 
                 instruction, reason = self.copier.build_instruction(
                     signal=signal,
@@ -75,6 +76,7 @@ class ExecuteCopyService:
                     execution_price=execution_price,
                     current_total_exposure=total_exposure,
                     daily_pnl=daily_pnl,
+                    daily_profit_gross=daily_profit_gross,
                 )
 
                 if instruction is None:

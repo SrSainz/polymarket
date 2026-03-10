@@ -56,6 +56,7 @@ class BotConfig(BaseModel):
     max_position_per_market: float = 75.0
     max_total_exposure: float = 250.0
     max_daily_loss: float = 40.0
+    max_daily_loss_pct: float = 0.10
     slippage_limit: float = 0.03
 
     allowed_tags: list[str] = Field(default_factory=list)
@@ -110,6 +111,8 @@ class BotConfig(BaseModel):
             raise ValueError("confirmation_start_hour must be lower than confirmation_end_hour")
         if self.confirmation_timeout_minutes < 1:
             raise ValueError("confirmation_timeout_minutes must be >= 1")
+        if self.max_daily_loss_pct <= 0 or self.max_daily_loss_pct > 1:
+            raise ValueError("max_daily_loss_pct must be in (0, 1]")
         return self
 
 

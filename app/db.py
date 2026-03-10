@@ -637,6 +637,32 @@ class Database:
             return 0.0
         return float(row["pnl"])
 
+    def get_daily_profit_gross(self, day: str) -> float:
+        row = self.conn.execute(
+            """
+            SELECT COALESCE(SUM(CASE WHEN pnl_delta > 0 THEN pnl_delta ELSE 0 END), 0) AS profit
+            FROM executions
+            WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (day,),
+        ).fetchone()
+        if row is None:
+            return 0.0
+        return float(row["profit"])
+
+    def get_daily_loss_gross(self, day: str) -> float:
+        row = self.conn.execute(
+            """
+            SELECT COALESCE(ABS(SUM(CASE WHEN pnl_delta < 0 THEN pnl_delta ELSE 0 END)), 0) AS loss
+            FROM executions
+            WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (day,),
+        ).fetchone()
+        if row is None:
+            return 0.0
+        return float(row["loss"])
+
     def add_daily_pnl(self, day: str, delta: float) -> None:
         current = self.get_daily_pnl(day)
         with self.conn:

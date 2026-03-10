@@ -38,6 +38,7 @@ def test_blocks_max_exposure() -> None:
         current_market_notional=10.0,
         current_total_exposure=80.0,
         daily_pnl=0.0,
+        daily_profit_gross=0.0,
         reference_price=0.5,
     )
     assert not allowed
@@ -60,6 +61,7 @@ def test_blocks_daily_loss_for_buys() -> None:
         current_market_notional=0.0,
         current_total_exposure=0.0,
         daily_pnl=-30.0,
+        daily_profit_gross=0.0,
         reference_price=0.5,
     )
     assert not allowed
@@ -82,6 +84,7 @@ def test_allows_sell_even_if_daily_loss_hit() -> None:
         current_market_notional=15.0,
         current_total_exposure=18.0,
         daily_pnl=-30.0,
+        daily_profit_gross=0.0,
         reference_price=0.5,
     )
     assert allowed
@@ -106,6 +109,7 @@ def test_blocks_buy_below_min_price() -> None:
         current_market_notional=0.0,
         current_total_exposure=0.0,
         daily_pnl=0.0,
+        daily_profit_gross=0.0,
         reference_price=0.1,
     )
     assert not allowed
@@ -131,7 +135,68 @@ def test_blocks_buy_above_max_price() -> None:
         current_market_notional=0.0,
         current_total_exposure=0.0,
         daily_pnl=0.0,
+        daily_profit_gross=0.0,
         reference_price=0.9,
     )
     assert not allowed
     assert "max_price" in reason
+
+
+def test_daily_loss_uses_10_percent_of_bankroll_cap() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_daily_loss=500.0,
+        max_daily_loss_pct=0.10,
+        max_position_per_market=2000.0,
+        max_total_exposure=2000.0,
+        slippage_limit=0.3,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=10.0)
+
+    allowed, reason = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=0.0,
+        daily_pnl=-105.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert not allowed
+    assert "max_daily_loss" in reason
+
+
+def test_daily_loss_limit_expands_with_realized_daily_gains() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_daily_loss=500.0,
+        max_daily_loss_pct=0.10,
+        max_position_per_market=2000.0,
+        max_total_exposure=2000.0,
+        slippage_limit=0.3,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=10.0)
+
+    allowed, _ = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=0.0,
+        daily_pnl=-130.0,
+        daily_profit_gross=40.0,
+        reference_price=0.5,
+    )
+    assert allowed
+
+    allowed2, reason2 = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=0.0,
+        daily_pnl=-145.0,
+        daily_profit_gross=40.0,
+        reference_price=0.5,
+    )
+    assert not allowed2
+    assert "max_daily_loss" in reason2

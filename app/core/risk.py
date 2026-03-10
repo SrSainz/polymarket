@@ -8,6 +8,12 @@ class RiskManager:
     def __init__(self, config: BotConfig) -> None:
         self.config = config
 
+    def daily_loss_limit(self, daily_profit_gross: float = 0.0) -> float:
+        absolute_limit = abs(self.config.max_daily_loss)
+        pct_limit = self.config.bankroll * self.config.max_daily_loss_pct
+        base_limit = min(absolute_limit, pct_limit)
+        return base_limit + max(daily_profit_gross, 0.0)
+
     def is_tag_allowed(self, category: str) -> bool:
         category = (category or "").strip().lower()
         allowed = set(self.config.allowed_tags)
@@ -26,6 +32,7 @@ class RiskManager:
         current_market_notional: float,
         current_total_exposure: float,
         daily_pnl: float,
+        daily_profit_gross: float,
         reference_price: float,
     ) -> tuple[bool, str]:
         if not self.is_tag_allowed(instruction.category):
@@ -38,7 +45,7 @@ class RiskManager:
             if instruction.price > self.config.max_price:
                 return False, "max_price filter"
 
-            if daily_pnl <= -abs(self.config.max_daily_loss):
+            if daily_pnl <= -self.daily_loss_limit(daily_profit_gross):
                 return False, "max_daily_loss reached"
 
             resulting_market_notional = current_market_notional + instruction.notional

@@ -107,6 +107,8 @@ Edita `config/settings.yaml`:
 - `max_position_per_market`
 - `max_total_exposure`
 - `max_daily_loss`
+- `max_daily_loss_pct` (cap porcentual del bankroll para perdida diaria, por ejemplo `0.10`)
+  - limite diario efectivo = `min(max_daily_loss, bankroll * max_daily_loss_pct) + ganancias_realizadas_del_dia`
 - `slippage_limit`
 - `allowed_tags` / `blocked_tags`
 

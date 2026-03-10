@@ -4,7 +4,8 @@ const API_BASE_STORAGE_KEY = "polymarket_bot_api_base";
 const DEFAULT_REMOTE_API_BY_HOST = {
   "polymarket-fawn.vercel.app": "https://scores-trade-kept-developed.trycloudflare.com",
 };
-const DONUT_COLORS = ["#1f6e78", "#fc7a45", "#88a63f", "#c2648e", "#6b6fd1", "#b87d2b"];
+const DONUT_GAIN_COLOR = "#3a9f62";
+const DONUT_LOSS_COLOR = "#d0675f";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -169,53 +170,44 @@ function paintRiskBlocks(payload) {
   document.getElementById("riskBlocksMeta").textContent = `ventana ${hours}h`;
 }
 
-function paintExposureDonut(items) {
+function paintExposureDonut(summary) {
   const chart = document.getElementById("exposureDonut");
   const legend = document.getElementById("exposureLegend");
   const meta = document.getElementById("exposureDonutMeta");
 
-  const byCategory = new Map();
-  for (const item of items || []) {
-    const category = normalizeCategory(item.category);
-    const price = Number(item.mark_price ?? item.avg_price ?? 0);
-    const notional = Math.abs(Number(item.size || 0) * price);
-    if (notional <= 0) continue;
-    byCategory.set(category, (byCategory.get(category) || 0) + notional);
-  }
+  const netGain = Math.max(Number(summary.daily_realized_pnl || 0), 0);
+  const dailyLoss = Math.max(Number(summary.daily_loss_gross || 0), 0);
 
-  const rows = [...byCategory.entries()].sort((a, b) => b[1] - a[1]);
-  const topRows = rows.slice(0, 5);
-  if (rows.length > 5) {
-    const othersTotal = rows.slice(5).reduce((acc, row) => acc + row[1], 0);
-    topRows.push(["otros", othersTotal]);
-  }
-  const total = topRows.reduce((acc, row) => acc + row[1], 0);
+  const rows = [
+    { label: "ganancia neta", value: netGain, color: DONUT_GAIN_COLOR },
+    { label: "perdida diaria", value: dailyLoss, color: DONUT_LOSS_COLOR },
+  ].filter((row) => row.value > 0);
+  const total = rows.reduce((acc, row) => acc + row.value, 0);
 
   if (total <= 0) {
     chart.style.background = "conic-gradient(#d6d6d6 0deg 360deg)";
     legend.innerHTML = `<li><span><span class="dot" style="background:#d6d6d6"></span>sin datos</span><span>0%</span></li>`;
-    meta.textContent = "exposicion 0.00";
+    meta.textContent = "sin resultados diarios";
     return;
   }
 
   let currentDeg = 0;
   const gradientParts = [];
   const legendItems = [];
-  topRows.forEach(([category, notional], index) => {
-    const pct = (notional / total) * 100;
+  rows.forEach((row) => {
+    const pct = (row.value / total) * 100;
     const deg = (pct / 100) * 360;
-    const color = DONUT_COLORS[index % DONUT_COLORS.length];
-    gradientParts.push(`${color} ${currentDeg}deg ${currentDeg + deg}deg`);
+    gradientParts.push(`${row.color} ${currentDeg}deg ${currentDeg + deg}deg`);
     currentDeg += deg;
 
     legendItems.push(
-      `<li><span><span class="dot" style="background:${color}"></span>${escapeHtml(category)}</span><span>${fmt(pct, 1)}%</span></li>`
+      `<li><span><span class="dot" style="background:${row.color}"></span>${escapeHtml(row.label)}</span><span>${fmt(pct, 1)}%</span></li>`
     );
   });
 
   chart.style.background = `conic-gradient(${gradientParts.join(", ")})`;
   legend.innerHTML = legendItems.join("");
-  meta.textContent = `exposicion total ${fmt(total, 2)} USDC`;
+  meta.textContent = `hoy neto ${fmtUsd(Number(summary.daily_realized_pnl || 0), 2)} | perdidas ${fmtUsd(-dailyLoss, 2)}`;
 }
 
 function paintOperationPnl(items) {
@@ -345,7 +337,7 @@ async function refreshAll() {
       paintSignals(signals.items || []);
       paintSelectedWallets(selectedWallets.items || []);
       paintRiskBlocks(riskBlocks || {});
-      paintExposureDonut(positions.items || []);
+      paintExposureDonut(summary || {});
       paintOperationPnl(executions.items || []);
       return;
     }
@@ -386,6 +378,9 @@ async function refreshAll() {
       realized_pnl: realized,
       unrealized_pnl: 0,
       pnl_total: realized,
+      daily_realized_pnl: 0,
+      daily_profit_gross: 0,
+      daily_loss_gross: 0,
       pending_signals: "-",
     };
 
@@ -395,7 +390,7 @@ async function refreshAll() {
     paintSignals([]);
     paintSelectedWallets([]);
     paintRiskBlocks({ items: [], hours: 24, blocked_total: 0 });
-    paintExposureDonut(positions);
+    paintExposureDonut(summary);
     paintOperationPnl(executions);
   } catch (error) {
     document.getElementById("lastUpdated").textContent = `Error de actualizacion: ${error.message}`;

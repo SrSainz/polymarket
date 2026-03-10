@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -124,10 +124,34 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 
 def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
+    today_utc = datetime.now(timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         open_positions = _single_float(conn, "SELECT COUNT(*) AS value FROM copy_positions")
         exposure = _single_float(conn, "SELECT COALESCE(SUM(ABS(size * avg_price)), 0) AS value FROM copy_positions")
         realized_pnl = _single_float(conn, "SELECT COALESCE(SUM(pnl), 0) AS value FROM daily_pnl")
+        daily_realized_pnl = _single_float(
+            conn,
+            "SELECT COALESCE(SUM(pnl_delta), 0) AS value FROM executions WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?",
+            (today_utc,),
+        )
+        daily_profit_gross = _single_float(
+            conn,
+            """
+            SELECT COALESCE(SUM(CASE WHEN pnl_delta > 0 THEN pnl_delta ELSE 0 END), 0) AS value
+            FROM executions
+            WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (today_utc,),
+        )
+        daily_loss_gross = _single_float(
+            conn,
+            """
+            SELECT COALESCE(ABS(SUM(CASE WHEN pnl_delta < 0 THEN pnl_delta ELSE 0 END)), 0) AS value
+            FROM executions
+            WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (today_utc,),
+        )
         pending_signals = _single_float(
             conn,
             """
@@ -157,7 +181,7 @@ def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
     pnl_total = realized_pnl + unrealized_pnl
 
     return {
-        "timestamp_utc": datetime.utcnow().isoformat(),
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "open_positions": int(open_positions),
         "exposure": round(exposure, 4),
         "exposure_mark": round(exposure_mark, 4),
@@ -168,6 +192,9 @@ def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
         "pending_signals": int(pending_signals),
         "executed_signals": int(executed_signals),
         "failed_signals": int(failed_signals),
+        "daily_realized_pnl": round(daily_realized_pnl, 4),
+        "daily_profit_gross": round(daily_profit_gross, 4),
+        "daily_loss_gross": round(daily_loss_gross, 4),
     }
 
 

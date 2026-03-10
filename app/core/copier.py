@@ -21,6 +21,7 @@ class Copier:
         execution_price: float,
         current_total_exposure: float,
         daily_pnl: float,
+        daily_profit_gross: float,
     ) -> tuple[CopyInstruction | None, str]:
         action, _ = self.reconciler.decide(signal, copy_position_size)
 
@@ -62,6 +63,7 @@ class Copier:
             current_market_notional=market_notional,
             current_total_exposure=current_total_exposure,
             daily_pnl=daily_pnl,
+            daily_profit_gross=daily_profit_gross,
             reference_price=signal.reference_price,
         )
         if not allowed:
