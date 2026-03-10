@@ -86,8 +86,9 @@ class ExecuteCopyService:
 
         for signal in pending_signals:
             try:
-                if self._should_skip_signal_for_mode(signal=signal, mode=mode):
-                    self.db.mark_signal_status(signal.id or 0, "skipped", "live_only_btc5m")
+                skip_reason = self._skip_reason_for_mode(signal=signal, mode=mode)
+                if skip_reason:
+                    self.db.mark_signal_status(signal.id or 0, "skipped", skip_reason)
                     stats["skipped"] += 1
                     continue
 
@@ -147,12 +148,21 @@ class ExecuteCopyService:
         self.daily_summary.send_if_due()
         return stats
 
-    def _should_skip_signal_for_mode(self, *, signal, mode: str) -> bool:
+    def _skip_reason_for_mode(self, *, signal, mode: str) -> str:
         if mode != "live" or not self.settings.config.live_only_btc5m:
-            return False
+            return ""
         if signal.action not in (SignalAction.OPEN, SignalAction.ADD):
-            return False
-        return not is_btc5m_market(title=signal.title, slug=signal.slug, category=signal.category)
+            return ""
+        if not is_btc5m_market(title=signal.title, slug=signal.slug, category=signal.category):
+            return "live_only_btc5m"
+
+        copy_position = self.db.get_copy_position(signal.asset)
+        if copy_position is not None:
+            return ""
+
+        if self._get_open_btc5m_positions_count() >= self.settings.config.live_btc5m_max_open_positions:
+            return "live_btc5m_max_open_positions"
+        return ""
 
     def _get_dynamic_exposure(self) -> float:
         exposure = 0.0
@@ -169,7 +179,11 @@ class ExecuteCopyService:
     def _get_btc5m_exposure(self) -> float:
         exposure = 0.0
         for row in self.db.list_copy_positions():
-            if is_dynamic_market(
+            if is_btc5m_market(
+                title=str(row["title"] or ""),
+                slug=str(row["slug"] or ""),
+                category=str(row["category"] or ""),
+            ) or is_dynamic_market(
                 title=str(row["title"] or ""),
                 slug=str(row["slug"] or ""),
                 category=str(row["category"] or ""),
@@ -177,6 +191,17 @@ class ExecuteCopyService:
             ):
                 exposure += abs(float(row["size"]) * float(row["avg_price"]))
         return exposure
+
+    def _get_open_btc5m_positions_count(self) -> int:
+        total = 0
+        for row in self.db.list_copy_positions():
+            if is_btc5m_market(
+                title=str(row["title"] or ""),
+                slug=str(row["slug"] or ""),
+                category=str(row["category"] or ""),
+            ):
+                total += 1
+        return total
 
     def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:
         if not self.settings.config.autonomous_decisions_enabled:
