@@ -104,6 +104,16 @@ CREATE TABLE IF NOT EXISTS selected_wallets (
     pnl REAL NOT NULL DEFAULT 0,
     selected_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS position_mark_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    mark_price REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_mark_history_asset_ts
+ON position_mark_history(asset, ts);
 """
 
 
@@ -230,6 +240,46 @@ class Database:
                         now_ts,
                     ),
                 )
+
+    def record_position_mark(self, asset: str, mark_price: float) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO position_mark_history (asset, ts, mark_price)
+                VALUES (?, ?, ?)
+                """,
+                (asset, int(time.time()), mark_price),
+            )
+
+    def get_position_mark_before(self, asset: str, cutoff_ts: int) -> float | None:
+        row = self.conn.execute(
+            """
+            SELECT mark_price
+            FROM position_mark_history
+            WHERE asset = ? AND ts <= ?
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            (asset, cutoff_ts),
+        ).fetchone()
+        if row is None:
+            return None
+        return float(row["mark_price"])
+
+    def get_last_autonomous_sell_ts(self, asset: str) -> int | None:
+        row = self.conn.execute(
+            """
+            SELECT ts
+            FROM executions
+            WHERE asset = ? AND source_wallet = 'autonomous' AND side = 'sell'
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            (asset,),
+        ).fetchone()
+        if row is None:
+            return None
+        return int(row["ts"])
 
     def insert_signal(self, signal: NormalizedSignal) -> bool:
         try:

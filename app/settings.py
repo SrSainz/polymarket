@@ -39,6 +39,14 @@ class BotConfig(BaseModel):
     min_price: float = 0.0
     max_price: float = 1.0
 
+    autonomous_decisions_enabled: bool = False
+    autonomous_take_profit_pct: float = 0.15
+    autonomous_stop_loss_pct: float = 0.10
+    autonomous_depreciation_window_minutes: int = 30
+    autonomous_depreciation_threshold_pct: float = 0.04
+    autonomous_reduce_fraction: float = 0.50
+    autonomous_cooldown_minutes: int = 30
+
     max_position_per_market: float = 75.0
     max_total_exposure: float = 250.0
     max_daily_loss: float = 40.0
@@ -76,6 +84,18 @@ class BotConfig(BaseModel):
             raise ValueError("max_price must be between 0 and 1")
         if self.min_price > self.max_price:
             raise ValueError("min_price cannot be greater than max_price")
+        if self.autonomous_take_profit_pct < 0:
+            raise ValueError("autonomous_take_profit_pct must be >= 0")
+        if self.autonomous_stop_loss_pct < 0:
+            raise ValueError("autonomous_stop_loss_pct must be >= 0")
+        if self.autonomous_depreciation_threshold_pct < 0:
+            raise ValueError("autonomous_depreciation_threshold_pct must be >= 0")
+        if self.autonomous_depreciation_window_minutes < 1:
+            raise ValueError("autonomous_depreciation_window_minutes must be >= 1")
+        if not (0 < self.autonomous_reduce_fraction <= 1):
+            raise ValueError("autonomous_reduce_fraction must be in (0, 1]")
+        if self.autonomous_cooldown_minutes < 0:
+            raise ValueError("autonomous_cooldown_minutes must be >= 0")
         return self
 
 

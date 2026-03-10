@@ -93,6 +93,13 @@ Edita `config/settings.yaml`:
 - `fixed_amount_per_trade`: notional fijo por trade
 - `proportional_scale`: multiplicador de copia proporcional
 - `min_price` / `max_price`: filtro de entrada por precio (evita mercados extremos de 0.00x o 0.99x)
+- `autonomous_decisions_enabled`: activa decisiones propias de salida
+- `autonomous_take_profit_pct`: cierre por beneficio objetivo
+- `autonomous_stop_loss_pct`: cierre por perdida maxima
+- `autonomous_depreciation_window_minutes`: ventana para medir caida de precio
+- `autonomous_depreciation_threshold_pct`: umbral de depreciacion para reducir
+- `autonomous_reduce_fraction`: porcentaje de reduccion en depreciacion
+- `autonomous_cooldown_minutes`: evita sobreoperar el mismo activo
 - `max_position_per_market`
 - `max_total_exposure`
 - `max_daily_loss`
@@ -123,7 +130,7 @@ Ejemplo real de `once`:
 
 ```text
 sync => wallets=3 snapshots=9 new_signals=3 dropped_wallets=0 rebalance_signals=0
-execute => pending=3 filled=3 blocked=0 skipped=0 failed=0
+execute => pending=3 filled=3 blocked=0 skipped=0 failed=0 auto_candidates=0 auto_filled=0 auto_failed=0
 ```
 
 ## Modo Paper (default)

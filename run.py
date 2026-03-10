@@ -5,6 +5,7 @@ import sys
 import time
 from pathlib import Path
 
+from app.core.autonomous_decider import AutonomousDecider
 from app.core.copier import Copier
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
@@ -46,6 +47,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
     sizing = SizingEngine(settings.config)
     reconciler = Reconciler()
     copier = Copier(sizing, risk, reconciler)
+    autonomous_decider = AutonomousDecider(settings.config, db)
 
     paper_broker = PaperBroker(db)
     live_broker = LiveBroker(db, clob_client, settings.env)
@@ -55,6 +57,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
         paper_broker,
         live_broker,
         clob_client,
+        autonomous_decider,
         settings,
         logger,
     )
@@ -76,7 +79,9 @@ def run_once(sync_service: SyncWalletsService, execute_service: ExecuteCopyServi
     print(
         "execute => "
         f"pending={exec_stats['pending']} filled={exec_stats['filled']} "
-        f"blocked={exec_stats['blocked']} skipped={exec_stats['skipped']} failed={exec_stats['failed']}"
+        f"blocked={exec_stats['blocked']} skipped={exec_stats['skipped']} failed={exec_stats['failed']} "
+        f"auto_candidates={exec_stats.get('auto_candidates', 0)} "
+        f"auto_filled={exec_stats.get('auto_filled', 0)} auto_failed={exec_stats.get('auto_failed', 0)}"
     )
 
 

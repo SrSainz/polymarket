@@ -25,6 +25,13 @@ noise_threshold_shares: 1.0
 min_trade_amount: 5.0
 min_price: 0.03
 max_price: 0.97
+autonomous_decisions_enabled: true
+autonomous_take_profit_pct: 0.12
+autonomous_stop_loss_pct: 0.08
+autonomous_depreciation_window_minutes: 45
+autonomous_depreciation_threshold_pct: 0.03
+autonomous_reduce_fraction: 0.50
+autonomous_cooldown_minutes: 30
 
 max_position_per_market: 120.0
 max_total_exposure: 900.0
