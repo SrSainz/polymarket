@@ -40,7 +40,7 @@ confirmation_timezone: "Europe/Madrid"
 
 max_position_per_market: 1000.0
 max_total_exposure: 1000.0
-max_daily_loss: 1000.0
+max_daily_loss: 120.0
 slippage_limit: 0.03
 
 allowed_tags: []
