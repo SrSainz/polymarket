@@ -1,12 +1,12 @@
 watched_wallets:
   - "0xa81f087970a7ce196eacb3271e96e89294d91bb8"
 auto_select_wallets: true
-top_wallets_to_copy: 10
+top_wallets_to_copy: 6
 leaderboard_category: "OVERALL"
 leaderboard_time_period: "MONTH"
 leaderboard_candidate_limit: 100
 prioritize_dynamic_wallets: true
-dynamic_wallet_slots: 1
+dynamic_wallet_slots: 3
 dynamic_leaderboard_category: "CRYPTO"
 dynamic_leaderboard_time_period: "DAY"
 min_dynamic_recent_trades: 1
@@ -29,12 +29,12 @@ polling_interval_seconds: 45
 execution_mode: "paper"
 dry_run: true
 
-bankroll: 1000.0
+bankroll: 16.87
 sizing_mode: "proportional_to_source"
 fixed_amount_per_trade: 25.0
 proportional_scale: 0.10
 noise_threshold_shares: 1.0
-min_trade_amount: 5.0
+min_trade_amount: 1.0
 min_price: 0.03
 max_price: 0.97
 skip_expired_source_positions: true
@@ -50,10 +50,11 @@ dynamic_keywords:
   - "bitcoin up or down -"
   - "btc-updown-5m"
   - "5 minute up or down"
-dynamic_max_allocation_pct: 0.20
+dynamic_max_allocation_pct: 0.50
 dynamic_skip_manual_confirmation: true
 btc5m_reserve_enabled: true
 btc5m_reserved_notional: 200.0
+btc5m_reserved_allocation_pct: 0.50
 btc5m_reserve_protected_pct: 0.0
 btc5m_ignore_global_exposure_limit: true
 btc5m_relaxed_risk: true
@@ -78,10 +79,11 @@ telegram_daily_summary_enabled: true
 telegram_daily_summary_hour: 20
 telegram_daily_summary_timezone: "Europe/Madrid"
 
-max_position_per_market: 1000.0
-max_total_exposure: 1000.0
+max_position_per_market: 8.44
+max_total_exposure: 16.87
 max_daily_loss: 120.0
 max_daily_loss_pct: 0.10
+profit_keep_ratio: 0.50
 slippage_limit: 0.03
 
 allowed_tags: []

@@ -55,19 +55,32 @@ class CLOBClient:
         payload = response.json()
         return payload if isinstance(payload, dict) else {}
 
-    def place_market_order(self, token_id: str, side: str, size: float) -> dict[str, Any]:
+    def place_market_order(self, token_id: str, side: str, size: float, *, notional: float | None = None) -> dict[str, Any]:
         if not self.env.live_trading:
             raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to enable order placement.")
 
         client = build_authenticated_clob_client(self.env)
 
         if hasattr(client, "create_market_order") and hasattr(client, "post_order"):
-            order = client.create_market_order(
-                token_id=token_id,
-                side=side.upper(),
-                amount=str(size),
-            )
-            return client.post_order(order, orderType="GTC")
+            try:
+                from py_clob_client.clob_types import MarketOrderArgs, OrderType
+                from py_clob_client.order_builder.constants import BUY, SELL
+            except ImportError as error:
+                raise RuntimeError("py-clob-client install is incomplete for market order types.") from error
+
+            side_upper = side.upper().strip()
+            if side_upper not in {"BUY", "SELL"}:
+                raise RuntimeError(f"Unsupported side: {side}")
+            side_const = BUY if side_upper == "BUY" else SELL
+
+            # py-clob-client expects amount in USDC for BUY market orders.
+            amount = float(notional) if side_upper == "BUY" and notional and notional > 0 else float(size)
+            if amount <= 0:
+                raise RuntimeError("Order amount must be > 0.")
+
+            order_args = MarketOrderArgs(token_id=token_id, amount=amount, side=side_const)
+            signed_order = client.create_market_order(order_args)
+            return client.post_order(signed_order, orderType=OrderType.FOK)
 
         raise RuntimeError(
             "py-clob-client API mismatch. Expected create_market_order/post_order methods are unavailable."

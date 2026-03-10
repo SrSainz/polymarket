@@ -18,6 +18,7 @@ class WalletScore:
     dynamic_recent_trades: int
     copyable_positions: int
     dynamic_share: float
+    dynamic_pnl: float
     recent_notional: float
     pnl: float
     score: float
@@ -84,6 +85,7 @@ class WalletSelector:
 
         candidates: list[dict[str, float | int | str]] = []
         max_recent_notional = 1.0
+        max_dynamic_pnl = 1.0
         scored: list[WalletScore] = []
         for item in leaderboard:
             wallet = str(item.get("proxyWallet") or "").strip().lower()
@@ -112,8 +114,10 @@ class WalletSelector:
                 continue
 
             dynamic_share = dynamic_recent_trades / max(recent_trades, 1)
+            dynamic_pnl = _realized_pnl_for_keywords(closed_positions, self.config.btc5m_reserve_keywords)
             pnl = _to_float(item.get("pnl"))
             max_recent_notional = max(max_recent_notional, recent_notional)
+            max_dynamic_pnl = max(max_dynamic_pnl, max(dynamic_pnl, 0.0))
             candidates.append(
                 {
                     "wallet": wallet,
@@ -122,6 +126,7 @@ class WalletSelector:
                     "dynamic_recent_trades": dynamic_recent_trades,
                     "copyable_positions": copyable_positions,
                     "recent_notional": recent_notional,
+                    "dynamic_pnl": dynamic_pnl,
                     "pnl": pnl,
                     "dynamic_share": dynamic_share,
                 }
@@ -133,6 +138,7 @@ class WalletSelector:
             dynamic_recent_trades = int(candidate["dynamic_recent_trades"])
             copyable_positions = int(candidate["copyable_positions"])
             recent_notional = float(candidate["recent_notional"])
+            dynamic_pnl = float(candidate["dynamic_pnl"])
             win_rate = float(candidate["win_rate"])
             dynamic_share = float(candidate["dynamic_share"])
 
@@ -141,6 +147,7 @@ class WalletSelector:
             frequency_score = min(recent_trades / freq_denominator, 1.0)
             copyable_score = min(copyable_positions / 10, 1.0)
             notional_score = min(recent_notional / max_recent_notional, 1.0)
+            dynamic_pnl_score = min(max(dynamic_pnl, 0.0) / max_dynamic_pnl, 1.0)
             dyn_denominator = max(self.config.min_dynamic_recent_trades * 3, 1)
             dynamic_activity_score = min(dynamic_recent_trades / dyn_denominator, 1.0)
 
@@ -154,12 +161,13 @@ class WalletSelector:
             )
             # Dynamic ranking for reserved dynamic slots.
             dynamic_score = (
-                (0.40 * win_rate)
+                (0.30 * win_rate)
                 + (0.20 * dynamic_activity_score)
                 + (0.20 * dynamic_share)
                 + (0.10 * notional_score)
                 + (0.05 * frequency_score)
                 + (0.05 * copyable_score)
+                + (0.10 * dynamic_pnl_score)
             )
 
             scored.append(
@@ -170,6 +178,7 @@ class WalletSelector:
                     dynamic_recent_trades=dynamic_recent_trades,
                     copyable_positions=copyable_positions,
                     dynamic_share=dynamic_share,
+                    dynamic_pnl=dynamic_pnl,
                     recent_notional=recent_notional,
                     pnl=pnl,
                     score=base_score,
@@ -259,7 +268,7 @@ class WalletSelector:
 
         for row in selected_scores:
             self.logger.info(
-                "wallet-selector: wallet=%s score=%.4f dyn_score=%.4f win_rate=%.2f recent=%s dynamic=%s dynamic_share=%.2f notional=%.2f pnl=%.2f",
+                "wallet-selector: wallet=%s score=%.4f dyn_score=%.4f win_rate=%.2f recent=%s dynamic=%s dynamic_share=%.2f dynamic_pnl=%.2f copyable=%s notional=%.2f pnl=%.2f",
                 row.wallet,
                 row.score,
                 row.dynamic_score,
@@ -267,6 +276,8 @@ class WalletSelector:
                 row.recent_trades,
                 row.dynamic_recent_trades,
                 row.dynamic_share,
+                row.dynamic_pnl,
+                row.copyable_positions,
                 row.recent_notional,
                 row.pnl,
             )
@@ -307,6 +318,7 @@ class WalletSelector:
         raw_rows: list[dict[str, float | int | str]] = []
         max_positive_pnl = 1.0
         max_recent_notional = 1.0
+        max_dynamic_pnl = 1.0
         for item in leaderboard:
             wallet = str(item.get("proxyWallet") or "").strip().lower()
             if not wallet or wallet in exclude_wallets:
@@ -332,6 +344,7 @@ class WalletSelector:
             if copyable_positions < self.config.min_copyable_positions_per_wallet:
                 continue
             dynamic_share = dynamic_recent_trades / max(recent_trades, 1)
+            dynamic_pnl = _realized_pnl_for_keywords(closed_positions, self.config.btc5m_reserve_keywords)
             if dynamic_recent_trades < self.config.min_dynamic_recent_trades:
                 continue
             if dynamic_share < self.config.min_dynamic_trade_share:
@@ -340,6 +353,7 @@ class WalletSelector:
             pnl = _to_float(item.get("pnl"))
             max_positive_pnl = max(max_positive_pnl, max(pnl, 0.0))
             max_recent_notional = max(max_recent_notional, recent_notional)
+            max_dynamic_pnl = max(max_dynamic_pnl, max(dynamic_pnl, 0.0))
             raw_rows.append(
                 {
                     "wallet": wallet,
@@ -349,6 +363,7 @@ class WalletSelector:
                     "copyable_positions": copyable_positions,
                     "dynamic_share": dynamic_share,
                     "recent_notional": recent_notional,
+                    "dynamic_pnl": dynamic_pnl,
                     "pnl": pnl,
                 }
             )
@@ -361,6 +376,7 @@ class WalletSelector:
             copyable_positions = int(row["copyable_positions"])
             dynamic_share = float(row["dynamic_share"])
             recent_notional = float(row["recent_notional"])
+            dynamic_pnl = float(row["dynamic_pnl"])
             pnl = float(row["pnl"])
 
             pnl_score = min(max(pnl, 0.0) / max_positive_pnl, 1.0)
@@ -368,6 +384,7 @@ class WalletSelector:
             frequency_score = min(recent_trades / freq_denominator, 1.0)
             copyable_score = min(copyable_positions / 10, 1.0)
             notional_score = min(recent_notional / max_recent_notional, 1.0)
+            dynamic_pnl_score = min(max(dynamic_pnl, 0.0) / max_dynamic_pnl, 1.0)
             dyn_denominator = max(self.config.min_dynamic_recent_trades * 3, 1)
             dynamic_activity_score = min(dynamic_recent_trades / dyn_denominator, 1.0)
             base_score = (
@@ -378,12 +395,13 @@ class WalletSelector:
                 + (0.10 * copyable_score)
             )
             dynamic_score = (
-                (0.40 * win_rate)
+                (0.30 * win_rate)
                 + (0.20 * dynamic_activity_score)
                 + (0.20 * dynamic_share)
                 + (0.10 * notional_score)
                 + (0.05 * frequency_score)
                 + (0.05 * copyable_score)
+                + (0.10 * dynamic_pnl_score)
             )
             candidates.append(
                 WalletScore(
@@ -393,6 +411,7 @@ class WalletSelector:
                     dynamic_recent_trades=dynamic_recent_trades,
                     copyable_positions=copyable_positions,
                     dynamic_share=dynamic_share,
+                    dynamic_pnl=dynamic_pnl,
                     recent_notional=recent_notional,
                     pnl=pnl,
                     score=base_score,
@@ -419,6 +438,7 @@ class WalletSelector:
                 dynamic_recent_trades=0,
                 copyable_positions=0,
                 dynamic_share=0.0,
+                dynamic_pnl=0.0,
                 recent_notional=0.0,
                 pnl=0.0,
                 score=0.0,
@@ -472,6 +492,21 @@ def _wins_losses_from_closed_positions(closed_positions: list[dict]) -> tuple[in
         elif realized < 0:
             losses += 1
     return wins, losses
+
+
+def _realized_pnl_for_keywords(closed_positions: list[dict], keywords: list[str]) -> float:
+    if not keywords:
+        return 0.0
+
+    total = 0.0
+    for position in closed_positions:
+        title = str(position.get("title") or "")
+        slug = str(position.get("slug") or "")
+        event_slug = str(position.get("eventSlug") or "")
+        if not _matches_forced_keywords(title=title, slug=slug, event_slug=event_slug, keywords=keywords):
+            continue
+        total += _to_float(position.get("realizedPnl"))
+    return total
 
 
 def _to_float(value: object) -> float:

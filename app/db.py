@@ -707,6 +707,15 @@ class Database:
             return 0.0
         return float(row["total"])
 
+    def get_cumulative_profit_gross_before(self, day: str) -> float:
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0) AS total FROM daily_pnl WHERE day < ?",
+            (day,),
+        ).fetchone()
+        if row is None:
+            return 0.0
+        return float(row["total"])
+
     def get_total_exposure(self) -> float:
         row = self.conn.execute(
             "SELECT COALESCE(SUM(ABS(size * avg_price)), 0) AS exposure FROM copy_positions"

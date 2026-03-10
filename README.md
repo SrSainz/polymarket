@@ -116,6 +116,7 @@ Edita `config/settings.yaml`:
 - `dynamic_skip_manual_confirmation`: si `true`, no pide confirmacion manual en mercados dinamicos
 - `btc5m_reserve_enabled`: activa reserva exclusiva para BTC 5m
 - `btc5m_reserved_notional`: capital reservado para BTC 5m (ej. `200` USDC)
+- `btc5m_reserved_allocation_pct`: si > 0, reserva un porcentaje del bankroll para BTC 5m (ej. `0.50`)
 - `btc5m_reserve_protected_pct`: que parte de esa reserva se protege realmente frente a otras operaciones (0-1)
 - `btc5m_ignore_global_exposure_limit`: permite que BTC 5m use su cupo aunque el resto de cartera haya agotado su limite global
 - `btc5m_relaxed_risk`: en BTC 5m aplica solo su cap reservado y evita bloqueos generales (precio/slippage/exposicion global/dinamica)
@@ -140,6 +141,7 @@ Edita `config/settings.yaml`:
 - `max_daily_loss`
 - `max_daily_loss_pct` (cap porcentual del bankroll para perdida diaria, por ejemplo `0.10`)
   - limite diario efectivo = `min(max_daily_loss, capital_operativo * max_daily_loss_pct) + ganancias_realizadas_del_dia`
+- `profit_keep_ratio`: fraccion de beneficios historicos que se aparta y no se reinvierte (ej. `0.50`)
 - `slippage_limit`
 - `allowed_tags` / `blocked_tags`
 

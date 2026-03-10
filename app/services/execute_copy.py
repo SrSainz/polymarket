@@ -17,6 +17,17 @@ from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.settings import AppSettings
 
 
+def calculate_effective_bankroll(
+    *,
+    base_bankroll: float,
+    prior_realized_pnl: float,
+    prior_profit_gross: float,
+    profit_keep_ratio: float,
+) -> float:
+    reserved_profit = max(prior_profit_gross, 0.0) * max(min(profit_keep_ratio, 1.0), 0.0)
+    return max(base_bankroll + prior_realized_pnl - reserved_profit, 0.0)
+
+
 class ExecuteCopyService:
     def __init__(
         self,
@@ -46,7 +57,13 @@ class ExecuteCopyService:
         pending_signals = self.db.list_pending_signals()
         today = datetime.now(timezone.utc).date().isoformat()
         prior_realized_pnl = self.db.get_cumulative_pnl_before(today)
-        effective_bankroll = max(self.settings.config.bankroll + prior_realized_pnl, 0.0)
+        prior_profit_gross = self.db.get_cumulative_profit_gross_before(today)
+        effective_bankroll = calculate_effective_bankroll(
+            base_bankroll=self.settings.config.bankroll,
+            prior_realized_pnl=prior_realized_pnl,
+            prior_profit_gross=prior_profit_gross,
+            profit_keep_ratio=self.settings.config.profit_keep_ratio,
+        )
 
         stats = {
             "pending": len(pending_signals),

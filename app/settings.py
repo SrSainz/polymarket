@@ -82,6 +82,7 @@ class BotConfig(BaseModel):
     dynamic_skip_manual_confirmation: bool = True
     btc5m_reserve_enabled: bool = False
     btc5m_reserved_notional: float = 200.0
+    btc5m_reserved_allocation_pct: float = 0.0
     btc5m_reserve_protected_pct: float = 0.35
     btc5m_ignore_global_exposure_limit: bool = True
     btc5m_relaxed_risk: bool = True
@@ -115,6 +116,7 @@ class BotConfig(BaseModel):
     max_total_exposure: float = 250.0
     max_daily_loss: float = 40.0
     max_daily_loss_pct: float = 0.10
+    profit_keep_ratio: float = 0.50
     slippage_limit: float = 0.03
 
     allowed_tags: list[str] = Field(default_factory=list)
@@ -180,6 +182,8 @@ class BotConfig(BaseModel):
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
         if self.btc5m_reserved_notional < 0:
             raise ValueError("btc5m_reserved_notional must be >= 0")
+        if self.btc5m_reserved_allocation_pct < 0 or self.btc5m_reserved_allocation_pct > 1:
+            raise ValueError("btc5m_reserved_allocation_pct must be between 0 and 1")
         if self.btc5m_reserve_protected_pct < 0 or self.btc5m_reserve_protected_pct > 1:
             raise ValueError("btc5m_reserve_protected_pct must be between 0 and 1")
         if self.autonomous_take_profit_pct < 0:
@@ -206,6 +210,8 @@ class BotConfig(BaseModel):
             raise ValueError("telegram_daily_summary_hour must be between 0 and 23")
         if self.max_daily_loss_pct <= 0 or self.max_daily_loss_pct > 1:
             raise ValueError("max_daily_loss_pct must be in (0, 1]")
+        if self.profit_keep_ratio < 0 or self.profit_keep_ratio > 1:
+            raise ValueError("profit_keep_ratio must be between 0 and 1")
         return self
 
 

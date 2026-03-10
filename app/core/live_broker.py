@@ -20,6 +20,7 @@ class LiveBroker:
             token_id=instruction.asset,
             side=instruction.side.value,
             size=instruction.size,
+            notional=instruction.notional,
         )
 
         result = ExecutionResult(

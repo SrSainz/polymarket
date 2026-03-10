@@ -79,7 +79,12 @@ class RiskManager:
                     return False, "max_position_per_market exceeded"
 
             exposure_limit = min(self.config.max_total_exposure, bankroll)
-            btc5m_cap = min(self.config.btc5m_reserved_notional, bankroll) if self.config.btc5m_reserve_enabled else 0.0
+            btc5m_cap = 0.0
+            if self.config.btc5m_reserve_enabled:
+                if self.config.btc5m_reserved_allocation_pct > 0:
+                    btc5m_cap = bankroll * self.config.btc5m_reserved_allocation_pct
+                else:
+                    btc5m_cap = min(self.config.btc5m_reserved_notional, bankroll)
             if market_is_btc5m:
                 resulting_btc5m_exposure = current_btc5m_exposure + instruction.notional
                 if resulting_btc5m_exposure > btc5m_cap:

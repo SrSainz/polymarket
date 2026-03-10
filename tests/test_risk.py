@@ -508,3 +508,44 @@ def test_btc5m_relaxed_risk_still_enforces_reserved_cap() -> None:
     )
     assert not allowed
     assert "btc5m_reserved_cap" in reason
+
+
+def test_btc5m_reserved_allocation_pct_uses_bankroll_percentage() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=1000.0,
+        max_total_exposure=1000.0,
+        max_daily_loss=200.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.3,
+        btc5m_reserve_enabled=True,
+        btc5m_reserved_notional=100.0,
+        btc5m_reserved_allocation_pct=0.50,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=300.0)
+    instruction.title = "BTC 5 Minute Up or Down"
+
+    allowed, _ = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=200.0,
+        current_btc5m_exposure=200.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert allowed
+
+    blocked, reason = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=201.0,
+        current_btc5m_exposure=201.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert not blocked
+    assert "btc5m_reserved_cap" in reason
