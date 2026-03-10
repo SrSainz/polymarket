@@ -79,8 +79,21 @@ class CLOBClient:
                 raise RuntimeError("Order amount must be > 0.")
 
             order_args = MarketOrderArgs(token_id=token_id, amount=amount, side=side_const)
-            signed_order = client.create_market_order(order_args)
-            return client.post_order(signed_order, orderType=OrderType.FOK)
+            try:
+                signed_order = client.create_market_order(order_args)
+                return client.post_order(signed_order, orderType=OrderType.FOK)
+            except Exception as error:  # noqa: BLE001
+                message = str(error or "")
+                lower_message = message.lower()
+                if "invalid signature" in lower_message:
+                    raise RuntimeError(
+                        "invalid signature from CLOB. Verify POLYMARKET_SIGNATURE_TYPE and POLYMARKET_FUNDER match the wallet account type."
+                    ) from error
+                if "unauthorized/invalid api key" in lower_message:
+                    raise RuntimeError(
+                        "invalid api key credentials. Clear POLYMARKET_API_KEY/SECRET/PASSPHRASE to derive fresh creds or set valid values."
+                    ) from error
+                raise
 
         raise RuntimeError(
             "py-clob-client API mismatch. Expected create_market_order/post_order methods are unavailable."

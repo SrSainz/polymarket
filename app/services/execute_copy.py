@@ -137,8 +137,22 @@ class ExecuteCopyService:
                     stats["skipped"] += 1
 
             except Exception as error:  # noqa: BLE001
+                error_text = _normalize_error_text(error)
+                if _is_no_match_error(error_text):
+                    self.db.mark_signal_status(signal.id or 0, "skipped", "no_match_liquidity")
+                    stats["skipped"] += 1
+                    self.logger.warning("signal_id=%s skipped: no orderbook match/liquidity", signal.id)
+                    continue
+
                 self.db.mark_signal_status(signal.id or 0, "failed", str(error))
                 stats["failed"] += 1
+                if _is_invalid_signature_error(error_text):
+                    self.logger.error(
+                        "signal_id=%s failed: live auth/signature mismatch. Check POLYMARKET_SIGNATURE_TYPE and POLYMARKET_FUNDER.",
+                        signal.id,
+                    )
+                    # Stop this cycle to avoid spamming repeated auth failures.
+                    break
                 self.logger.exception("signal_id=%s failed: %s", signal.id, error)
 
         self._run_autonomous_exits(mode=mode, stats=stats)
@@ -285,3 +299,15 @@ class ExecuteCopyService:
         if mode == "live":
             return self.live_broker.execute(instruction)
         return self.paper_broker.execute(instruction)
+
+
+def _normalize_error_text(error: Exception) -> str:
+    return str(error or "").strip().lower()
+
+
+def _is_no_match_error(error_text: str) -> bool:
+    return "no match" in error_text
+
+
+def _is_invalid_signature_error(error_text: str) -> bool:
+    return "invalid signature" in error_text or "unauthorized/invalid api key" in error_text
