@@ -135,6 +135,8 @@ def main() -> int:
                 db_path=settings.paths.db_path,
                 static_dir=settings.paths.root / "web",
                 clob_host=settings.env.clob_host,
+                execution_mode=settings.config.execution_mode,
+                live_trading_enabled=settings.env.live_trading,
                 host=settings.env.dashboard_host,
                 port=settings.env.dashboard_port,
             )

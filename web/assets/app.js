@@ -61,6 +61,20 @@ function modeLabel() {
   return "Public API";
 }
 
+function tradingModeLabel(summary) {
+  const isLive = Boolean(summary.live_mode_active);
+  return isLive ? "LIVE" : "PAPER";
+}
+
+function setLiveBadge(summary) {
+  const badge = document.getElementById("tradingBadge");
+  if (!badge) return;
+  const isLive = Boolean(summary.live_mode_active);
+  badge.textContent = tradingModeLabel(summary);
+  badge.classList.remove("live-badge", "paper-badge");
+  badge.classList.add(isLive ? "live-badge" : "paper-badge");
+}
+
 function setCardTone(elementId, value) {
   const node = document.getElementById(elementId)?.closest(".card");
   if (!node) return;
@@ -181,9 +195,14 @@ function paintSummary(summary) {
   setCardTone("pnl", pnlTotal);
 
   document.getElementById("pendingSignals").textContent = String(summary.pending_signals ?? "-");
-  document.getElementById("executedSignals").textContent = String(summary.executed_signals ?? 0);
-  document.getElementById("failedSignals").textContent = String(summary.failed_signals ?? 0);
-  document.getElementById("modeSummary").textContent = modeLabel();
+  document.getElementById("liveExecutionsToday").textContent = String(summary.live_executions_today ?? 0);
+  const livePnlToday = Number(summary.live_realized_pnl_today ?? 0);
+  const livePnlNode = document.getElementById("livePnlToday");
+  livePnlNode.textContent = fmtUsd(livePnlToday, 2);
+  livePnlNode.classList.remove("pnl-pos", "pnl-neg", "pnl-flat");
+  livePnlNode.classList.add(livePnlToday > 0 ? "pnl-pos" : livePnlToday < 0 ? "pnl-neg" : "pnl-flat");
+  document.getElementById("modeSummary").textContent = tradingModeLabel(summary);
+  setLiveBadge(summary);
 
   const modeText =
     runtimeMode === "local"
@@ -195,8 +214,10 @@ function paintSummary(summary) {
   document.getElementById("lastUpdated").textContent = `Ultima actualizacion: ${nowText} | ${modeText}`;
   document.getElementById("headerTimestamp").textContent = nowText;
   document.getElementById("runtimeBadge").textContent = modeLabel();
+  const lastLiveExecution = Number(summary.last_live_execution_ts || 0);
+  const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   document.getElementById("systemNotice").textContent =
-    `Pendientes ${summary.pending_signals ?? 0}, ejecutadas ${summary.executed_signals ?? 0}, fallidas ${summary.failed_signals ?? 0}. Resultado diario ${fmtUsd(Number(summary.daily_realized_pnl || 0), 2)}.`;
+    `Modo ${tradingModeLabel(summary)}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}. Pendientes ${summary.pending_signals ?? 0}, fallidas ${summary.failed_signals ?? 0}, ultima live ${lastLiveText}.`;
 }
 
 function paintSelectedWallets(items) {
@@ -388,7 +409,7 @@ function paintPositions(items) {
 function paintExecutions(items) {
   const body = document.getElementById("executionsBody");
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="6">No hay ejecuciones.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8">No hay ejecuciones.</td></tr>`;
     return;
   }
 
@@ -401,9 +422,11 @@ function paintExecutions(items) {
         <td data-label="Hora UTC">${tsToIso(item.ts)}</td>
         <td data-label="Accion">${escapeHtml(item.action)}</td>
         <td data-label="Modo">${escapeHtml(item.mode || "-")} / ${escapeHtml(item.side || "-")}</td>
+        <td data-label="Status">${statusPill(item.status)}</td>
         <td data-label="Wallet fuente">${escapeHtml(shortWallet(item.source_wallet || "-"))}</td>
         <td data-label="Monto USDC">${fmtUsd(Math.abs(Number(item.notional || 0)), 2)}</td>
         <td data-label="Resultado USD"><span class="${pnlClass}">${fmtUsd(delta, 4)}</span></td>
+        <td data-label="Notas">${escapeHtml(item.notes || "-")}</td>
       </tr>
     `
     })

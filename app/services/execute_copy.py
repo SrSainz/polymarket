@@ -306,7 +306,14 @@ def _normalize_error_text(error: Exception) -> str:
 
 
 def _is_no_match_error(error_text: str) -> bool:
-    return "no match" in error_text
+    # Market FOK orders may be rejected when book liquidity cannot fully fill.
+    liquidity_patterns = (
+        "no match",
+        "couldn't be fully filled",
+        "could not be fully filled",
+        "fully filled or killed",
+    )
+    return any(pattern in error_text for pattern in liquidity_patterns)
 
 
 def _is_invalid_signature_error(error_text: str) -> bool:

@@ -23,6 +23,7 @@
           <h1>Polymarket Bot</h1>
           <div class="brand-meta">
             <span id="runtimeBadge" class="soft-badge">Local DB</span>
+            <span id="tradingBadge" class="soft-badge accent-badge">PAPER</span>
             <span id="strategyBadge" class="soft-badge accent-badge">BTC 5m 50% / General 50%</span>
             <span id="headerTimestamp" class="topbar-note">sincronizando</span>
           </div>
@@ -48,12 +49,12 @@
           </div>
           <div class="hero-side">
             <article class="hero-stat">
-              <span class="hero-stat-label">Senales ejecutadas</span>
-              <strong id="executedSignals">-</strong>
+              <span class="hero-stat-label">Ops live hoy</span>
+              <strong id="liveExecutionsToday">-</strong>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Senales fallidas</span>
-              <strong id="failedSignals">-</strong>
+              <span class="hero-stat-label">PnL live hoy</span>
+              <strong id="livePnlToday">-</strong>
             </article>
             <article class="hero-stat">
               <span class="hero-stat-label">Modo</span>
@@ -268,9 +269,11 @@
                   <th>Hora UTC</th>
                   <th>Accion</th>
                   <th>Modo</th>
+                  <th>Status</th>
                   <th>Wallet fuente</th>
                   <th>Monto USDC</th>
                   <th>Resultado USD</th>
+                  <th>Notas</th>
                 </tr>
               </thead>
               <tbody id="executionsBody"></tbody>

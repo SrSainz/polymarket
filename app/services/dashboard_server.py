@@ -19,16 +19,30 @@ def run_dashboard_server(
     db_path: Path,
     static_dir: Path,
     clob_host: str,
+    execution_mode: str,
+    live_trading_enabled: bool,
     host: str = "127.0.0.1",
     port: int = 8765,
 ) -> None:
-    handler_class = _build_handler(db_path=db_path, static_dir=static_dir, clob_host=clob_host)
+    handler_class = _build_handler(
+        db_path=db_path,
+        static_dir=static_dir,
+        clob_host=clob_host,
+        execution_mode=execution_mode,
+        live_trading_enabled=live_trading_enabled,
+    )
     server = ThreadingHTTPServer((host, port), handler_class)
     print(f"dashboard => http://{host}:{port}")
     server.serve_forever()
 
 
-def _build_handler(db_path: Path, static_dir: Path, clob_host: str):
+def _build_handler(
+    db_path: Path,
+    static_dir: Path,
+    clob_host: str,
+    execution_mode: str,
+    live_trading_enabled: bool,
+):
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_OPTIONS(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
@@ -58,7 +72,14 @@ def _build_handler(db_path: Path, static_dir: Path, clob_host: str):
                 self._json({"ok": True})
                 return
             if path == "/api/summary":
-                self._json(_summary_payload(db_path, clob_host=clob_host))
+                self._json(
+                    _summary_payload(
+                        db_path,
+                        clob_host=clob_host,
+                        execution_mode=execution_mode,
+                        live_trading_enabled=live_trading_enabled,
+                    )
+                )
                 return
             if path == "/api/positions":
                 self._json(_positions_payload(db_path, clob_host=clob_host))
@@ -155,7 +176,7 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
+def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live_trading_enabled: bool) -> dict:
     today_utc = datetime.now(timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         open_positions = _single_float(conn, "SELECT COUNT(*) AS value FROM copy_positions")
@@ -194,6 +215,30 @@ def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
         )
         executed_signals = _single_float(conn, "SELECT COUNT(*) AS value FROM signals WHERE status='executed'")
         failed_signals = _single_float(conn, "SELECT COUNT(*) AS value FROM signals WHERE status='failed'")
+        live_executions_total = _single_float(
+            conn, "SELECT COUNT(*) AS value FROM executions WHERE mode = 'live'"
+        )
+        live_executions_today = _single_float(
+            conn,
+            """
+            SELECT COUNT(*) AS value
+            FROM executions
+            WHERE mode = 'live' AND strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (today_utc,),
+        )
+        live_realized_pnl_today = _single_float(
+            conn,
+            """
+            SELECT COALESCE(SUM(pnl_delta), 0) AS value
+            FROM executions
+            WHERE mode = 'live' AND strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (today_utc,),
+        )
+        last_live_execution_ts = _single_float(
+            conn, "SELECT COALESCE(MAX(ts), 0) AS value FROM executions WHERE mode = 'live'"
+        )
         positions = conn.execute(
             "SELECT asset, size, avg_price FROM copy_positions"
         ).fetchall()
@@ -211,9 +256,13 @@ def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
         exposure_mark += abs(size * mark_price)
 
     pnl_total = realized_pnl + unrealized_pnl
+    live_mode_active = execution_mode == "live" and live_trading_enabled
 
     return {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "configured_execution_mode": execution_mode,
+        "live_trading_enabled": live_trading_enabled,
+        "live_mode_active": live_mode_active,
         "open_positions": int(open_positions),
         "exposure": round(exposure, 4),
         "exposure_mark": round(exposure_mark, 4),
@@ -224,6 +273,10 @@ def _summary_payload(db_path: Path, *, clob_host: str) -> dict:
         "pending_signals": int(pending_signals),
         "executed_signals": int(executed_signals),
         "failed_signals": int(failed_signals),
+        "live_executions_total": int(live_executions_total),
+        "live_executions_today": int(live_executions_today),
+        "live_realized_pnl_today": round(live_realized_pnl_today, 4),
+        "last_live_execution_ts": int(last_live_execution_ts),
         "daily_realized_pnl": round(daily_realized_pnl, 4),
         "daily_profit_gross": round(daily_profit_gross, 4),
         "daily_loss_gross": round(daily_loss_gross, 4),
