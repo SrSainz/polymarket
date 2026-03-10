@@ -20,6 +20,9 @@ class BotConfig(BaseModel):
     leaderboard_time_period: Literal["DAY", "WEEK", "MONTH", "ALL"] = "MONTH"
     leaderboard_candidate_limit: int = 25
     prioritize_dynamic_wallets: bool = False
+    dynamic_wallet_slots: int = 1
+    dynamic_leaderboard_category: Literal["OVERALL", "CRYPTO", "POLITICS", "SPORTS"] = "CRYPTO"
+    dynamic_leaderboard_time_period: Literal["DAY", "WEEK", "MONTH", "ALL"] = "DAY"
     min_dynamic_recent_trades: int = 5
     min_dynamic_trade_share: float = 0.20
     wallet_selection_refresh_minutes: int = 30
@@ -112,6 +115,10 @@ class BotConfig(BaseModel):
     def validate_copy_sources(self) -> "BotConfig":
         if not self.auto_select_wallets and not self.watched_wallets:
             raise ValueError("Either enable auto_select_wallets or provide watched_wallets")
+        if self.dynamic_wallet_slots < 0:
+            raise ValueError("dynamic_wallet_slots must be >= 0")
+        if self.dynamic_wallet_slots > self.top_wallets_to_copy:
+            raise ValueError("dynamic_wallet_slots cannot exceed top_wallets_to_copy")
         if self.min_dynamic_recent_trades < 0:
             raise ValueError("min_dynamic_recent_trades must be >= 0")
         if self.min_dynamic_trade_share < 0 or self.min_dynamic_trade_share > 1:

@@ -85,6 +85,8 @@ Edita `config/settings.yaml`:
 - `top_wallets_to_copy`: numero de wallets seleccionadas
 - `leaderboard_category` + `leaderboard_time_period`: universo de ranking
 - `prioritize_dynamic_wallets`: prioriza wallets con actividad en mercados dinamicos (BTC 5m, etc.)
+- `dynamic_wallet_slots`: cupo de wallets dinamicas dentro del total seleccionado (ej. `1` de `top_wallets_to_copy=3`)
+- `dynamic_leaderboard_category` / `dynamic_leaderboard_time_period`: fallback especifico para buscar wallets dinamicas
 - `min_dynamic_recent_trades`: minimo de trades dinamicos recientes exigidos por wallet
 - `min_dynamic_trade_share`: porcentaje minimo de trades dinamicos dentro de su actividad reciente
 - `min_wallet_win_rate`: winrate minimo requerido

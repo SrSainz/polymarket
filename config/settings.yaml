@@ -2,10 +2,13 @@ watched_wallets:
   - "0xa81f087970a7ce196eacb3271e96e89294d91bb8"
 auto_select_wallets: true
 top_wallets_to_copy: 3
-leaderboard_category: "CRYPTO"
+leaderboard_category: "OVERALL"
 leaderboard_time_period: "DAY"
 leaderboard_candidate_limit: 25
 prioritize_dynamic_wallets: true
+dynamic_wallet_slots: 1
+dynamic_leaderboard_category: "CRYPTO"
+dynamic_leaderboard_time_period: "DAY"
 min_dynamic_recent_trades: 5
 min_dynamic_trade_share: 0.20
 wallet_selection_refresh_minutes: 30
