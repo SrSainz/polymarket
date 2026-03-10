@@ -203,7 +203,7 @@ def test_daily_loss_limit_expands_with_realized_daily_gains() -> None:
     assert "max_daily_loss" in reason2
 
 
-def test_exposure_limit_scales_with_effective_bankroll() -> None:
+def test_exposure_limit_shrinks_when_effective_bankroll_drops() -> None:
     config = BotConfig(
         watched_wallets=["0xabc"],
         bankroll=1000.0,
@@ -218,11 +218,23 @@ def test_exposure_limit_scales_with_effective_bankroll() -> None:
 
     allowed, _ = risk.evaluate_instruction(
         instruction,
-        current_market_notional=1030.0,
-        current_total_exposure=1030.0,
+        current_market_notional=850.0,
+        current_total_exposure=850.0,
         daily_pnl=0.0,
         daily_profit_gross=0.0,
-        effective_bankroll=1100.0,
+        effective_bankroll=900.0,
         reference_price=0.5,
     )
     assert allowed
+
+    blocked, reason = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=880.0,
+        current_total_exposure=880.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        effective_bankroll=900.0,
+        reference_price=0.5,
+    )
+    assert not blocked
+    assert "max_position_per_market" in reason or "max_total_exposure" in reason

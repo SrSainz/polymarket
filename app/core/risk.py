@@ -23,7 +23,7 @@ class RiskManager:
     def _resolve_bankroll(self, effective_bankroll: float | None) -> float:
         if effective_bankroll is None:
             return self.config.bankroll
-        return max(float(effective_bankroll), self.config.bankroll)
+        return max(float(effective_bankroll), 0.0)
 
     def is_tag_allowed(self, category: str) -> bool:
         category = (category or "").strip().lower()
@@ -61,12 +61,12 @@ class RiskManager:
             if daily_pnl <= -self.daily_loss_limit(daily_profit_gross, effective_bankroll=bankroll):
                 return False, "max_daily_loss reached"
 
-            market_limit = max(self.config.max_position_per_market, bankroll)
+            market_limit = min(self.config.max_position_per_market, bankroll)
             resulting_market_notional = current_market_notional + instruction.notional
             if resulting_market_notional > market_limit:
                 return False, "max_position_per_market exceeded"
 
-            exposure_limit = max(self.config.max_total_exposure, bankroll)
+            exposure_limit = min(self.config.max_total_exposure, bankroll)
             resulting_exposure = current_total_exposure + instruction.notional
             if resulting_exposure > exposure_limit:
                 return False, "max_total_exposure exceeded"

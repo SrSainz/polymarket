@@ -42,7 +42,7 @@ class ExecuteCopyService:
         pending_signals = self.db.list_pending_signals()
         today = datetime.now(timezone.utc).date().isoformat()
         prior_realized_pnl = self.db.get_cumulative_pnl_before(today)
-        effective_bankroll = self.settings.config.bankroll + max(prior_realized_pnl, 0.0)
+        effective_bankroll = max(self.settings.config.bankroll + prior_realized_pnl, 0.0)
 
         stats = {
             "pending": len(pending_signals),

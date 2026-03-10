@@ -89,7 +89,7 @@ Edita `config/settings.yaml`:
 - `polling_interval_seconds`: frecuencia de polling
 - `execution_mode`: `paper` o `live`
 - `bankroll`: capital de referencia del bot (default 1000)
-  - capital operativo diario = `bankroll + max(pnl_realizado_hasta_ayer, 0)`
+  - capital operativo diario = `max(bankroll + pnl_realizado_hasta_ayer, 0)`
 - `sizing_mode`: `fixed_amount_per_trade` o `proportional_to_source`
 - `fixed_amount_per_trade`: notional fijo por trade
 - `proportional_scale`: multiplicador de copia proporcional
