@@ -4,6 +4,7 @@ import logging
 import time
 from dataclasses import dataclass
 
+from app.core.market_classifier import is_dynamic_market
 from app.polymarket.activity_client import ActivityClient
 from app.settings import BotConfig
 
@@ -13,6 +14,8 @@ class WalletScore:
     wallet: str
     win_rate: float
     recent_trades: int
+    dynamic_recent_trades: int
+    recent_notional: float
     pnl: float
     score: float
 
@@ -75,6 +78,8 @@ class WalletSelector:
         )
         max_positive_pnl = max(max_positive_pnl, 1.0)
 
+        candidates: list[dict[str, float | int | str]] = []
+        max_recent_notional = 1.0
         scored: list[WalletScore] = []
         for item in leaderboard:
             wallet = str(item.get("proxyWallet") or "").strip().lower()
@@ -94,22 +99,66 @@ class WalletSelector:
             if win_rate < self.config.min_wallet_win_rate:
                 continue
 
-            recent_trades = self._count_recent_trades(wallet)
+            recent_trades, dynamic_recent_trades, recent_notional = self._recent_trade_metrics(wallet)
             if recent_trades < self.config.min_recent_trades:
                 continue
 
+            dynamic_share = dynamic_recent_trades / max(recent_trades, 1)
+            if self.config.prioritize_dynamic_wallets:
+                if dynamic_recent_trades < self.config.min_dynamic_recent_trades:
+                    continue
+                if dynamic_share < self.config.min_dynamic_trade_share:
+                    continue
+
             pnl = _to_float(item.get("pnl"))
+            max_recent_notional = max(max_recent_notional, recent_notional)
+            candidates.append(
+                {
+                    "wallet": wallet,
+                    "win_rate": win_rate,
+                    "recent_trades": recent_trades,
+                    "dynamic_recent_trades": dynamic_recent_trades,
+                    "recent_notional": recent_notional,
+                    "pnl": pnl,
+                    "dynamic_share": dynamic_share,
+                }
+            )
+
+        for candidate in candidates:
+            pnl = float(candidate["pnl"])
+            recent_trades = int(candidate["recent_trades"])
+            dynamic_recent_trades = int(candidate["dynamic_recent_trades"])
+            recent_notional = float(candidate["recent_notional"])
+            win_rate = float(candidate["win_rate"])
+            dynamic_share = float(candidate["dynamic_share"])
+
             pnl_score = min(max(pnl, 0.0) / max_positive_pnl, 1.0)
             freq_denominator = max(self.config.min_recent_trades * 3, 1)
             frequency_score = min(recent_trades / freq_denominator, 1.0)
+            notional_score = min(recent_notional / max_recent_notional, 1.0)
+            dyn_denominator = max(self.config.min_dynamic_recent_trades * 3, 1)
+            dynamic_activity_score = min(dynamic_recent_trades / dyn_denominator, 1.0)
 
-            # Prioritize winrate first, then recency/activity, then pnl rank.
-            total_score = (0.60 * win_rate) + (0.30 * frequency_score) + (0.10 * pnl_score)
+            if self.config.prioritize_dynamic_wallets:
+                # Winrate first, then dynamic activity/share, then trade size, then raw frequency.
+                total_score = (
+                    (0.40 * win_rate)
+                    + (0.20 * dynamic_activity_score)
+                    + (0.20 * dynamic_share)
+                    + (0.15 * notional_score)
+                    + (0.05 * frequency_score)
+                )
+            else:
+                # Winrate first, then activity, then amount, then pnl rank.
+                total_score = (0.55 * win_rate) + (0.20 * frequency_score) + (0.15 * notional_score) + (0.10 * pnl_score)
+
             scored.append(
                 WalletScore(
-                    wallet=wallet,
+                    wallet=str(candidate["wallet"]),
                     win_rate=win_rate,
                     recent_trades=recent_trades,
+                    dynamic_recent_trades=dynamic_recent_trades,
+                    recent_notional=recent_notional,
                     pnl=pnl,
                     score=total_score,
                 )
@@ -128,19 +177,39 @@ class WalletSelector:
 
         for row in selected_scores:
             self.logger.info(
-                "wallet-selector: wallet=%s score=%.4f win_rate=%.2f recent_trades=%s pnl=%.2f",
+                "wallet-selector: wallet=%s score=%.4f win_rate=%.2f recent_trades=%s dynamic_recent=%s notional=%.2f pnl=%.2f",
                 row.wallet,
                 row.score,
                 row.win_rate,
                 row.recent_trades,
+                row.dynamic_recent_trades,
+                row.recent_notional,
                 row.pnl,
             )
         return selected, selected_scores
 
-    def _count_recent_trades(self, wallet: str) -> int:
+    def _recent_trade_metrics(self, wallet: str) -> tuple[int, int, float]:
         trades = self.activity_client.get_trades(wallet=wallet, limit=self.config.recent_trades_limit_per_wallet)
         cutoff = int(time.time()) - (self.config.recent_trade_lookback_hours * 3600)
-        return sum(1 for trade in trades if int(_to_float(trade.get("timestamp"))) >= cutoff)
+        recent = 0
+        dynamic_recent = 0
+        recent_notional = 0.0
+        for trade in trades:
+            timestamp = int(_to_float(trade.get("timestamp")))
+            if timestamp < cutoff:
+                continue
+            recent += 1
+            size = abs(_to_float(trade.get("size")))
+            price = abs(_to_float(trade.get("price")))
+            recent_notional += size * price
+            if is_dynamic_market(
+                title=str(trade.get("title") or ""),
+                slug=str(trade.get("slug") or trade.get("eventSlug") or ""),
+                category=str(trade.get("category") or ""),
+                keywords=self.config.dynamic_keywords,
+            ):
+                dynamic_recent += 1
+        return recent, dynamic_recent, recent_notional
 
     def _fallback_scores(self, wallets: list[str]) -> list[WalletScore]:
         return [
@@ -148,6 +217,8 @@ class WalletSelector:
                 wallet=wallet,
                 win_rate=0.0,
                 recent_trades=0,
+                dynamic_recent_trades=0,
+                recent_notional=0.0,
                 pnl=0.0,
                 score=0.0,
             )

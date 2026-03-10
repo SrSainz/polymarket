@@ -19,6 +19,9 @@ class BotConfig(BaseModel):
     leaderboard_category: Literal["OVERALL", "CRYPTO", "POLITICS", "SPORTS"] = "OVERALL"
     leaderboard_time_period: Literal["DAY", "WEEK", "MONTH", "ALL"] = "MONTH"
     leaderboard_candidate_limit: int = 25
+    prioritize_dynamic_wallets: bool = False
+    min_dynamic_recent_trades: int = 5
+    min_dynamic_trade_share: float = 0.20
     wallet_selection_refresh_minutes: int = 30
     min_wallet_win_rate: float = 0.55
     min_closed_positions_for_scoring: int = 10
@@ -109,6 +112,10 @@ class BotConfig(BaseModel):
     def validate_copy_sources(self) -> "BotConfig":
         if not self.auto_select_wallets and not self.watched_wallets:
             raise ValueError("Either enable auto_select_wallets or provide watched_wallets")
+        if self.min_dynamic_recent_trades < 0:
+            raise ValueError("min_dynamic_recent_trades must be >= 0")
+        if self.min_dynamic_trade_share < 0 or self.min_dynamic_trade_share > 1:
+            raise ValueError("min_dynamic_trade_share must be between 0 and 1")
         if self.min_price < 0 or self.min_price > 1:
             raise ValueError("min_price must be between 0 and 1")
         if self.max_price < 0 or self.max_price > 1:
