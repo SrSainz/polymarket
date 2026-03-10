@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.market_classifier import is_dynamic_market
 from app.models import CopyInstruction, TradeSide
 from app.settings import BotConfig
 
@@ -42,6 +43,7 @@ class RiskManager:
         *,
         current_market_notional: float,
         current_total_exposure: float,
+        current_dynamic_exposure: float = 0.0,
         daily_pnl: float,
         daily_profit_gross: float,
         effective_bankroll: float | None = None,
@@ -70,6 +72,19 @@ class RiskManager:
             resulting_exposure = current_total_exposure + instruction.notional
             if resulting_exposure > exposure_limit:
                 return False, "max_total_exposure exceeded"
+
+            if self.config.dynamic_max_allocation_pct > 0:
+                market_is_dynamic = is_dynamic_market(
+                    title=instruction.title,
+                    slug=instruction.slug,
+                    category=instruction.category,
+                    keywords=self.config.dynamic_keywords,
+                )
+                if market_is_dynamic:
+                    dynamic_cap = bankroll * self.config.dynamic_max_allocation_pct
+                    resulting_dynamic_exposure = current_dynamic_exposure + instruction.notional
+                    if resulting_dynamic_exposure > dynamic_cap:
+                        return False, "dynamic_allocation_cap exceeded"
 
         if reference_price > 0:
             slippage = abs(instruction.price - reference_price) / reference_price

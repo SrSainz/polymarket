@@ -25,6 +25,19 @@ noise_threshold_shares: 1.0
 min_trade_amount: 5.0
 min_price: 0.03
 max_price: 0.97
+dynamic_keywords:
+  - "bitcoin"
+  - "btc"
+  - "ethereum"
+  - "eth"
+  - "5m"
+  - "5 min"
+  - "15m"
+  - "15 min"
+  - "1h"
+  - "up or down"
+dynamic_max_allocation_pct: 0.20
+dynamic_skip_manual_confirmation: true
 autonomous_decisions_enabled: true
 autonomous_take_profit_pct: 0.12
 autonomous_stop_loss_pct: 0.08

@@ -38,6 +38,22 @@ class BotConfig(BaseModel):
     min_trade_amount: float = 5.0
     min_price: float = 0.0
     max_price: float = 1.0
+    dynamic_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "bitcoin",
+            "btc",
+            "ethereum",
+            "eth",
+            "5m",
+            "5 min",
+            "15m",
+            "15 min",
+            "1h",
+            "up or down",
+        ]
+    )
+    dynamic_max_allocation_pct: float = 0.20
+    dynamic_skip_manual_confirmation: bool = True
 
     autonomous_decisions_enabled: bool = False
     autonomous_take_profit_pct: float = 0.15
@@ -74,7 +90,7 @@ class BotConfig(BaseModel):
                 normalized.append(wallet)
         return normalized
 
-    @field_validator("allowed_tags", "blocked_tags", mode="before")
+    @field_validator("allowed_tags", "blocked_tags", "dynamic_keywords", mode="before")
     @classmethod
     def normalize_tags(cls, value: list[str]) -> list[str]:
         if not value:
@@ -91,6 +107,8 @@ class BotConfig(BaseModel):
             raise ValueError("max_price must be between 0 and 1")
         if self.min_price > self.max_price:
             raise ValueError("min_price cannot be greater than max_price")
+        if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:
+            raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
         if self.autonomous_take_profit_pct < 0:
             raise ValueError("autonomous_take_profit_pct must be >= 0")
         if self.autonomous_stop_loss_pct < 0:

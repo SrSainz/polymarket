@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from app.core.autonomous_decider import AutonomousDecider
 from app.core.copier import Copier
 from app.core.live_broker import LiveBroker
+from app.core.market_classifier import is_dynamic_market
 from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction
@@ -68,6 +69,7 @@ class ExecuteCopyService:
                 copy_size = float(copy_position["size"]) if copy_position else 0.0
                 copy_avg_price = float(copy_position["avg_price"]) if copy_position else execution_price
                 total_exposure = self.db.get_total_exposure()
+                dynamic_exposure = self._get_dynamic_exposure()
                 daily_pnl = self.db.get_daily_pnl(today)
                 daily_profit_gross = self.db.get_daily_profit_gross(today)
 
@@ -77,6 +79,7 @@ class ExecuteCopyService:
                     copy_position_avg_price=copy_avg_price,
                     execution_price=execution_price,
                     current_total_exposure=total_exposure,
+                    current_dynamic_exposure=dynamic_exposure,
                     daily_pnl=daily_pnl,
                     daily_profit_gross=daily_profit_gross,
                     effective_bankroll=effective_bankroll,
@@ -111,6 +114,18 @@ class ExecuteCopyService:
         self.manual_approval.sync_user_decisions()
         self._execute_ready_approvals(mode=mode, stats=stats)
         return stats
+
+    def _get_dynamic_exposure(self) -> float:
+        exposure = 0.0
+        for row in self.db.list_copy_positions():
+            if is_dynamic_market(
+                title=str(row["title"] or ""),
+                slug=str(row["slug"] or ""),
+                category=str(row["category"] or ""),
+                keywords=self.settings.config.dynamic_keywords,
+            ):
+                exposure += abs(float(row["size"]) * float(row["avg_price"]))
+        return exposure
 
     def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:
         if not self.settings.config.autonomous_decisions_enabled:

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from app.core.market_classifier import is_dynamic_market
 from app.db import Database
 from app.models import CopyInstruction, SignalAction, TradeSide
 from app.settings import BotConfig, EnvSettings
@@ -46,6 +47,13 @@ class ManualApprovalService:
         if not self.enabled:
             return False
         if not self.is_within_confirmation_window():
+            return False
+        if self.config.dynamic_skip_manual_confirmation and is_dynamic_market(
+            title=instruction.title,
+            slug=instruction.slug,
+            category=instruction.category,
+            keywords=self.config.dynamic_keywords,
+        ):
             return False
 
         approval_id = self.db.create_trade_approval(

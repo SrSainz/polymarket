@@ -238,3 +238,60 @@ def test_exposure_limit_shrinks_when_effective_bankroll_drops() -> None:
     )
     assert not blocked
     assert "max_position_per_market" in reason or "max_total_exposure" in reason
+
+
+def test_blocks_dynamic_market_above_dynamic_allocation_cap() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=1000.0,
+        max_total_exposure=1000.0,
+        max_daily_loss=200.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.3,
+        dynamic_keywords=["bitcoin", "5m"],
+        dynamic_max_allocation_pct=0.20,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=30.0)
+    instruction.title = "Bitcoin up or down in 5m?"
+
+    allowed, reason = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=150.0,
+        current_dynamic_exposure=180.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert not allowed
+    assert "dynamic_allocation_cap" in reason
+
+
+def test_allows_dynamic_market_under_dynamic_allocation_cap() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=1000.0,
+        max_total_exposure=1000.0,
+        max_daily_loss=200.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.3,
+        dynamic_keywords=["bitcoin", "5m"],
+        dynamic_max_allocation_pct=0.20,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=20.0)
+    instruction.title = "Bitcoin up or down in 5m?"
+
+    allowed, _ = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=100.0,
+        current_dynamic_exposure=170.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert allowed

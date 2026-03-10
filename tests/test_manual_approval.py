@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.db import Database
-from app.models import SignalAction, TradeSide
+from app.models import CopyInstruction, SignalAction, TradeSide
 from app.services.manual_approval import ManualApprovalService
 from app.settings import BotConfig, EnvSettings
 
@@ -99,4 +99,49 @@ def test_instruction_from_approval_uses_decided_side(tmp_path: Path) -> None:
     assert instruction is not None
     assert instruction.side == TradeSide.SELL
     assert instruction.action == SignalAction.OPEN
+    db.close()
+
+
+def test_dynamic_market_skips_manual_confirmation(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        manual_confirmation_enabled=True,
+        confirmation_start_hour=0,
+        confirmation_end_hour=24,
+        confirmation_timezone="UTC",
+        dynamic_keywords=["bitcoin", "5m"],
+        dynamic_skip_manual_confirmation=True,
+    )
+    env = EnvSettings(
+        telegram_bot_token="token",
+        telegram_chat_id="123",
+    )
+    service = ManualApprovalService(db, config, env, logger=_noop_logger())
+    service.is_within_confirmation_window = lambda: True  # type: ignore[method-assign]
+
+    def _fail_if_called(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("telegram should not be called for dynamic markets")
+
+    service._send_approval_message = _fail_if_called  # type: ignore[method-assign]
+    instruction = CopyInstruction(
+        action=SignalAction.OPEN,
+        side=TradeSide.BUY,
+        asset="asset-btc-5m",
+        condition_id="cond",
+        size=10.0,
+        price=0.5,
+        notional=5.0,
+        source_wallet="0xabc",
+        source_signal_id=1,
+        title="Bitcoin up or down in 5m?",
+        slug="bitcoin-up-or-down-5m",
+        outcome="Yes",
+        category="crypto",
+        reason="",
+    )
+    should_wait = service.request_confirmation(instruction, source_signal_id=1)
+    assert not should_wait
+    assert db.list_pending_trade_approvals(limit=10) == []
     db.close()

@@ -94,6 +94,9 @@ Edita `config/settings.yaml`:
 - `fixed_amount_per_trade`: notional fijo por trade
 - `proportional_scale`: multiplicador de copia proporcional
 - `min_price` / `max_price`: filtro de entrada por precio (evita mercados extremos de 0.00x o 0.99x)
+- `dynamic_keywords`: palabras clave para detectar mercados dinamicos (ej. BTC, 5m, 15m)
+- `dynamic_max_allocation_pct`: porcentaje maximo de capital en mercados dinamicos (ej. `0.20`)
+- `dynamic_skip_manual_confirmation`: si `true`, no pide confirmacion manual en mercados dinamicos
 - `autonomous_decisions_enabled`: activa decisiones propias de salida
 - `autonomous_take_profit_pct`: cierre por beneficio objetivo
 - `autonomous_stop_loss_pct`: cierre por perdida maxima
