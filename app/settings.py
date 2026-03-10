@@ -76,6 +76,8 @@ class BotConfig(BaseModel):
     dynamic_skip_manual_confirmation: bool = True
     btc5m_reserve_enabled: bool = False
     btc5m_reserved_notional: float = 200.0
+    btc5m_reserve_protected_pct: float = 0.35
+    btc5m_ignore_global_exposure_limit: bool = True
     btc5m_reserve_keywords: list[str] = Field(
         default_factory=lambda: [
             "btc 5 minute up or down",
@@ -163,6 +165,8 @@ class BotConfig(BaseModel):
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
         if self.btc5m_reserved_notional < 0:
             raise ValueError("btc5m_reserved_notional must be >= 0")
+        if self.btc5m_reserve_protected_pct < 0 or self.btc5m_reserve_protected_pct > 1:
+            raise ValueError("btc5m_reserve_protected_pct must be between 0 and 1")
         if self.autonomous_take_profit_pct < 0:
             raise ValueError("autonomous_take_profit_pct must be >= 0")
         if self.autonomous_stop_loss_pct < 0:

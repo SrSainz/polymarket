@@ -308,6 +308,7 @@ def test_non_btc5m_respects_reserved_bucket() -> None:
         slippage_limit=0.3,
         btc5m_reserve_enabled=True,
         btc5m_reserved_notional=200.0,
+        btc5m_reserve_protected_pct=1.0,
     )
     risk = RiskManager(config)
     instruction = _instruction(notional=20.0)
@@ -337,6 +338,7 @@ def test_btc5m_uses_reserved_bucket() -> None:
         slippage_limit=0.3,
         btc5m_reserve_enabled=True,
         btc5m_reserved_notional=200.0,
+        btc5m_reserve_protected_pct=1.0,
     )
     risk = RiskManager(config)
     instruction = _instruction(notional=50.0)
@@ -365,6 +367,7 @@ def test_btc5m_blocks_above_reserved_bucket() -> None:
         slippage_limit=0.3,
         btc5m_reserve_enabled=True,
         btc5m_reserved_notional=200.0,
+        btc5m_reserve_protected_pct=1.0,
     )
     risk = RiskManager(config)
     instruction = _instruction(notional=20.0)
@@ -381,3 +384,61 @@ def test_btc5m_blocks_above_reserved_bucket() -> None:
     )
     assert not allowed
     assert "btc5m_reserved_cap" in reason
+
+
+def test_soft_btc5m_reserve_reduces_non_btc_blocks() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=1000.0,
+        max_total_exposure=1000.0,
+        max_daily_loss=200.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.3,
+        btc5m_reserve_enabled=True,
+        btc5m_reserved_notional=200.0,
+        btc5m_reserve_protected_pct=0.35,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=20.0)
+    instruction.title = "Will Team A win today?"
+
+    allowed, _ = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=900.0,
+        current_btc5m_exposure=0.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert allowed
+
+
+def test_btc5m_can_bypass_global_exposure_limit_when_enabled() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=1000.0,
+        max_total_exposure=1000.0,
+        max_daily_loss=200.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.3,
+        btc5m_reserve_enabled=True,
+        btc5m_reserved_notional=200.0,
+        btc5m_ignore_global_exposure_limit=True,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=80.0)
+    instruction.title = "BTC 5 Minute Up or Down"
+
+    allowed, _ = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=0.0,
+        current_total_exposure=980.0,
+        current_btc5m_exposure=100.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert allowed

@@ -48,6 +48,8 @@ dynamic_max_allocation_pct: 0.20
 dynamic_skip_manual_confirmation: true
 btc5m_reserve_enabled: true
 btc5m_reserved_notional: 200.0
+btc5m_reserve_protected_pct: 0.0
+btc5m_ignore_global_exposure_limit: true
 btc5m_reserve_keywords:
   - "btc 5 minute up or down"
   - "bitcoin up or down -"

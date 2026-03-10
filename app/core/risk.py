@@ -69,28 +69,34 @@ class RiskManager:
             if resulting_market_notional > market_limit:
                 return False, "max_position_per_market exceeded"
 
-            exposure_limit = min(self.config.max_total_exposure, bankroll)
             market_is_btc5m = self.config.btc5m_reserve_enabled and is_dynamic_market(
                 title=instruction.title,
                 slug=instruction.slug,
                 category=instruction.category,
                 keywords=self.config.btc5m_reserve_keywords,
             )
+            exposure_limit = min(self.config.max_total_exposure, bankroll)
             btc5m_cap = min(self.config.btc5m_reserved_notional, bankroll) if self.config.btc5m_reserve_enabled else 0.0
             if market_is_btc5m:
                 resulting_btc5m_exposure = current_btc5m_exposure + instruction.notional
                 if resulting_btc5m_exposure > btc5m_cap:
                     return False, "btc5m_reserved_cap exceeded"
-            elif self.config.btc5m_reserve_enabled and btc5m_cap > 0:
-                non_btc5m_cap = max(exposure_limit - btc5m_cap, 0.0)
+            elif (
+                self.config.btc5m_reserve_enabled
+                and btc5m_cap > 0
+                and self.config.btc5m_reserve_protected_pct > 0
+            ):
+                protected_reserve = btc5m_cap * self.config.btc5m_reserve_protected_pct
+                non_btc5m_cap = max(exposure_limit - protected_reserve, 0.0)
                 current_non_btc5m_exposure = max(current_total_exposure - current_btc5m_exposure, 0.0)
                 resulting_non_btc5m_exposure = current_non_btc5m_exposure + instruction.notional
                 if resulting_non_btc5m_exposure > non_btc5m_cap:
                     return False, "reserved_for_btc5m"
 
-            resulting_exposure = current_total_exposure + instruction.notional
-            if resulting_exposure > exposure_limit:
-                return False, "max_total_exposure exceeded"
+            if not (market_is_btc5m and self.config.btc5m_ignore_global_exposure_limit):
+                resulting_exposure = current_total_exposure + instruction.notional
+                if resulting_exposure > exposure_limit:
+                    return False, "max_total_exposure exceeded"
 
             if self.config.dynamic_max_allocation_pct > 0:
                 market_is_dynamic = is_dynamic_market(
