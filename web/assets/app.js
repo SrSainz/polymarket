@@ -16,6 +16,13 @@ const fmt = (value, digits = 4) => {
   return asNumber.toFixed(digits);
 };
 
+function fmtUsd(value, digits = 2) {
+  const asNumber = Number(value);
+  if (Number.isNaN(asNumber)) return "-";
+  const sign = asNumber > 0 ? "+" : "";
+  return `${sign}$${asNumber.toFixed(digits)}`;
+}
+
 function tsToIso(ts) {
   if (!ts) return "-";
   const date = new Date(ts * 1000);
@@ -98,8 +105,8 @@ function paintSummary(summary) {
   const pnlTotal = Number(summary.pnl_total ?? summary.cumulative_pnl ?? 0);
   const realized = Number(summary.realized_pnl ?? summary.cumulative_pnl ?? 0);
   const unrealized = Number(summary.unrealized_pnl ?? 0);
-  document.getElementById("pnl").textContent = fmt(pnlTotal, 2);
-  document.getElementById("pnlBreakdown").textContent = `realized ${fmt(realized, 2)} / unrealized ${fmt(unrealized, 2)}`;
+  document.getElementById("pnl").textContent = fmtUsd(pnlTotal, 2);
+  document.getElementById("pnlBreakdown").textContent = `realized ${fmtUsd(realized, 2)} / unrealized ${fmtUsd(unrealized, 2)}`;
 
   document.getElementById("pendingSignals").textContent = String(summary.pending_signals ?? "-");
 
@@ -227,18 +234,21 @@ function paintOperationPnl(items) {
   body.innerHTML = latest
     .map((item) => {
       const delta = Number(item.pnl_delta || 0);
+      const notional = Math.abs(Number(item.notional || 0));
       const klass = delta > 0 ? "pnl-pos" : delta < 0 ? "pnl-neg" : "pnl-flat";
       return `
         <li class="mini-item">
           <strong>${escapeHtml(tsToIso(item.ts))} | ${escapeHtml(item.action || "-")} ${escapeHtml(item.side || "-")}</strong>
-          <span class="${klass}">pnl delta ${fmt(delta, 4)}</span>
+          <span>metido ${fmtUsd(notional, 2)}</span>
+          <span class="${klass}">resultado ${fmtUsd(delta, 4)}</span>
         </li>
       `;
     })
     .join("");
 
   const sum = latest.reduce((acc, item) => acc + Number(item.pnl_delta || 0), 0);
-  meta.textContent = `suma ultimas ${latest.length}: ${fmt(sum, 4)}`;
+  const invested = latest.reduce((acc, item) => acc + Math.abs(Number(item.notional || 0)), 0);
+  meta.textContent = `ultimas ${latest.length}: metido ${fmtUsd(invested, 2)} | resultado ${fmtUsd(sum, 4)}`;
 }
 
 function paintPositions(items) {
@@ -268,24 +278,24 @@ function paintPositions(items) {
 function paintExecutions(items) {
   const body = document.getElementById("executionsBody");
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="7">No hay ejecuciones.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="5">No hay ejecuciones.</td></tr>`;
     return;
   }
 
   body.innerHTML = items
-    .map(
-      (item) => `
+    .map((item) => {
+      const delta = Number(item.pnl_delta || 0);
+      const pnlClass = delta > 0 ? "pnl-pos" : delta < 0 ? "pnl-neg" : "pnl-flat";
+      return `
       <tr>
         <td data-label="Hora UTC">${tsToIso(item.ts)}</td>
-        <td data-label="Modo">${escapeHtml(item.mode)}</td>
         <td data-label="Accion">${escapeHtml(item.action)}</td>
         <td data-label="Lado">${escapeHtml(item.side)}</td>
-        <td data-label="Size">${fmt(item.size)}</td>
-        <td data-label="Price">${fmt(item.price)}</td>
-        <td data-label="PnL Delta">${fmt(item.pnl_delta)}</td>
+        <td data-label="Monto USDC">${fmtUsd(Math.abs(Number(item.notional || 0)), 2)}</td>
+        <td data-label="Resultado USD"><span class="${pnlClass}">${fmtUsd(delta, 4)}</span></td>
       </tr>
     `
-    )
+    })
     .join("");
 }
 
@@ -364,6 +374,7 @@ async function refreshAll() {
       side: (item.side || "").toLowerCase(),
       size: Number(item.size || 0),
       price: Number(item.price || 0),
+      notional: Number(item.size || 0) * Number(item.price || 0),
       pnl_delta: 0,
     }));
 
