@@ -89,9 +89,12 @@ Edita `config/settings.yaml`:
 - `dynamic_leaderboard_category` / `dynamic_leaderboard_time_period`: fallback especifico para buscar wallets dinamicas
 - `min_dynamic_recent_trades`: minimo de trades dinamicos recientes exigidos por wallet
 - `min_dynamic_trade_share`: porcentaje minimo de trades dinamicos dentro de su actividad reciente
+- `max_dynamic_share_for_base_wallet`: limita wallets demasiado crypto-heavy en slots base (anti sesgo solo-crypto)
 - `min_wallet_win_rate`: winrate minimo requerido
 - `min_recent_trades`: actividad minima reciente
+- `min_copyable_positions_per_wallet`: exige que la wallet tenga al menos N posiciones activas copiables
 - `seed_new_wallets_without_backfill`: al entrar una wallet nueva, toma baseline y evita copiar posiciones antiguas
+  - para operar inmediatamente con wallets nuevas, ponlo en `false`
 - `require_recent_trade_for_position`: exige trade reciente de la wallet fuente para mantener/copiar una posicion
 - `position_recent_trade_lookback_hours`: ventana (horas) para considerar una posicion como "viva"
 - `position_recent_trades_limit`: numero de trades leidos por wallet para ese filtro

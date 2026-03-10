@@ -4,6 +4,7 @@ import logging
 import time
 from dataclasses import dataclass
 
+from app.core.market_expiry import is_market_expired, is_market_within_horizon
 from app.core.market_classifier import is_dynamic_market
 from app.polymarket.activity_client import ActivityClient
 from app.settings import BotConfig
@@ -15,6 +16,7 @@ class WalletScore:
     win_rate: float
     recent_trades: int
     dynamic_recent_trades: int
+    copyable_positions: int
     dynamic_share: float
     recent_notional: float
     pnl: float
@@ -105,6 +107,10 @@ class WalletSelector:
             if recent_trades < self.config.min_recent_trades:
                 continue
 
+            copyable_positions = self._count_copyable_positions(wallet)
+            if copyable_positions < self.config.min_copyable_positions_per_wallet:
+                continue
+
             dynamic_share = dynamic_recent_trades / max(recent_trades, 1)
             pnl = _to_float(item.get("pnl"))
             max_recent_notional = max(max_recent_notional, recent_notional)
@@ -114,6 +120,7 @@ class WalletSelector:
                     "win_rate": win_rate,
                     "recent_trades": recent_trades,
                     "dynamic_recent_trades": dynamic_recent_trades,
+                    "copyable_positions": copyable_positions,
                     "recent_notional": recent_notional,
                     "pnl": pnl,
                     "dynamic_share": dynamic_share,
@@ -124,6 +131,7 @@ class WalletSelector:
             pnl = float(candidate["pnl"])
             recent_trades = int(candidate["recent_trades"])
             dynamic_recent_trades = int(candidate["dynamic_recent_trades"])
+            copyable_positions = int(candidate["copyable_positions"])
             recent_notional = float(candidate["recent_notional"])
             win_rate = float(candidate["win_rate"])
             dynamic_share = float(candidate["dynamic_share"])
@@ -131,19 +139,27 @@ class WalletSelector:
             pnl_score = min(max(pnl, 0.0) / max_positive_pnl, 1.0)
             freq_denominator = max(self.config.min_recent_trades * 3, 1)
             frequency_score = min(recent_trades / freq_denominator, 1.0)
+            copyable_score = min(copyable_positions / 10, 1.0)
             notional_score = min(recent_notional / max_recent_notional, 1.0)
             dyn_denominator = max(self.config.min_dynamic_recent_trades * 3, 1)
             dynamic_activity_score = min(dynamic_recent_trades / dyn_denominator, 1.0)
 
             # Base ranking: winrate first, then activity, then notional, then pnl rank.
-            base_score = (0.55 * win_rate) + (0.20 * frequency_score) + (0.15 * notional_score) + (0.10 * pnl_score)
+            base_score = (
+                (0.50 * win_rate)
+                + (0.20 * frequency_score)
+                + (0.10 * notional_score)
+                + (0.10 * pnl_score)
+                + (0.10 * copyable_score)
+            )
             # Dynamic ranking for reserved dynamic slots.
             dynamic_score = (
                 (0.40 * win_rate)
                 + (0.20 * dynamic_activity_score)
                 + (0.20 * dynamic_share)
-                + (0.15 * notional_score)
+                + (0.10 * notional_score)
                 + (0.05 * frequency_score)
+                + (0.05 * copyable_score)
             )
 
             scored.append(
@@ -152,6 +168,7 @@ class WalletSelector:
                     win_rate=win_rate,
                     recent_trades=recent_trades,
                     dynamic_recent_trades=dynamic_recent_trades,
+                    copyable_positions=copyable_positions,
                     dynamic_share=dynamic_share,
                     recent_notional=recent_notional,
                     pnl=pnl,
@@ -161,6 +178,7 @@ class WalletSelector:
             )
 
         base_ranked = sorted(scored, key=lambda row: (row.score, row.win_rate, row.recent_trades, row.pnl), reverse=True)
+        dynamic_share_cap = self.config.max_dynamic_share_for_base_wallet
         selected_scores: list[WalletScore]
         if self.config.prioritize_dynamic_wallets and self.config.dynamic_wallet_slots > 0:
             dynamic_eligible = [
@@ -198,15 +216,37 @@ class WalletSelector:
                     break
                 selected_scores.append(row)
             selected_wallets = {item.wallet for item in selected_scores}
+            # First pass: favor non-crypto-heavy wallets for base slots.
             for row in base_ranked:
                 if row.wallet in selected_wallets:
+                    continue
+                if row.dynamic_share > dynamic_share_cap:
                     continue
                 selected_scores.append(row)
                 selected_wallets.add(row.wallet)
                 if len(selected_scores) >= self.config.top_wallets_to_copy:
                     break
+            # Second pass: if still missing slots, allow all remaining wallets.
+            for row in base_ranked:
+                if len(selected_scores) >= self.config.top_wallets_to_copy:
+                    break
+                if row.wallet in selected_wallets:
+                    continue
+                selected_scores.append(row)
+                selected_wallets.add(row.wallet)
         else:
-            selected_scores = base_ranked[: self.config.top_wallets_to_copy]
+            selected_scores = [row for row in base_ranked if row.dynamic_share <= dynamic_share_cap][
+                : self.config.top_wallets_to_copy
+            ]
+            if len(selected_scores) < self.config.top_wallets_to_copy:
+                selected_wallets = {row.wallet for row in selected_scores}
+                for row in base_ranked:
+                    if len(selected_scores) >= self.config.top_wallets_to_copy:
+                        break
+                    if row.wallet in selected_wallets:
+                        continue
+                    selected_scores.append(row)
+                    selected_wallets.add(row.wallet)
 
         selected = [row.wallet for row in selected_scores]
 
@@ -288,6 +328,9 @@ class WalletSelector:
             recent_trades, dynamic_recent_trades, recent_notional = self._recent_trade_metrics(wallet)
             if recent_trades < self.config.min_recent_trades:
                 continue
+            copyable_positions = self._count_copyable_positions(wallet)
+            if copyable_positions < self.config.min_copyable_positions_per_wallet:
+                continue
             dynamic_share = dynamic_recent_trades / max(recent_trades, 1)
             if dynamic_recent_trades < self.config.min_dynamic_recent_trades:
                 continue
@@ -303,6 +346,7 @@ class WalletSelector:
                     "win_rate": win_rate,
                     "recent_trades": recent_trades,
                     "dynamic_recent_trades": dynamic_recent_trades,
+                    "copyable_positions": copyable_positions,
                     "dynamic_share": dynamic_share,
                     "recent_notional": recent_notional,
                     "pnl": pnl,
@@ -314,6 +358,7 @@ class WalletSelector:
             win_rate = float(row["win_rate"])
             recent_trades = int(row["recent_trades"])
             dynamic_recent_trades = int(row["dynamic_recent_trades"])
+            copyable_positions = int(row["copyable_positions"])
             dynamic_share = float(row["dynamic_share"])
             recent_notional = float(row["recent_notional"])
             pnl = float(row["pnl"])
@@ -321,16 +366,24 @@ class WalletSelector:
             pnl_score = min(max(pnl, 0.0) / max_positive_pnl, 1.0)
             freq_denominator = max(self.config.min_recent_trades * 3, 1)
             frequency_score = min(recent_trades / freq_denominator, 1.0)
+            copyable_score = min(copyable_positions / 10, 1.0)
             notional_score = min(recent_notional / max_recent_notional, 1.0)
             dyn_denominator = max(self.config.min_dynamic_recent_trades * 3, 1)
             dynamic_activity_score = min(dynamic_recent_trades / dyn_denominator, 1.0)
-            base_score = (0.55 * win_rate) + (0.20 * frequency_score) + (0.15 * notional_score) + (0.10 * pnl_score)
+            base_score = (
+                (0.50 * win_rate)
+                + (0.20 * frequency_score)
+                + (0.10 * notional_score)
+                + (0.10 * pnl_score)
+                + (0.10 * copyable_score)
+            )
             dynamic_score = (
                 (0.40 * win_rate)
                 + (0.20 * dynamic_activity_score)
                 + (0.20 * dynamic_share)
-                + (0.15 * notional_score)
+                + (0.10 * notional_score)
                 + (0.05 * frequency_score)
+                + (0.05 * copyable_score)
             )
             candidates.append(
                 WalletScore(
@@ -338,6 +391,7 @@ class WalletSelector:
                     win_rate=win_rate,
                     recent_trades=recent_trades,
                     dynamic_recent_trades=dynamic_recent_trades,
+                    copyable_positions=copyable_positions,
                     dynamic_share=dynamic_share,
                     recent_notional=recent_notional,
                     pnl=pnl,
@@ -363,6 +417,7 @@ class WalletSelector:
                 win_rate=0.0,
                 recent_trades=0,
                 dynamic_recent_trades=0,
+                copyable_positions=0,
                 dynamic_share=0.0,
                 recent_notional=0.0,
                 pnl=0.0,
@@ -371,6 +426,40 @@ class WalletSelector:
             )
             for wallet in wallets
         ]
+
+    def _count_copyable_positions(self, wallet: str) -> int:
+        if self.config.min_copyable_positions_per_wallet <= 0:
+            return 0
+
+        positions = self.activity_client.get_positions(wallet=wallet, limit=500, offset=0)
+        copyable = 0
+        for item in positions:
+            if _to_float(item.get("size")) <= 0:
+                continue
+            if _to_bool(item.get("redeemable")):
+                continue
+
+            end_date = str(item.get("endDate") or "")
+            if self.config.skip_expired_source_positions and is_market_expired(
+                end_date,
+                grace_hours=self.config.expired_market_grace_hours,
+            ):
+                continue
+
+            title = str(item.get("title") or "")
+            slug = str(item.get("slug") or "")
+            event_slug = str(item.get("eventSlug") or "")
+            if self.config.short_horizon_only and not _matches_forced_keywords(
+                title=title,
+                slug=slug,
+                event_slug=event_slug,
+                keywords=self.config.forced_include_market_keywords,
+            ):
+                if not is_market_within_horizon(end_date, max_horizon_days=self.config.max_market_horizon_days):
+                    continue
+
+            copyable += 1
+        return copyable
 
 
 def _wins_losses_from_closed_positions(closed_positions: list[dict]) -> tuple[int, int]:
@@ -392,3 +481,27 @@ def _to_float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _to_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+def _matches_forced_keywords(*, title: str, slug: str, event_slug: str, keywords: list[str]) -> bool:
+    if not keywords:
+        return False
+    haystack = " ".join([title or "", slug or "", event_slug or ""]).strip().lower()
+    if not haystack:
+        return False
+    for raw_keyword in keywords:
+        keyword = (raw_keyword or "").strip().lower()
+        if keyword and keyword in haystack:
+            return True
+    return False

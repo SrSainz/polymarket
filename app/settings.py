@@ -25,10 +25,12 @@ class BotConfig(BaseModel):
     dynamic_leaderboard_time_period: Literal["DAY", "WEEK", "MONTH", "ALL"] = "DAY"
     min_dynamic_recent_trades: int = 5
     min_dynamic_trade_share: float = 0.20
+    max_dynamic_share_for_base_wallet: float = 0.65
     wallet_selection_refresh_minutes: int = 30
     min_wallet_win_rate: float = 0.55
     min_closed_positions_for_scoring: int = 10
     min_recent_trades: int = 8
+    min_copyable_positions_per_wallet: int = 0
     recent_trade_lookback_hours: int = 24
     recent_trades_limit_per_wallet: int = 200
     closed_positions_limit: int = 200
@@ -156,6 +158,10 @@ class BotConfig(BaseModel):
             raise ValueError("min_dynamic_recent_trades must be >= 0")
         if self.min_dynamic_trade_share < 0 or self.min_dynamic_trade_share > 1:
             raise ValueError("min_dynamic_trade_share must be between 0 and 1")
+        if self.max_dynamic_share_for_base_wallet < 0 or self.max_dynamic_share_for_base_wallet > 1:
+            raise ValueError("max_dynamic_share_for_base_wallet must be between 0 and 1")
+        if self.min_copyable_positions_per_wallet < 0:
+            raise ValueError("min_copyable_positions_per_wallet must be >= 0")
         if self.min_price < 0 or self.min_price > 1:
             raise ValueError("min_price must be between 0 and 1")
         if self.max_price < 0 or self.max_price > 1:
