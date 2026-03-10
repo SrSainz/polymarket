@@ -16,150 +16,228 @@
     <div class="bg-shape shape-a"></div>
     <div class="bg-shape shape-b"></div>
 
-    <header class="topbar">
-      <div class="brand">
-        <p class="kicker">Copy Trading Monitor</p>
-        <h1>Polymarket Bot</h1>
-      </div>
-      <div class="toolbar">
-        <label class="refresh-label" for="refreshSeconds">Auto-refresh (s)</label>
-        <input id="refreshSeconds" type="number" min="3" max="300" value="10" />
-        <button id="refreshBtn" type="button">Refrescar</button>
-        <button id="resetBtn" type="button" class="danger-btn">Limpiar y reiniciar</button>
-      </div>
-    </header>
-
-    <main class="layout">
-      <section class="cards">
-        <article class="card accent">
-          <p class="card-label">Posiciones abiertas</p>
-          <p class="card-value" id="openPositions">-</p>
-        </article>
-        <article class="card">
-          <p class="card-label">Exposicion (USDC)</p>
-          <p class="card-value" id="exposure">-</p>
-        </article>
-        <article class="card">
-          <p class="card-label">PnL total</p>
-          <p class="card-value" id="pnl">-</p>
-          <p class="card-subvalue" id="pnlBreakdown">realized - / unrealized -</p>
-        </article>
-        <article class="card">
-          <p class="card-label">Senales pendientes</p>
-          <p class="card-value" id="pendingSignals">-</p>
-        </article>
-      </section>
-
-      <section class="mini-panels">
-        <article class="mini-panel">
-          <div class="mini-head">
-            <h2>Wallets activas</h2>
-            <span id="selectedWalletsCount" class="badge">0</span>
+    <div class="app-shell">
+      <header class="topbar shell-card">
+        <div class="brand">
+          <p class="kicker">Copy Trading Monitor</p>
+          <h1>Polymarket Bot</h1>
+          <div class="brand-meta">
+            <span id="runtimeBadge" class="soft-badge">Local DB</span>
+            <span id="strategyBadge" class="soft-badge accent-badge">BTC 5m 50% / General 50%</span>
+            <span id="headerTimestamp" class="topbar-note">sincronizando</span>
           </div>
-          <ul id="selectedWalletsList" class="mini-list"></ul>
-          <p id="selectedWalletsMeta" class="mini-meta">sin datos</p>
-        </article>
-        <article class="mini-panel">
-          <div class="mini-head">
-            <h2>Bloqueos riesgo</h2>
-            <span id="riskBlocksCount" class="badge">0</span>
-          </div>
-          <ul id="riskBlocksList" class="mini-list"></ul>
-          <p id="riskBlocksMeta" class="mini-meta">sin datos</p>
-        </article>
-      </section>
-
-      <section class="mini-panels">
-        <article class="mini-panel">
-          <div class="mini-head">
-            <h2>Ganancia neta vs perdida diaria</h2>
-          </div>
-          <div class="donut-row">
-            <div id="exposureDonut" class="donut-chart"></div>
-            <ul id="exposureLegend" class="donut-legend"></ul>
-          </div>
-          <p id="exposureDonutMeta" class="mini-meta">sin datos</p>
-        </article>
-        <article class="mini-panel">
-          <div class="mini-head">
-            <h2>Dolares por operacion</h2>
-            <span id="opsPnlCount" class="badge">0</span>
-          </div>
-          <ul id="opsPnlList" class="mini-list"></ul>
-          <p id="opsPnlMeta" class="mini-meta">ultimas operaciones</p>
-        </article>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Posiciones copiadas</h2>
-          <span id="positionsCount" class="badge">0</span>
         </div>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Mercado</th>
-                <th>Outcome</th>
-                <th>Size</th>
-                <th>Avg Price</th>
-                <th>Realized PnL</th>
-              </tr>
-            </thead>
-            <tbody id="positionsBody"></tbody>
-          </table>
+        <div class="toolbar">
+          <div class="toolbar-field">
+            <label class="refresh-label" for="refreshSeconds">Auto-refresh (s)</label>
+            <input id="refreshSeconds" type="number" min="3" max="300" value="10" />
+          </div>
+          <button id="refreshBtn" type="button">Refrescar</button>
+          <button id="resetBtn" type="button" class="danger-btn">Limpiar y reiniciar</button>
         </div>
-      </section>
+      </header>
 
-      <details class="panel panel-details">
-        <summary class="panel-head">
-          <h2>Ejecuciones recientes</h2>
-          <span class="badge">Ultimas 50</span>
-        </summary>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Hora UTC</th>
-                <th>Accion</th>
-                <th>Lado</th>
-                <th>Monto USDC</th>
-                <th>Resultado USD</th>
-              </tr>
-            </thead>
-            <tbody id="executionsBody"></tbody>
-          </table>
-        </div>
-      </details>
+      <main class="layout">
+        <section class="hero panel panel-hero" id="overviewSection">
+          <div class="hero-copy">
+            <p class="hero-kicker">Estado actual</p>
+            <h2 class="hero-title">Vista rapida del bot, sin ruido y lista para movil.</h2>
+            <p id="systemNotice" class="hero-text">
+              El panel resume capital en riesgo, resultado total, wallets activas y las ultimas decisiones ejecutadas.
+            </p>
+          </div>
+          <div class="hero-side">
+            <article class="hero-stat">
+              <span class="hero-stat-label">Senales ejecutadas</span>
+              <strong id="executedSignals">-</strong>
+            </article>
+            <article class="hero-stat">
+              <span class="hero-stat-label">Senales fallidas</span>
+              <strong id="failedSignals">-</strong>
+            </article>
+            <article class="hero-stat">
+              <span class="hero-stat-label">Modo</span>
+              <strong id="modeSummary">-</strong>
+            </article>
+          </div>
+        </section>
 
-      <details class="panel panel-details">
-        <summary class="panel-head">
-          <h2>Senales</h2>
-          <span class="badge">Ultimas 100</span>
-        </summary>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Hora UTC</th>
-                <th>Accion</th>
-                <th>Prev</th>
-                <th>New</th>
-                <th>Delta</th>
-                <th>Status</th>
-                <th>Nota</th>
-              </tr>
-            </thead>
-            <tbody id="signalsBody"></tbody>
-          </table>
-        </div>
-      </details>
-    </main>
+        <nav class="section-nav" aria-label="Secciones del dashboard">
+          <a href="#overviewSection" class="section-link">Resumen</a>
+          <a href="#strategySection" class="section-link">Estrategia</a>
+          <a href="#positionsSection" class="section-link">Posiciones</a>
+          <a href="#activitySection" class="section-link">Actividad</a>
+        </nav>
 
-    <footer class="footer">
-      <p id="lastUpdated">Ultima actualizacion: -</p>
-    </footer>
+        <section class="cards">
+          <article class="card accent">
+            <p class="card-label">Posiciones abiertas</p>
+            <p class="card-value" id="openPositions">-</p>
+            <p class="card-subvalue">mercados vivos en cartera</p>
+          </article>
+          <article class="card">
+            <p class="card-label">Exposicion (USDC)</p>
+            <p class="card-value" id="exposure">-</p>
+            <p class="card-subvalue" id="exposureMark">mark-to-market -</p>
+          </article>
+          <article class="card">
+            <p class="card-label">PnL total</p>
+            <p class="card-value" id="pnl">-</p>
+            <p class="card-subvalue" id="pnlBreakdown">realized - / unrealized -</p>
+          </article>
+          <article class="card">
+            <p class="card-label">Senales pendientes</p>
+            <p class="card-value" id="pendingSignals">-</p>
+            <p class="card-subvalue">cola actual del motor</p>
+          </article>
+        </section>
 
+        <section class="strategy-grid" id="strategySection">
+          <article class="panel strategy-card">
+            <div class="panel-head panel-head-tight">
+              <h2>Asignacion</h2>
+            </div>
+            <div class="allocation-bars">
+              <div class="allocation-row">
+                <span>BTC 5m</span>
+                <strong>50%</strong>
+              </div>
+              <div class="progress">
+                <span class="progress-fill progress-fill-btc" style="width: 50%"></span>
+              </div>
+              <div class="allocation-row">
+                <span>General daily / weekly</span>
+                <strong>50%</strong>
+              </div>
+              <div class="progress">
+                <span class="progress-fill progress-fill-core" style="width: 50%"></span>
+              </div>
+            </div>
+            <p class="mini-meta">Beneficios: 50% se reinvierte y 50% se reserva.</p>
+          </article>
+
+          <article class="panel strategy-card">
+            <div class="panel-head panel-head-tight">
+              <h2>Wallets activas</h2>
+              <span id="selectedWalletsCount" class="badge">0</span>
+            </div>
+            <ul id="selectedWalletsList" class="mini-list"></ul>
+            <p id="selectedWalletsMeta" class="mini-meta">sin datos</p>
+          </article>
+
+          <article class="panel strategy-card">
+            <div class="panel-head panel-head-tight">
+              <h2>Bloqueos de riesgo</h2>
+              <span id="riskBlocksCount" class="badge">0</span>
+            </div>
+            <ul id="riskBlocksList" class="mini-list"></ul>
+            <p id="riskBlocksMeta" class="mini-meta">sin datos</p>
+          </article>
+        </section>
+
+        <section class="mini-panels">
+          <article class="panel">
+            <div class="panel-head panel-head-tight">
+              <h2>Ganancia neta vs perdida diaria</h2>
+            </div>
+            <div class="donut-row">
+              <div id="exposureDonut" class="donut-chart"></div>
+              <ul id="exposureLegend" class="donut-legend"></ul>
+            </div>
+            <p id="exposureDonutMeta" class="mini-meta">sin datos</p>
+          </article>
+
+          <article class="panel" id="activitySection">
+            <div class="panel-head panel-head-tight">
+              <h2>Dolares por operacion</h2>
+              <span id="opsPnlCount" class="badge">0</span>
+            </div>
+            <ul id="opsPnlList" class="mini-list"></ul>
+            <p id="opsPnlMeta" class="mini-meta">ultimas operaciones</p>
+          </article>
+        </section>
+
+        <section class="panel" id="positionsSection">
+          <div class="panel-head">
+            <div>
+              <h2>Posiciones copiadas</h2>
+              <p class="panel-copy">Lo que hay abierto ahora mismo, con coste medio y PnL en vivo.</p>
+            </div>
+            <span id="positionsCount" class="badge">0</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mercado</th>
+                  <th>Outcome</th>
+                  <th>Monto</th>
+                  <th>Avg</th>
+                  <th>Mark</th>
+                  <th>PnL vivo</th>
+                  <th>Realized</th>
+                </tr>
+              </thead>
+              <tbody id="positionsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <details class="panel panel-details" open>
+          <summary class="panel-head">
+            <div>
+              <h2>Ejecuciones recientes</h2>
+              <p class="panel-copy">Compras, ventas y resultado por operacion.</p>
+            </div>
+            <span class="badge">Ultimas 50</span>
+          </summary>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Hora UTC</th>
+                  <th>Accion</th>
+                  <th>Modo</th>
+                  <th>Wallet fuente</th>
+                  <th>Monto USDC</th>
+                  <th>Resultado USD</th>
+                </tr>
+              </thead>
+              <tbody id="executionsBody"></tbody>
+            </table>
+          </div>
+        </details>
+
+        <details class="panel panel-details">
+          <summary class="panel-head">
+            <div>
+              <h2>Senales</h2>
+              <p class="panel-copy">Cambios detectados en las wallets que disparan el motor.</p>
+            </div>
+            <span class="badge">Ultimas 100</span>
+          </summary>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Hora UTC</th>
+                  <th>Mercado</th>
+                  <th>Accion</th>
+                  <th>Delta</th>
+                  <th>Status</th>
+                  <th>Nota</th>
+                </tr>
+              </thead>
+              <tbody id="signalsBody"></tbody>
+            </table>
+          </div>
+        </details>
+      </main>
+
+      <footer class="footer">
+        <p id="lastUpdated">Ultima actualizacion: -</p>
+      </footer>
+    </div>
     <script src="/assets/app.js"></script>
   </body>
 </html>

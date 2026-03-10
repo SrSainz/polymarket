@@ -24,6 +24,12 @@ function fmtUsd(value, digits = 2) {
   return `${sign}$${asNumber.toFixed(digits)}`;
 }
 
+function fmtUsdPlain(value, digits = 2) {
+  const asNumber = Number(value);
+  if (Number.isNaN(asNumber)) return "-";
+  return `$${asNumber.toFixed(digits)}`;
+}
+
 function tsToIso(ts) {
   if (!ts) return "-";
   const date = new Date(ts * 1000);
@@ -47,6 +53,22 @@ function shortWallet(wallet) {
   const value = String(wallet || "");
   if (value.length <= 14) return value;
   return `${value.slice(0, 8)}...${value.slice(-6)}`;
+}
+
+function modeLabel() {
+  if (runtimeMode === "local") return "Local DB";
+  if (runtimeMode === "public-fallback") return "Fallback publico";
+  return "Public API";
+}
+
+function setCardTone(elementId, value) {
+  const node = document.getElementById(elementId)?.closest(".card");
+  if (!node) return;
+  node.classList.remove("is-positive", "is-negative");
+  const num = Number(value);
+  if (Number.isNaN(num)) return;
+  if (num > 0) node.classList.add("is-positive");
+  if (num < 0) node.classList.add("is-negative");
 }
 
 function normalizeCategory(raw) {
@@ -122,14 +144,19 @@ function saveApiBase(value) {
 function paintSummary(summary) {
   document.getElementById("openPositions").textContent = String(summary.open_positions ?? 0);
   document.getElementById("exposure").textContent = fmt(summary.exposure, 2);
+  document.getElementById("exposureMark").textContent = `mark-to-market ${fmtUsdPlain(Number(summary.exposure_mark ?? summary.exposure ?? 0), 2)}`;
 
   const pnlTotal = Number(summary.pnl_total ?? summary.cumulative_pnl ?? 0);
   const realized = Number(summary.realized_pnl ?? summary.cumulative_pnl ?? 0);
   const unrealized = Number(summary.unrealized_pnl ?? 0);
   document.getElementById("pnl").textContent = fmtUsd(pnlTotal, 2);
   document.getElementById("pnlBreakdown").textContent = `realized ${fmtUsd(realized, 2)} / unrealized ${fmtUsd(unrealized, 2)}`;
+  setCardTone("pnl", pnlTotal);
 
   document.getElementById("pendingSignals").textContent = String(summary.pending_signals ?? "-");
+  document.getElementById("executedSignals").textContent = String(summary.executed_signals ?? 0);
+  document.getElementById("failedSignals").textContent = String(summary.failed_signals ?? 0);
+  document.getElementById("modeSummary").textContent = modeLabel();
 
   const modeText =
     runtimeMode === "local"
@@ -137,7 +164,12 @@ function paintSummary(summary) {
       : runtimeMode === "public-fallback"
       ? `public api fallback (${watchedWallet})`
       : `public api mode (${watchedWallet})`;
-  document.getElementById("lastUpdated").textContent = `Ultima actualizacion: ${new Date().toISOString().replace(".000Z", "Z")} | ${modeText}`;
+  const nowText = new Date().toISOString().replace(".000Z", "Z");
+  document.getElementById("lastUpdated").textContent = `Ultima actualizacion: ${nowText} | ${modeText}`;
+  document.getElementById("headerTimestamp").textContent = nowText;
+  document.getElementById("runtimeBadge").textContent = modeLabel();
+  document.getElementById("systemNotice").textContent =
+    `Pendientes ${summary.pending_signals ?? 0}, ejecutadas ${summary.executed_signals ?? 0}, fallidas ${summary.failed_signals ?? 0}. Resultado diario ${fmtUsd(Number(summary.daily_realized_pnl || 0), 2)}.`;
 }
 
 function paintSelectedWallets(items) {
@@ -155,12 +187,13 @@ function paintSelectedWallets(items) {
       <li class="mini-item">
         <strong>#${Number(item.rank || 0)} ${escapeHtml(shortWallet(item.wallet))}</strong>
         <span>score ${fmt(item.score, 3)} | win ${fmt((Number(item.win_rate) || 0) * 100, 1)}% | 24h ${Number(item.recent_trades || 0)}</span>
+        <span>pnl ${fmtUsd(Number(item.pnl || 0), 2)}</span>
       </li>
     `
     )
     .join("");
 
-  document.getElementById("selectedWalletsMeta").textContent = "Top por score (winrate + actividad + pnl)";
+  document.getElementById("selectedWalletsMeta").textContent = "Wallets en seguimiento ahora mismo";
 }
 
 function paintRiskBlocks(payload) {
@@ -251,6 +284,7 @@ function paintOperationPnl(items) {
       return `
         <li class="mini-item">
           <strong>${escapeHtml(tsToIso(item.ts))} | ${escapeHtml(item.action || "-")} ${escapeHtml(item.side || "-")}</strong>
+          <span>${escapeHtml(shortWallet(item.source_wallet || item.mode || "-"))}</span>
           <span>metido ${fmtUsd(notional, 2)}</span>
           <span class="${klass}">resultado ${fmtUsd(delta, 4)}</span>
         </li>
@@ -268,29 +302,34 @@ function paintPositions(items) {
   document.getElementById("positionsCount").textContent = String(items.length);
 
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="5">No hay posiciones copiadas.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="7">No hay posiciones copiadas.</td></tr>`;
     return;
   }
 
   body.innerHTML = items
-    .map(
-      (item) => `
+    .map((item) => {
+      const notional = Math.abs(Number(item.size || 0) * Number(item.avg_price || 0));
+      const unrealized = Number(item.unrealized_pnl || 0);
+      const unrealizedClass = unrealized > 0 ? "pnl-pos" : unrealized < 0 ? "pnl-neg" : "pnl-flat";
+      return `
       <tr>
         <td data-label="Mercado">${escapeHtml(item.title || item.slug || item.asset)}</td>
         <td data-label="Outcome">${escapeHtml(item.outcome || "-")}</td>
-        <td data-label="Size">${fmt(item.size)}</td>
-        <td data-label="Avg Price">${fmt(item.avg_price)}</td>
-        <td data-label="Realized PnL">${fmt(item.realized_pnl)}</td>
+        <td data-label="Monto">${fmtUsdPlain(notional, 2)}</td>
+        <td data-label="Avg">${fmt(item.avg_price)}</td>
+        <td data-label="Mark">${fmt(item.mark_price)}</td>
+        <td data-label="PnL vivo"><span class="${unrealizedClass}">${fmtUsd(unrealized, 2)}</span></td>
+        <td data-label="Realized">${fmtUsd(Number(item.realized_pnl || 0), 2)}</td>
       </tr>
-    `
-    )
+    `;
+    })
     .join("");
 }
 
 function paintExecutions(items) {
   const body = document.getElementById("executionsBody");
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="5">No hay ejecuciones.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">No hay ejecuciones.</td></tr>`;
     return;
   }
 
@@ -302,7 +341,8 @@ function paintExecutions(items) {
       <tr>
         <td data-label="Hora UTC">${tsToIso(item.ts)}</td>
         <td data-label="Accion">${escapeHtml(item.action)}</td>
-        <td data-label="Lado">${escapeHtml(item.side)}</td>
+        <td data-label="Modo">${escapeHtml(item.mode || "-")} / ${escapeHtml(item.side || "-")}</td>
+        <td data-label="Wallet fuente">${escapeHtml(shortWallet(item.source_wallet || "-"))}</td>
         <td data-label="Monto USDC">${fmtUsd(Math.abs(Number(item.notional || 0)), 2)}</td>
         <td data-label="Resultado USD"><span class="${pnlClass}">${fmtUsd(delta, 4)}</span></td>
       </tr>
@@ -314,7 +354,7 @@ function paintExecutions(items) {
 function paintSignals(items) {
   const body = document.getElementById("signalsBody");
   if (!items.length) {
-    body.innerHTML = `<tr><td colspan="7">No hay senales todavia.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="6">No hay senales todavia.</td></tr>`;
     return;
   }
 
@@ -323,10 +363,9 @@ function paintSignals(items) {
       (item) => `
       <tr>
         <td data-label="Hora UTC">${tsToIso(item.detected_at)}</td>
-        <td data-label="Accion">${escapeHtml(item.action)}</td>
-        <td data-label="Prev">${fmt(item.prev_size)}</td>
-        <td data-label="New">${fmt(item.new_size)}</td>
-        <td data-label="Delta">${fmt(item.delta_size)}</td>
+        <td data-label="Mercado">${escapeHtml(item.title || item.slug || item.asset)}</td>
+        <td data-label="Accion">${escapeHtml(item.action)} | ${fmt(item.delta_size)}</td>
+        <td data-label="Delta">${fmtUsdPlain(Math.abs(Number(item.delta_size || 0) * Number(item.reference_price || 0)), 2)}</td>
         <td data-label="Status">${statusPill(item.status)}</td>
         <td data-label="Nota">${escapeHtml(item.note || "")}</td>
       </tr>
@@ -343,8 +382,8 @@ async function refreshAll() {
         getJson(withCacheBust(buildApiUrl("/api/positions"))),
         getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
         getJson(withCacheBust(buildApiUrl("/api/signals?limit=100"))),
-        safeGetJson(withCacheBust(buildApiUrl("/api/selected-wallets?limit=3")), { items: [] }),
-        safeGetJson(withCacheBust(buildApiUrl("/api/risk-blocks?hours=24&limit=3")), {
+        safeGetJson(withCacheBust(buildApiUrl("/api/selected-wallets?limit=6")), { items: [] }),
+        safeGetJson(withCacheBust(buildApiUrl("/api/risk-blocks?hours=24&limit=5")), {
           items: [],
           hours: 24,
           blocked_total: 0,
@@ -374,6 +413,8 @@ async function refreshAll() {
       outcome: item.outcome || "",
       size: Number(item.size || 0),
       avg_price: Number(item.avgPrice || item.curPrice || 0),
+      mark_price: Number(item.curPrice || item.avgPrice || 0),
+      unrealized_pnl: 0,
       realized_pnl: Number(item.realizedPnl || item.cashPnl || 0),
     }));
 
@@ -387,6 +428,7 @@ async function refreshAll() {
       size: Number(item.size || 0),
       price: Number(item.price || 0),
       notional: Number(item.size || 0) * Number(item.price || 0),
+      source_wallet: watchedWallet,
       pnl_delta: 0,
     }));
 
@@ -509,6 +551,8 @@ async function bootstrap() {
       : runtimeMode === "public-fallback"
       ? "Copy Trading Monitor (Public API Fallback)"
       : "Copy Trading Monitor (Public API)";
+  document.getElementById("runtimeBadge").textContent = modeLabel();
+  document.getElementById("modeSummary").textContent = modeLabel();
 
   const resetBtn = document.getElementById("resetBtn");
   if (runtimeMode !== "local") {
