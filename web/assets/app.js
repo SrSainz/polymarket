@@ -61,6 +61,26 @@ async function getJson(url) {
   return response.json();
 }
 
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload || {}),
+  });
+  let body = {};
+  try {
+    body = await response.json();
+  } catch (_error) {
+    body = {};
+  }
+  if (!response.ok) {
+    const message = body.error || `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  return body;
+}
+
 async function safeGetJson(url, fallback) {
   try {
     return await getJson(url);
@@ -430,6 +450,39 @@ document.getElementById("refreshSeconds").addEventListener("change", () => {
   configureAutoRefresh();
 });
 
+document.getElementById("resetBtn").addEventListener("click", async () => {
+  const button = document.getElementById("resetBtn");
+  if (runtimeMode !== "local") {
+    document.getElementById("lastUpdated").textContent =
+      "Reset no disponible en modo Public API. Usa la URL del backend local.";
+    return;
+  }
+
+  const accepted = window.confirm(
+    "Esto limpiara posiciones, senales, ejecuciones y seleccion actual. Se reiniciara desde cero. Continuar?"
+  );
+  if (!accepted) return;
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Limpiando...";
+  try {
+    const result = await postJson(withCacheBust(buildApiUrl("/api/reset")), { confirm: "reset" });
+    const deleted = result.deleted || {};
+    const positions = Number(deleted.copy_positions || 0);
+    const executions = Number(deleted.executions || 0);
+    const signals = Number(deleted.signals || 0);
+    document.getElementById("lastUpdated").textContent =
+      `Reset completo: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}.`;
+    await refreshAll();
+  } catch (error) {
+    document.getElementById("lastUpdated").textContent = `Error al limpiar: ${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel || "Limpiar y reiniciar";
+  }
+});
+
 async function bootstrap() {
   const params = new URLSearchParams(window.location.search);
   watchedWallet = (params.get("wallet") || DEFAULT_WALLET).toLowerCase();
@@ -456,6 +509,15 @@ async function bootstrap() {
       : runtimeMode === "public-fallback"
       ? "Copy Trading Monitor (Public API Fallback)"
       : "Copy Trading Monitor (Public API)";
+
+  const resetBtn = document.getElementById("resetBtn");
+  if (runtimeMode !== "local") {
+    resetBtn.disabled = true;
+    resetBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
+  } else {
+    resetBtn.disabled = false;
+    resetBtn.title = "";
+  }
 
   await refreshAll();
   configureAutoRefresh();

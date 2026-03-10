@@ -165,6 +165,7 @@ execute => pending=3 filled=3 blocked=0 skipped=0 failed=0 auto_candidates=0 aut
   - wallets top seleccionadas (score, winrate, actividad)
   - bloqueos de riesgo agregados (ventana 24h)
   - PnL total = realized + unrealized (mark-to-market por `clob midpoint`)
+  - boton `Limpiar y reiniciar` para resetear estado local y volver a arrancar tracking desde cero
 - Endpoints:
   - `/api/summary`
   - `/api/positions`
@@ -172,6 +173,7 @@ execute => pending=3 filled=3 blocked=0 skipped=0 failed=0 auto_candidates=0 aut
   - `/api/signals`
   - `/api/selected-wallets`
   - `/api/risk-blocks`
+  - `POST /api/reset` (requiere JSON `{"confirm":"reset"}`)
 
 ## Vercel
 

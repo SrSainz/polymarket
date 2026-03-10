@@ -115,6 +115,14 @@ button:hover {
   opacity: 0.9;
 }
 
+.danger-btn {
+  background: var(--danger);
+}
+
+.danger-btn:hover {
+  opacity: 0.95;
+}
+
 .layout {
   display: grid;
   gap: 16px;
@@ -428,7 +436,7 @@ td {
   .toolbar {
     width: 100%;
     display: grid;
-    grid-template-columns: 1fr minmax(72px, 96px) auto;
+    grid-template-columns: 1fr minmax(72px, 96px) auto auto;
     gap: 8px;
     padding: 10px;
   }

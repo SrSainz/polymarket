@@ -35,7 +35,7 @@ def _build_handler(db_path: Path, static_dir: Path, clob_host: str):
             if parsed.path.startswith("/api/"):
                 self.send_response(HTTPStatus.NO_CONTENT)
                 self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
                 self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
                 self.end_headers()
                 return
@@ -87,6 +87,21 @@ def _build_handler(db_path: Path, static_dir: Path, clob_host: str):
 
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
+        def do_POST(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            if parsed.path == "/api/reset":
+                payload = self._read_json_body()
+                if str(payload.get("confirm") or "").strip().lower() != "reset":
+                    self._json(
+                        {"ok": False, "error": "confirmation required", "hint": "send JSON {\"confirm\":\"reset\"}"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                result = _reset_runtime_state(db_path)
+                self._json(result)
+                return
+            self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+
         def log_message(self, format: str, *args) -> None:  # noqa: A003
             return
 
@@ -102,17 +117,34 @@ def _build_handler(db_path: Path, static_dir: Path, clob_host: str):
             self.end_headers()
             self.wfile.write(content)
 
-        def _json(self, payload: dict | list) -> None:
+        def _json(self, payload: dict | list, status: HTTPStatus = HTTPStatus.OK) -> None:
             body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-            self.send_response(HTTPStatus.OK)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _read_json_body(self) -> dict:
+            raw_length = self.headers.get("Content-Length", "0")
+            try:
+                length = int(raw_length)
+            except (TypeError, ValueError):
+                return {}
+            if length <= 0:
+                return {}
+            try:
+                raw = self.rfile.read(length).decode("utf-8")
+                payload = json.loads(raw)
+                if isinstance(payload, dict):
+                    return payload
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return {}
+            return {}
 
     return DashboardHandler
 
@@ -404,3 +436,27 @@ def _midpoint_for_asset(*, clob_host: str, asset: str) -> float | None:
 
     _MIDPOINT_CACHE[asset] = (midpoint, now + _MIDPOINT_CACHE_TTL_SECONDS)
     return midpoint
+
+
+def _reset_runtime_state(db_path: Path) -> dict:
+    tables = [
+        "source_positions_current",
+        "source_positions_history",
+        "signals",
+        "copy_positions",
+        "executions",
+        "daily_pnl",
+        "selected_wallets",
+        "position_mark_history",
+        "trade_approvals",
+    ]
+    deleted: dict[str, int] = {}
+    with _connect(db_path) as conn:
+        for table in tables:
+            count_row = conn.execute(f"SELECT COUNT(*) AS value FROM {table}").fetchone()
+            deleted[table] = int(count_row["value"]) if count_row else 0
+        with conn:
+            for table in tables:
+                conn.execute(f"DELETE FROM {table}")
+    _MIDPOINT_CACHE.clear()
+    return {"ok": True, "deleted": deleted, "reset_at_utc": datetime.now(timezone.utc).isoformat()}
