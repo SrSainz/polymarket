@@ -85,7 +85,10 @@ class RiskManager:
 
             market_limit = min(self.config.max_position_per_market, bankroll)
             if mode == "live" and market_is_btc5m:
-                market_limit = min(market_limit, bankroll * self.config.live_btc5m_ticket_allocation_pct)
+                live_ticket_cap = bankroll * self.config.live_btc5m_ticket_allocation_pct
+                if bankroll >= self.config.min_trade_amount:
+                    live_ticket_cap = max(live_ticket_cap, self.config.min_trade_amount)
+                market_limit = min(market_limit, live_ticket_cap)
             resulting_market_notional = current_market_notional + instruction.notional
             if resulting_market_notional > market_limit:
                 return False, "max_position_per_market exceeded"

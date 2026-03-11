@@ -417,7 +417,7 @@ def test_strategy_logs_skip_reason_and_available_cash(tmp_path: Path, caplog) ->
     stats = service.run(mode="live")
 
     assert stats["skipped"] == 1
-    assert "note=no trigger: richest ask 0.740 < 0.850" in caplog.text
+    assert "note=no trigger: richest ask 0.740 < 0.800" in caplog.text
     assert "cash_balance=12.3400" in caplog.text
     assert "available_to_trade=12.3400" in caplog.text
     db.close()

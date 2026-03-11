@@ -18,10 +18,10 @@ from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.settings import AppSettings
 
-_OPERATIVE_TRIGGER_PRICE = 0.85
-_OPERATIVE_MAX_OPPOSITE_PRICE = 0.15
-_OPERATIVE_MAX_TARGET_SPREAD = 0.04
-_OPERATIVE_MAX_SECONDS_INTO_WINDOW = 240
+_OPERATIVE_TRIGGER_PRICE = 0.80
+_OPERATIVE_MAX_OPPOSITE_PRICE = 0.20
+_OPERATIVE_MAX_TARGET_SPREAD = 0.05
+_OPERATIVE_MAX_SECONDS_INTO_WINDOW = 270
 
 
 @dataclass(frozen=True)
