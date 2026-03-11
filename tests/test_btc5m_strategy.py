@@ -518,7 +518,12 @@ def test_vidarx_micro_uses_extreme_80_20_bias(tmp_path: Path) -> None:
         autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
         daily_summary=SimpleNamespace(send_if_due=lambda: False),
         trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
-        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=40.0, max_position_per_market=10.0),
+        settings=_settings(
+            strategy_entry_mode="vidarx_micro",
+            bankroll=40.0,
+            max_position_per_market=20.0,
+            strategy_trade_allocation_pct=0.20,
+        ),
         logger=logging.getLogger("test-btc5m-vidarx"),
     )
 
@@ -579,6 +584,66 @@ def test_vidarx_micro_uses_balanced_55_45_bias(tmp_path: Path) -> None:
     db.close()
 
 
+def test_vidarx_micro_uses_real_price_ladder_levels(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=175)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Ladder",
+        "slug": "btc-updown-5m-ladder",
+        "conditionId": "cond-ladder",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.79"}],
+                "asks": [
+                    {"price": "0.77", "size": "20"},
+                    {"price": "0.79", "size": "20"},
+                    {"price": "0.81", "size": "20"},
+                ],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.17"}],
+                "asks": [
+                    {"price": "0.17", "size": "20"},
+                    {"price": "0.19", "size": "20"},
+                    {"price": "0.21", "size": "20"},
+                ],
+            },
+        },
+        balance=100.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=100.0, max_position_per_market=40.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    stats = service.run(mode="paper")
+
+    prices = {
+        round(float(row["price"] or 0.0), 2)
+        for row in db.get_recent_executions(limit=10)
+        if str(row["asset"]) == "asset-up"
+    }
+    assert stats["filled"] >= 4
+    assert prices >= {0.77, 0.79}
+    db.close()
+
+
 def test_vidarx_micro_replenishes_same_price_bucket(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -620,14 +685,80 @@ def test_vidarx_micro_replenishes_same_price_bucket(tmp_path: Path) -> None:
     )
 
     first_stats = service.run(mode="paper")
+    first_replenishment_count = int(db.get_bot_state("strategy_replenishment_count") or "0")
     first_exposure = db.get_total_exposure()
     second_stats = service.run(mode="paper")
+    second_replenishment_count = int(db.get_bot_state("strategy_replenishment_count") or "0")
     second_exposure = db.get_total_exposure()
 
     assert first_stats["filled"] >= 2
+    assert first_replenishment_count == 0
     assert second_stats["filled"] >= 1
+    assert second_replenishment_count >= 1
     assert second_exposure > first_exposure
-    assert int(db.get_bot_state("strategy_replenishment_count") or "0") >= 1
+    db.close()
+
+
+def test_vidarx_micro_initial_ladder_does_not_count_as_replenishment(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=170)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Repeat",
+        "slug": "btc-updown-5m-repeat",
+        "conditionId": "cond-repeat",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.79"}],
+                "asks": [
+                    {"price": "0.77", "size": "20"},
+                    {"price": "0.79", "size": "20"},
+                    {"price": "0.81", "size": "20"},
+                ],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.17"}],
+                "asks": [
+                    {"price": "0.17", "size": "20"},
+                    {"price": "0.19", "size": "20"},
+                    {"price": "0.21", "size": "20"},
+                ],
+            },
+        },
+        balance=100.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=100.0, max_position_per_market=60.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    first_stats = service.run(mode="paper")
+    first_replenishment_count = int(db.get_bot_state("strategy_replenishment_count") or "0")
+    first_exposure = db.get_total_exposure()
+    second_stats = service.run(mode="paper")
+    second_replenishment_count = int(db.get_bot_state("strategy_replenishment_count") or "0")
+    second_exposure = db.get_total_exposure()
+
+    assert first_stats["filled"] >= 2
+    assert first_replenishment_count == 0
+    assert second_stats["filled"] >= 1
+    assert second_replenishment_count >= 1
+    assert second_exposure > first_exposure
     db.close()
 
 

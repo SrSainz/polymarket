@@ -553,14 +553,21 @@ function renderPositionRows(items, emptyLabel) {
 }
 
 function paintPositions(items) {
-  const btcItems = items.filter((item) => isBtc5mMarket(item));
-  const generalItems = items.filter((item) => !isBtc5mMarket(item));
+  const activeVidarxSlug = isVidarxLab() ? String(lastSummary?.strategy_market_slug || "") : "";
+  const currentBtcItems = items.filter(
+    (item) => isBtc5mMarket(item) && (!activeVidarxSlug || String(item.slug || "") === activeVidarxSlug)
+  );
+  const archivedBtcItems = items.filter(
+    (item) => isBtc5mMarket(item) && activeVidarxSlug && String(item.slug || "") !== activeVidarxSlug
+  );
+  const btcItems = currentBtcItems;
+  const generalItems = items.filter((item) => !isBtc5mMarket(item)).concat(archivedBtcItems);
 
   document.getElementById("positionsBtcCount").textContent = String(btcItems.length);
   document.getElementById("positionsGeneralCount").textContent = String(generalItems.length);
   document.getElementById("positionsBtcBody").innerHTML = renderPositionRows(
     btcItems,
-    "No hay posiciones BTC 5m abiertas."
+    isVidarxLab() ? "No hay posiciones abiertas en la ventana activa." : "No hay posiciones BTC 5m abiertas."
   );
   document.getElementById("positionsGeneralBody").innerHTML = renderPositionRows(
     generalItems,

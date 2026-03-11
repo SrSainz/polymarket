@@ -45,12 +45,19 @@ _VIDARX_BUCKET_TOLERANCE = 0.015
 
 
 @dataclass(frozen=True)
+class AskLevel:
+    price: float
+    size: float
+
+
+@dataclass(frozen=True)
 class MarketOutcome:
     label: str
     asset_id: str
     best_ask: float
     best_bid: float
     best_ask_size: float
+    ask_levels: tuple[AskLevel, ...]
 
 
 @dataclass(frozen=True)
@@ -81,6 +88,14 @@ class StrategyPlan:
     primary_notional: float
     secondary_notional: float
     replenishment_count: int
+
+
+@dataclass(frozen=True)
+class VidarxEntryLevel:
+    price: float
+    size: float
+    bucket_price: float
+    is_replenishment: bool
 
 
 class BTC5mStrategyService:
@@ -382,11 +397,20 @@ class BTC5mStrategyService:
 
             if result.status == "filled":
                 stats["filled"] += 1
-                self._increment_vidarx_bucket_count(
-                    slug=instruction.slug,
-                    asset=instruction.asset,
-                    price=instruction.price,
-                )
+                fill_state = self._vidarx_fill_state_from_reason(instruction.reason)
+                if fill_state is not None:
+                    bucket_price, is_replenishment = fill_state
+                    self._mark_vidarx_bucket_seen(
+                        slug=instruction.slug,
+                        asset=instruction.asset,
+                        price=bucket_price,
+                    )
+                    if is_replenishment:
+                        self._increment_vidarx_bucket_count(
+                            slug=instruction.slug,
+                            asset=instruction.asset,
+                            price=bucket_price,
+                        )
             elif result.status == "skipped":
                 stats["skipped"] += 1
                 note = result.message or note
@@ -466,7 +490,8 @@ class BTC5mStrategyService:
             best_ask = _best_ask(book)
             best_bid = _best_bid(book)
             best_ask_size = _best_ask_size(book)
-            if best_ask is None or best_bid is None or best_ask_size is None:
+            ask_levels = _ask_levels(book)
+            if best_ask is None or best_bid is None or best_ask_size is None or not ask_levels:
                 self._record_strategy_snapshot(market=market, note=f"incomplete book for {label}")
                 return None
             priced_outcomes.append(
@@ -476,6 +501,7 @@ class BTC5mStrategyService:
                     best_ask=best_ask,
                     best_bid=best_bid,
                     best_ask_size=best_ask_size,
+                    ask_levels=ask_levels,
                 )
             )
 
@@ -579,7 +605,8 @@ class BTC5mStrategyService:
             best_ask = _best_ask(book)
             best_bid = _best_bid(book)
             best_ask_size = _best_ask_size(book)
-            if best_ask is None or best_bid is None or best_ask_size is None:
+            ask_levels = _ask_levels(book)
+            if best_ask is None or best_bid is None or best_ask_size is None or not ask_levels:
                 self._record_strategy_snapshot(market=market, note=f"incomplete book for {label}")
                 return None
             priced_outcomes.append(
@@ -589,6 +616,7 @@ class BTC5mStrategyService:
                     best_ask=best_ask,
                     best_bid=best_bid,
                     best_ask_size=best_ask_size,
+                    ask_levels=ask_levels,
                 )
             )
 
@@ -734,37 +762,35 @@ class BTC5mStrategyService:
         ):
             if budget < self.settings.config.min_trade_amount:
                 continue
-            bucket_price = self._vidarx_bucket_price(target.best_ask)
-            already_filled = self._get_vidarx_bucket_count(
+            ladder_levels = self._select_vidarx_entry_levels(
                 slug=str(market.get("slug") or ""),
-                asset=target.asset_id,
-                price=bucket_price,
-            )
-            max_bucket_fills = self._vidarx_bucket_fill_cap(
+                target=target,
                 price_mode=price_mode,
                 timing_regime=timing_regime,
                 role=label,
             )
-            remaining_bucket_fills = max(max_bucket_fills - already_filled, 0)
-            if remaining_bucket_fills <= 0:
-                rejection_reasons.append(f"{label} bucket exhausted @{bucket_price:.2f}")
+            if not ladder_levels:
+                rejection_reasons.append(f"{label} ladder unavailable")
                 continue
-            for idx, tranche_notional in enumerate(
-                self._build_vidarx_tranches(
-                    budget,
-                    timing_regime=timing_regime,
-                    price_mode=price_mode,
-                    remaining_bucket_fills=remaining_bucket_fills,
-                ),
-                start=1,
-            ):
+            tranches = self._build_vidarx_tranches(
+                budget,
+                timing_regime=timing_regime,
+                price_mode=price_mode,
+                level_count=len(ladder_levels),
+                role=label,
+            )
+            selected_levels = ladder_levels[: len(tranches)]
+            for idx, (level, tranche_notional) in enumerate(zip(selected_levels, tranches), start=1):
                 if tranche_notional < self.settings.config.min_trade_amount:
                     continue
                 instruction = self._build_vidarx_instruction(
                     market=market,
                     target=target,
+                    price=level.price,
+                    available_size=level.size,
                     tranche_notional=tranche_notional,
                     reason_label=label,
+                    entry_kind="replenish" if level.is_replenishment else "ladder",
                     tranche_index=idx,
                 )
                 if instruction is None:
@@ -780,7 +806,7 @@ class BTC5mStrategyService:
                     daily_pnl=self.db.get_daily_pnl(datetime.now(timezone.utc).date().isoformat()),
                     daily_profit_gross=self.db.get_daily_profit_gross(datetime.now(timezone.utc).date().isoformat()),
                     effective_bankroll=effective_bankroll,
-                    reference_price=target.best_ask,
+                    reference_price=instruction.price,
                 )
                 if not allowed:
                     rejection_reasons.append(reason)
@@ -792,7 +818,7 @@ class BTC5mStrategyService:
                     primary_notional += instruction.notional
                 else:
                     hedge_notional += instruction.notional
-                if already_filled + idx > 1:
+                if level.is_replenishment:
                     replenishment_count += 1
 
         if not instructions:
@@ -1234,7 +1260,7 @@ class BTC5mStrategyService:
         if seconds_into_window < _VIDARX_MID_LATE_START:
             return None, (
                 f"vidarx esperando segunda oleada: {seconds_into_window}s fuera de "
-                f"30-110s y 150-245s ({price_mode})"
+                f"{_VIDARX_MIN_SECONDS}-{_VIDARX_EARLY_MID_END}s y {_VIDARX_MID_LATE_START}-{_VIDARX_MAX_SECONDS}s ({price_mode})"
             )
         return None, f"vidarx tarde: {seconds_into_window}s > {_VIDARX_MAX_SECONDS}s"
 
@@ -1263,7 +1289,7 @@ class BTC5mStrategyService:
         return (low - tolerance) <= value <= (high + tolerance)
 
     def _get_vidarx_bucket_count(self, *, slug: str, asset: str, price: float) -> int:
-        row = self.db.get_bot_state(self._vidarx_bucket_key(slug=slug, asset=asset, price=price))
+        row = self.db.get_bot_state(self._vidarx_bucket_replenish_key(slug=slug, asset=asset, price=price))
         if row is None:
             return 0
         try:
@@ -1272,12 +1298,21 @@ class BTC5mStrategyService:
             return 0
 
     def _increment_vidarx_bucket_count(self, *, slug: str, asset: str, price: float) -> None:
-        key = self._vidarx_bucket_key(slug=slug, asset=asset, price=price)
+        key = self._vidarx_bucket_replenish_key(slug=slug, asset=asset, price=price)
         current = self._get_vidarx_bucket_count(slug=slug, asset=asset, price=price)
         self.db.set_bot_state(key, str(current + 1))
 
-    def _vidarx_bucket_key(self, *, slug: str, asset: str, price: float) -> str:
-        return f"vidarx_bucket:{slug}:{asset}:{price:.2f}"
+    def _has_vidarx_bucket_seen(self, *, slug: str, asset: str, price: float) -> bool:
+        return self.db.get_bot_state(self._vidarx_bucket_seen_key(slug=slug, asset=asset, price=price)) == "1"
+
+    def _mark_vidarx_bucket_seen(self, *, slug: str, asset: str, price: float) -> None:
+        self.db.set_bot_state(self._vidarx_bucket_seen_key(slug=slug, asset=asset, price=price), "1")
+
+    def _vidarx_bucket_seen_key(self, *, slug: str, asset: str, price: float) -> str:
+        return f"vidarx_bucket_seen:{slug}:{asset}:{price:.2f}"
+
+    def _vidarx_bucket_replenish_key(self, *, slug: str, asset: str, price: float) -> str:
+        return f"vidarx_bucket_replenish:{slug}:{asset}:{price:.2f}"
 
     def _vidarx_bucket_price(self, price: float) -> float:
         return _round_down(price, "0.01")
@@ -1288,6 +1323,75 @@ class BTC5mStrategyService:
         if price_mode == "tilted":
             return 5 if role == "primary" else 3
         return 4 if role == "primary" else 3
+
+    def _vidarx_initial_level_cap(self, *, price_mode: str, timing_regime: str, role: str) -> int:
+        if price_mode == "extreme":
+            return 4 if timing_regime == "mid-late" and role == "primary" else 3
+        if price_mode == "tilted":
+            return 3 if role == "primary" else 2
+        return 2
+
+    def _select_vidarx_entry_levels(
+        self,
+        *,
+        slug: str,
+        target: MarketOutcome,
+        price_mode: str,
+        timing_regime: str,
+        role: str,
+    ) -> list[VidarxEntryLevel]:
+        levels_in_band = [
+            level
+            for level in target.ask_levels
+            if self._price_matches_vidarx_band(level.price, price_mode=price_mode, role=role)
+        ]
+        selected: list[VidarxEntryLevel] = []
+        selected_buckets: set[float] = set()
+        initial_limit = self._vidarx_initial_level_cap(price_mode=price_mode, timing_regime=timing_regime, role=role)
+        initial_used = 0
+        replenish_limit = self._vidarx_bucket_fill_cap(price_mode=price_mode, timing_regime=timing_regime, role=role)
+
+        for level in levels_in_band:
+            bucket_price = self._vidarx_bucket_price(level.price)
+            if bucket_price in selected_buckets:
+                continue
+            if self._has_vidarx_bucket_seen(slug=slug, asset=target.asset_id, price=bucket_price):
+                if self._get_vidarx_bucket_count(slug=slug, asset=target.asset_id, price=bucket_price) >= replenish_limit:
+                    continue
+                selected.append(
+                    VidarxEntryLevel(
+                        price=level.price,
+                        size=level.size,
+                        bucket_price=bucket_price,
+                        is_replenishment=True,
+                    )
+                )
+                selected_buckets.add(bucket_price)
+                continue
+
+            if initial_used >= initial_limit:
+                continue
+            selected.append(
+                VidarxEntryLevel(
+                    price=level.price,
+                    size=level.size,
+                    bucket_price=bucket_price,
+                    is_replenishment=False,
+                )
+            )
+            initial_used += 1
+            selected_buckets.add(bucket_price)
+        return selected
+
+    def _vidarx_fill_state_from_reason(self, reason: str) -> tuple[float, bool] | None:
+        parts = reason.split(":")
+        if len(parts) < 5 or parts[0] != "vidarx_micro":
+            return None
+        try:
+            bucket_price = float(parts[3])
+        except ValueError:
+            return None
+        return bucket_price, parts[2] == "replenish"
 
     def _remember_missing_midpoint(self, asset: str) -> None:
         state_key = self._missing_midpoint_state_key(asset)
@@ -1311,11 +1415,12 @@ class BTC5mStrategyService:
         *,
         timing_regime: str,
         price_mode: str,
-        remaining_bucket_fills: int,
+        level_count: int,
+        role: str,
     ) -> list[float]:
         if budget < self.settings.config.min_trade_amount:
             return []
-        if budget < self.settings.config.min_trade_amount * 2 or remaining_bucket_fills <= 1:
+        if budget < self.settings.config.min_trade_amount * 2 or level_count <= 1:
             return [_round_down(budget, "0.01")]
 
         if price_mode == "extreme":
@@ -1325,7 +1430,9 @@ class BTC5mStrategyService:
         else:
             weights = [0.56, 0.44]
 
-        weights = weights[:remaining_bucket_fills]
+        if role == "hedge" and len(weights) > 1:
+            weights = weights[:-1]
+        weights = weights[:level_count]
         total_weight = sum(weights)
         if total_weight <= 0:
             return [_round_down(budget, "0.01")]
@@ -1353,28 +1460,32 @@ class BTC5mStrategyService:
         *,
         market: dict,
         target: MarketOutcome,
+        price: float,
+        available_size: float,
         tranche_notional: float,
         reason_label: str,
+        entry_kind: str,
         tranche_index: int,
     ) -> CopyInstruction | None:
-        max_notional = target.best_ask * target.best_ask_size
+        max_notional = price * available_size
         effective_notional = min(tranche_notional, max_notional)
         if effective_notional < self.settings.config.min_trade_amount:
             return None
-        raw_size = effective_notional / target.best_ask
+        raw_size = effective_notional / price
         size = _round_down(raw_size, "0.0001")
         if size <= 0:
             return None
-        notional = size * target.best_ask
+        notional = size * price
         if notional < self.settings.config.min_trade_amount:
             return None
+        bucket_price = self._vidarx_bucket_price(price)
         return CopyInstruction(
             action=SignalAction.ADD if self.db.get_copy_position(target.asset_id) else SignalAction.OPEN,
             side=TradeSide.BUY,
             asset=target.asset_id,
             condition_id=str(market.get("conditionId") or ""),
             size=size,
-            price=target.best_ask,
+            price=price,
             notional=notional,
             source_wallet="strategy:vidarx_micro",
             source_signal_id=0,
@@ -1382,7 +1493,7 @@ class BTC5mStrategyService:
             slug=str(market.get("slug") or ""),
             outcome=target.label,
             category="crypto",
-            reason=f"vidarx_micro:{reason_label}:tranche-{tranche_index}",
+            reason=f"vidarx_micro:{reason_label}:{entry_kind}:{bucket_price:.2f}:tranche-{tranche_index}",
         )
 
     def _settle_resolved_paper_positions(self, stats: dict[str, int]) -> None:
@@ -1451,16 +1562,10 @@ def _parse_json_list(raw_value: object) -> list[str]:
 
 
 def _best_ask(book: dict) -> float | None:
-    asks = book.get("asks") or []
-    prices: list[float] = []
-    for ask in asks:
-        try:
-            prices.append(float(ask.get("price")))
-        except (AttributeError, TypeError, ValueError):
-            continue
-    if not prices:
+    ask_levels = _ask_levels(book)
+    if not ask_levels:
         return None
-    return min(prices)
+    return ask_levels[0].price
 
 
 def _best_bid(book: dict) -> float | None:
@@ -1477,18 +1582,25 @@ def _best_bid(book: dict) -> float | None:
 
 
 def _best_ask_size(book: dict) -> float | None:
-    asks = book.get("asks") or []
-    best_price = _best_ask(book)
-    if best_price is None:
+    ask_levels = _ask_levels(book)
+    if not ask_levels:
         return None
+    return ask_levels[0].size
+
+
+def _ask_levels(book: dict) -> tuple[AskLevel, ...]:
+    asks = book.get("asks") or []
+    aggregated: dict[float, float] = {}
     for ask in asks:
         try:
-            if float(ask.get("price")) != best_price:
-                continue
-            return float(ask.get("size") or 0.0)
+            price = float(ask.get("price"))
+            size = float(ask.get("size") or 0.0)
         except (AttributeError, TypeError, ValueError):
             continue
-    return None
+        if price <= 0 or size <= 0:
+            continue
+        aggregated[price] = aggregated.get(price, 0.0) + size
+    return tuple(AskLevel(price=price, size=aggregated[price]) for price in sorted(aggregated))
 
 
 def _to_timestamp(raw_value: str) -> int:
