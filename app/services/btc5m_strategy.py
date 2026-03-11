@@ -471,8 +471,9 @@ class BTC5mStrategyService:
 
             midpoint = self.clob_client.get_midpoint(asset)
             if midpoint is None:
-                self.logger.info("btc5m autonomous exit skipped asset=%s: missing midpoint/orderbook", asset)
+                self._remember_missing_midpoint(asset)
                 continue
+            self._clear_missing_midpoint(asset)
             mark_price = midpoint
             self.db.record_position_mark(asset, mark_price)
 
@@ -502,6 +503,22 @@ class BTC5mStrategyService:
             except Exception as error:  # noqa: BLE001
                 stats["failed"] += 1
                 self.logger.exception("btc5m autonomous exit failed asset=%s: %s", asset, error)
+
+    def _remember_missing_midpoint(self, asset: str) -> None:
+        state_key = self._missing_midpoint_state_key(asset)
+        if self.db.get_bot_state(state_key) == "1":
+            return
+        self.db.set_bot_state(state_key, "1")
+        self.logger.info("btc5m autonomous exit skipped asset=%s: missing midpoint/orderbook", asset)
+
+    def _clear_missing_midpoint(self, asset: str) -> None:
+        state_key = self._missing_midpoint_state_key(asset)
+        if self.db.get_bot_state(state_key) != "1":
+            return
+        self.db.set_bot_state(state_key, "0")
+
+    def _missing_midpoint_state_key(self, asset: str) -> str:
+        return f"btc5m_missing_midpoint:{asset}"
 
 
 def _parse_json_list(raw_value: object) -> list[str]:
