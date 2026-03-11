@@ -18,6 +18,11 @@ from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.settings import AppSettings
 
+_OPERATIVE_TRIGGER_PRICE = 0.75
+_OPERATIVE_MAX_OPPOSITE_PRICE = 0.06
+_OPERATIVE_MAX_TARGET_SPREAD = 0.03
+_OPERATIVE_MAX_SECONDS_INTO_WINDOW = 240
+
 
 @dataclass(frozen=True)
 class MarketOutcome:
@@ -231,7 +236,7 @@ class BTC5mStrategyService:
         priced_outcomes.sort(key=lambda item: item.best_ask, reverse=True)
         rich_side = priced_outcomes[0]
         cheap_side = priced_outcomes[1]
-        trigger_price = self.settings.config.strategy_trigger_price
+        trigger_price = self._effective_trigger_price()
 
         if rich_side.best_ask < trigger_price:
             self._record_strategy_snapshot(
@@ -250,12 +255,13 @@ class BTC5mStrategyService:
                 ),
             )
             return None
-        if seconds_into_window > self.settings.config.strategy_max_seconds_into_window:
+        effective_max_seconds = self._effective_max_seconds_into_window()
+        if seconds_into_window > effective_max_seconds:
             self._record_strategy_snapshot(
                 market=market,
                 note=(
                     f"too late in window: {seconds_into_window}s > "
-                    f"{self.settings.config.strategy_max_seconds_into_window}s"
+                    f"{effective_max_seconds}s"
                 ),
             )
             return None
@@ -264,12 +270,13 @@ class BTC5mStrategyService:
             target = rich_side
             rationale = f"buy_above trigger {rich_side.label} ask={rich_side.best_ask:.3f}"
         else:
-            if cheap_side.best_ask > self.settings.config.strategy_max_opposite_price:
+            max_opposite_price = self._effective_max_opposite_price()
+            if cheap_side.best_ask > max_opposite_price:
                 self._record_strategy_snapshot(
                     market=market,
                     note=(
                         f"opposite too expensive: {cheap_side.label} ask="
-                        f"{cheap_side.best_ask:.3f} > {self.settings.config.strategy_max_opposite_price:.3f}"
+                        f"{cheap_side.best_ask:.3f} > {max_opposite_price:.3f}"
                     ),
                 )
                 return None
@@ -280,12 +287,13 @@ class BTC5mStrategyService:
             )
 
         target_spread = max(target.best_ask - target.best_bid, 0.0)
-        if target_spread > self.settings.config.strategy_max_target_spread:
+        max_target_spread = self._effective_max_target_spread()
+        if target_spread > max_target_spread:
             self._record_strategy_snapshot(
                 market=market,
                 note=(
                     f"spread too wide: {target.label} spread={target_spread:.3f} > "
-                    f"{self.settings.config.strategy_max_target_spread:.3f}"
+                    f"{max_target_spread:.3f}"
                 ),
             )
             return None
@@ -454,6 +462,18 @@ class BTC5mStrategyService:
             return self.clob_client.get_book(token_id)
         except Exception:  # noqa: BLE001
             return None
+
+    def _effective_trigger_price(self) -> float:
+        return min(self.settings.config.strategy_trigger_price, _OPERATIVE_TRIGGER_PRICE)
+
+    def _effective_max_opposite_price(self) -> float:
+        return max(self.settings.config.strategy_max_opposite_price, _OPERATIVE_MAX_OPPOSITE_PRICE)
+
+    def _effective_max_target_spread(self) -> float:
+        return max(self.settings.config.strategy_max_target_spread, _OPERATIVE_MAX_TARGET_SPREAD)
+
+    def _effective_max_seconds_into_window(self) -> int:
+        return max(self.settings.config.strategy_max_seconds_into_window, _OPERATIVE_MAX_SECONDS_INTO_WINDOW)
 
     def _execute_instruction(self, *, mode: str, instruction: CopyInstruction) -> ExecutionResult:
         if mode == "live":

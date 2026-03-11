@@ -61,17 +61,19 @@ class _FakeBroker:
 
 def _settings(**overrides) -> AppSettings:
     config = BotConfig(
-        watched_wallets=["0xabc"],
-        strategy_mode="btc5m_orderbook",
-        strategy_entry_mode="buy_opposite",
-        strategy_trigger_price=0.98,
-        strategy_trade_allocation_pct=0.10,
-        strategy_max_opposite_price=0.20,
-        bankroll=100.0,
-        max_position_per_market=10.0,
-        max_total_exposure=100.0,
-        min_trade_amount=1.0,
-        **overrides,
+        **{
+            "watched_wallets": ["0xabc"],
+            "strategy_mode": "btc5m_orderbook",
+            "strategy_entry_mode": "buy_opposite",
+            "strategy_trigger_price": 0.98,
+            "strategy_trade_allocation_pct": 0.10,
+            "strategy_max_opposite_price": 0.20,
+            "bankroll": 100.0,
+            "max_position_per_market": 10.0,
+            "max_total_exposure": 100.0,
+            "min_trade_amount": 1.0,
+            **overrides,
+        }
     )
     return AppSettings(
         config=config,
@@ -134,6 +136,60 @@ def test_strategy_buy_opposite_uses_cheap_side_and_records_balance(tmp_path: Pat
     assert broker.instructions[0].outcome == "Down"
     assert db.get_bot_state("live_cash_balance") == "50.00000000"
     assert db.get_bot_state("strategy_target_outcome") == "Down"
+    db.close()
+
+
+def test_strategy_uses_more_operable_trigger_profile(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.76"}],
+                "asks": [{"price": "0.77", "size": "1000"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.02"}],
+                "asks": [{"price": "0.03", "size": "1000"}],
+            },
+        },
+        balance=50.0,
+    )
+    broker = _FakeBroker()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_trigger_price=0.98,
+            strategy_max_opposite_price=0.03,
+            strategy_max_target_spread=0.02,
+            strategy_max_seconds_into_window=210,
+        ),
+        logger=logging.getLogger("test-btc5m-strategy"),
+    )
+
+    stats = service.run(mode="live")
+
+    assert stats["filled"] == 1
+    assert broker.instructions
+    assert broker.instructions[0].asset == "asset-down"
     db.close()
 
 
