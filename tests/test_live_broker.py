@@ -13,6 +13,11 @@ class _FakeCLOBClient:
         return {"orderID": "live-123", "status": "matched"}
 
 
+class _MissingOrderbookCLOBClient:
+    def place_market_order(self, token_id: str, side: str, size: float, *, notional: float | None = None) -> dict:
+        raise RuntimeError("PolyApiException[status_code=404, error_message={'error': 'No orderbook exists for the requested token id'}]")
+
+
 def _instruction(*, side: TradeSide, action: SignalAction, size: float, price: float) -> CopyInstruction:
     return CopyInstruction(
         action=action,
@@ -81,4 +86,35 @@ def test_live_broker_sell_updates_realized_pnl(tmp_path: Path) -> None:
     assert position is not None
     assert float(position["size"]) == 6.0
     assert abs(float(position["realized_pnl"]) - 0.6) < 1e-9
+    db.close()
+
+
+def test_live_broker_skips_when_orderbook_is_missing(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.upsert_copy_position(
+        asset="asset-1",
+        condition_id="cond-1",
+        size=10.0,
+        avg_price=0.40,
+        realized_pnl=0.0,
+        title="BTC 5 Minute Up or Down",
+        slug="btc-updown-5m",
+        outcome="Yes",
+        category="crypto",
+    )
+    broker = LiveBroker(db, _MissingOrderbookCLOBClient(), EnvSettings(live_trading=True))
+
+    result = broker.execute(
+        _instruction(side=TradeSide.SELL, action=SignalAction.REDUCE, size=4.0, price=0.55)
+    )
+
+    position = db.get_copy_position("asset-1")
+    executions = db.get_recent_executions(limit=5)
+
+    assert result.status == "skipped"
+    assert result.message == "missing_orderbook"
+    assert position is not None
+    assert float(position["size"]) == 10.0
+    assert executions == []
     db.close()

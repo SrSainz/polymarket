@@ -469,7 +469,11 @@ class BTC5mStrategyService:
             if size <= 0:
                 continue
 
-            mark_price = self.clob_client.get_midpoint(asset) or avg_price
+            midpoint = self.clob_client.get_midpoint(asset)
+            if midpoint is None:
+                self.logger.info("btc5m autonomous exit skipped asset=%s: missing midpoint/orderbook", asset)
+                continue
+            mark_price = midpoint
             self.db.record_position_mark(asset, mark_price)
 
             instruction = self.autonomous_decider.build_exit_instruction(
@@ -493,6 +497,8 @@ class BTC5mStrategyService:
                     self.trade_notifier.send_realized_result(instruction=instruction, result=result)
                 if result.status == "filled":
                     stats["filled"] += 1
+                elif result.status == "skipped":
+                    stats["skipped"] += 1
             except Exception as error:  # noqa: BLE001
                 stats["failed"] += 1
                 self.logger.exception("btc5m autonomous exit failed asset=%s: %s", asset, error)

@@ -18,12 +18,27 @@ class LiveBroker:
         if not self.env.live_trading:
             raise RuntimeError("LIVE_TRADING=false. Live broker is disabled.")
 
-        response = self.clob_client.place_market_order(
-            token_id=instruction.asset,
-            side=instruction.side.value,
-            size=instruction.size,
-            notional=instruction.notional,
-        )
+        try:
+            response = self.clob_client.place_market_order(
+                token_id=instruction.asset,
+                side=instruction.side.value,
+                size=instruction.size,
+                notional=instruction.notional,
+            )
+        except Exception as error:  # noqa: BLE001
+            if _is_missing_orderbook_error(str(error or "")):
+                return ExecutionResult(
+                    mode="live",
+                    status="skipped",
+                    action=instruction.action,
+                    asset=instruction.asset,
+                    size=0.0,
+                    price=instruction.price,
+                    notional=0.0,
+                    pnl_delta=0.0,
+                    message="missing_orderbook",
+                )
+            raise
 
         existing = self.db.get_copy_position(instruction.asset)
         current_size = float(existing["size"]) if existing else 0.0
@@ -130,3 +145,8 @@ def _live_execution_notes(response: object) -> str:
     if order_id:
         parts.append(f"order_id={order_id}")
     return " | ".join(parts)
+
+
+def _is_missing_orderbook_error(error_text: str) -> bool:
+    normalized = str(error_text or "").strip().lower()
+    return "no orderbook exists for the requested token id" in normalized

@@ -32,6 +32,13 @@ class _FakeCLOBClient:
     def get_book(self, token_id: str) -> dict:
         return self.books[token_id]
 
+    def get_midpoint(self, token_id: str) -> float | None:
+        book = self.books.get(token_id) or {}
+        asks = book.get("asks") or []
+        if not asks:
+            return None
+        return float(asks[0]["price"])
+
 
 class _FakeBroker:
     def __init__(self) -> None:
@@ -177,4 +184,71 @@ def test_strategy_skips_when_opposite_side_is_too_expensive(tmp_path: Path) -> N
     assert stats["skipped"] == 1
     assert not broker.instructions
     assert "opposite too expensive" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_strategy_autonomous_exit_skips_missing_midpoint(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.upsert_copy_position(
+        asset="stale-asset",
+        condition_id="cond-stale",
+        size=5.0,
+        avg_price=0.4,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Old",
+        slug="btc-updown-5m-old",
+        outcome="Up",
+        category="crypto",
+    )
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.98"}],
+                "asks": [{"price": "0.99", "size": "1000"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.01"}],
+                "asks": [{"price": "0.01", "size": "1000"}],
+            },
+        },
+        balance=50.0,
+    )
+    broker = _FakeBroker()
+    exit_assets: list[str] = []
+
+    def _build_exit_instruction(**kwargs):  # noqa: ANN003
+        exit_assets.append(str(kwargs.get("asset") or ""))
+        return None
+
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=_build_exit_instruction),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_max_open_positions=2),
+        logger=logging.getLogger("test-btc5m-strategy"),
+    )
+
+    stats = service.run(mode="live")
+
+    assert stats["failed"] == 0
+    assert broker.instructions
+    assert broker.instructions[0].asset == "asset-down"
+    assert "stale-asset" not in exit_assets
     db.close()
