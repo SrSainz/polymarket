@@ -22,25 +22,25 @@ _OPERATIVE_TRIGGER_PRICE = 0.80
 _OPERATIVE_MAX_OPPOSITE_PRICE = 0.20
 _OPERATIVE_MAX_TARGET_SPREAD = 0.05
 _OPERATIVE_MAX_SECONDS_INTO_WINDOW = 270
-_VIDARX_MIN_SECONDS = 30
-_VIDARX_MAX_SECONDS = 245
+_VIDARX_MIN_SECONDS = 20
+_VIDARX_MAX_SECONDS = 260
 _VIDARX_RICH_TRIGGER_FLOOR = 0.58
 _VIDARX_RICH_ENTRY_CEILING = 0.86
 _VIDARX_MAX_SPREAD = 0.08
-_VIDARX_TILTED_RICH_MIN = 0.68
-_VIDARX_TILTED_RICH_MAX = 0.76
-_VIDARX_TILTED_CHEAP_MIN = 0.24
-_VIDARX_TILTED_CHEAP_MAX = 0.32
-_VIDARX_EXTREME_RICH_MIN = 0.77
-_VIDARX_EXTREME_RICH_MAX = 0.83
-_VIDARX_EXTREME_CHEAP_MIN = 0.17
-_VIDARX_EXTREME_CHEAP_MAX = 0.23
+_VIDARX_TILTED_RICH_MIN = 0.66
+_VIDARX_TILTED_RICH_MAX = 0.80
+_VIDARX_TILTED_CHEAP_MIN = 0.20
+_VIDARX_TILTED_CHEAP_MAX = 0.34
+_VIDARX_EXTREME_RICH_MIN = 0.75
+_VIDARX_EXTREME_RICH_MAX = 0.88
+_VIDARX_EXTREME_CHEAP_MIN = 0.12
+_VIDARX_EXTREME_CHEAP_MAX = 0.25
 _VIDARX_BALANCED_RICH_MIN = 0.52
-_VIDARX_BALANCED_RICH_MAX = 0.67
-_VIDARX_BALANCED_CHEAP_MIN = 0.33
+_VIDARX_BALANCED_RICH_MAX = 0.72
+_VIDARX_BALANCED_CHEAP_MIN = 0.28
 _VIDARX_BALANCED_CHEAP_MAX = 0.48
-_VIDARX_EARLY_MID_END = 110
-_VIDARX_MID_LATE_START = 150
+_VIDARX_EARLY_MID_END = 125
+_VIDARX_MID_LATE_START = 140
 _VIDARX_BUCKET_TOLERANCE = 0.015
 
 
@@ -1284,10 +1284,10 @@ class BTC5mStrategyService:
 
     def _vidarx_bucket_fill_cap(self, *, price_mode: str, timing_regime: str, role: str) -> int:
         if price_mode == "extreme":
-            return 4 if timing_regime == "mid-late" or role == "primary" else 3
+            return 6 if timing_regime == "mid-late" or role == "primary" else 4
         if price_mode == "tilted":
-            return 3 if role == "primary" else 2
-        return 2
+            return 5 if role == "primary" else 3
+        return 4 if role == "primary" else 3
 
     def _remember_missing_midpoint(self, asset: str) -> None:
         state_key = self._missing_midpoint_state_key(asset)

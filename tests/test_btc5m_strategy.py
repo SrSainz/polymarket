@@ -448,12 +448,12 @@ def test_vidarx_micro_builds_dual_leg_plan_in_paper(tmp_path: Path) -> None:
     clob = _FakeCLOBClient(
         books={
             "asset-up": {
-                "bids": [{"price": "0.63"}],
-                "asks": [{"price": "0.67", "size": "1000"}],
+                "bids": [{"price": "0.58"}],
+                "asks": [{"price": "0.60", "size": "1000"}],
             },
             "asset-down": {
-                "bids": [{"price": "0.29"}],
-                "asks": [{"price": "0.33", "size": "1000"}],
+                "bids": [{"price": "0.38"}],
+                "asks": [{"price": "0.40", "size": "1000"}],
             },
         },
         balance=30.0,
