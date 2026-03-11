@@ -31,7 +31,7 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     )
     PaperBroker(db).execute(instruction)
     db.set_bot_state("live_cash_balance", "12.34")
-    db.set_bot_state("live_cash_allowance", "12.34")
+    db.set_bot_state("live_cash_allowance", "10.01")
     db.set_bot_state("live_total_capital", "18.56")
     db.set_bot_state("strategy_mode", "btc5m_orderbook")
     db.set_bot_state("strategy_entry_mode", "buy_opposite")
@@ -53,7 +53,9 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     assert "live_executions_today" in summary
     assert "live_realized_pnl_today" in summary
     assert summary["live_cash_balance"] == 12.34
+    assert summary["live_available_to_trade"] == 10.01
     assert summary["live_total_capital"] == 18.56
+    assert summary["live_equity_estimate"] == 17.34
     assert summary["strategy_mode"] == "btc5m_orderbook"
     assert summary["strategy_entry_mode"] == "buy_opposite"
     assert summary["strategy_target_outcome"] == "Down"

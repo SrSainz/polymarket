@@ -272,6 +272,11 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
 
     pnl_total = realized_pnl + unrealized_pnl
     live_mode_active = execution_mode == "live" and live_trading_enabled
+    live_available_to_trade = _available_to_trade(
+        live_cash_balance=live_cash_balance,
+        live_cash_allowance=live_cash_allowance,
+    )
+    live_equity_estimate = live_cash_balance + exposure_mark
 
     return {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -295,6 +300,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "live_cash_balance": round(live_cash_balance, 4),
         "live_cash_allowance": round(live_cash_allowance, 4),
         "live_total_capital": round(live_total_capital, 4),
+        "live_available_to_trade": round(live_available_to_trade, 4),
+        "live_equity_estimate": round(live_equity_estimate, 4),
         "live_balance_updated_at": int(live_balance_updated_at),
         "strategy_mode": strategy_mode,
         "strategy_entry_mode": strategy_entry_mode,
@@ -516,6 +523,14 @@ def _safe_int(raw: str, default: int, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(minimum, min(maximum, value))
+
+
+def _available_to_trade(*, live_cash_balance: float, live_cash_allowance: float) -> float:
+    balance = max(float(live_cash_balance or 0.0), 0.0)
+    allowance = max(float(live_cash_allowance or 0.0), 0.0)
+    if allowance <= 0:
+        return balance
+    return min(balance, allowance)
 
 
 def _midpoint_for_asset(*, clob_host: str, asset: str) -> float | None:

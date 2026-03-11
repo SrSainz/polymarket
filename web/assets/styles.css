@@ -298,6 +298,14 @@ button:disabled {
   line-height: 1;
 }
 
+.hero-stat-meta {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-family: "IBM Plex Mono", monospace;
+}
+
 .section-nav {
   display: flex;
   gap: 8px;

@@ -204,11 +204,15 @@ function paintSummary(summary) {
 
   document.getElementById("pendingSignals").textContent = String(summary.pending_signals ?? "-");
   const liveCashBalance = Number(summary.live_cash_balance ?? 0);
-  const liveTotalCapital = Number(summary.live_total_capital ?? 0);
+  const liveAvailableToTrade = Number(summary.live_available_to_trade ?? liveCashBalance);
+  const liveEquityEstimate = Number(summary.live_equity_estimate ?? summary.live_total_capital ?? liveCashBalance);
+  const liveBalanceUpdatedAt = Number(summary.live_balance_updated_at ?? 0);
+  const liveSnapshotText = liveBalanceUpdatedAt > 0 ? tsToIso(liveBalanceUpdatedAt) : "sin snapshot";
   document.getElementById("liveCashBalance").textContent = fmtUsdPlain(liveCashBalance, 2);
   document.getElementById("liveCashMeta").textContent =
-    `equity ${fmtUsdPlain(liveTotalCapital, 2)} | allowance ${fmtUsdPlain(Number(summary.live_cash_allowance ?? 0), 2)}`;
-  document.getElementById("heroCashBalance").textContent = fmtUsdPlain(liveCashBalance, 2);
+    `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | equity bot ${fmtUsdPlain(liveEquityEstimate, 2)} | snapshot ${liveSnapshotText}`;
+  document.getElementById("heroCashBalance").textContent = fmtUsdPlain(liveAvailableToTrade, 2);
+  document.getElementById("heroCashMeta").textContent = `saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
@@ -236,6 +240,7 @@ function paintSummary(summary) {
     strategyOutcome ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)}` : "-";
   document.getElementById("heroTriggerSeen").textContent =
     triggerOutcome ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}` : "-";
+  document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
 
   const modeText =
@@ -252,7 +257,7 @@ function paintSummary(summary) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   const strategyNoteText = strategyNote || "sin trigger";
   document.getElementById("systemNotice").textContent =
-    `Modo ${tradingModeLabel(summary)}. Caja ${fmtUsdPlain(liveCashBalance, 2)}, equity ${fmtUsdPlain(liveTotalCapital, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
+    `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 }
 
 function paintSelectedWallets(items) {
