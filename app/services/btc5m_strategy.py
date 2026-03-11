@@ -43,9 +43,9 @@ _VIDARX_EARLY_MID_END = 125
 _VIDARX_MID_LATE_START = 140
 _VIDARX_BUCKET_TOLERANCE = 0.015
 _VIDARX_MAX_DRAWDOWN_PCT = 0.25
-_VIDARX_BALANCED_CYCLE_FRACTION = 0.04
-_VIDARX_TILTED_CYCLE_FRACTION = 0.06
-_VIDARX_EXTREME_CYCLE_FRACTION = 0.08
+_VIDARX_BALANCED_CYCLE_FRACTION = 0.025
+_VIDARX_TILTED_CYCLE_FRACTION = 0.035
+_VIDARX_EXTREME_CYCLE_FRACTION = 0.05
 _VIDARX_SETUP_DISABLE_MIN_WINDOWS = 4
 _VIDARX_SETUP_DISABLE_MAX_WIN_RATE = 0.50
 
@@ -1052,9 +1052,9 @@ class BTC5mStrategyService:
             desired = max(desired, self.settings.config.min_trade_amount)
 
         if timing_regime == "early-mid":
-            desired *= 0.85
-        elif timing_regime == "second-wave":
-            desired *= 1.20
+            desired *= 0.80
+        elif timing_regime == "mid-late":
+            desired *= 0.90
         else:
             desired *= 1.0
 
@@ -1081,8 +1081,6 @@ class BTC5mStrategyService:
         budget_left = max(cash_balance, 0.0)
         desired = min(desired, budget_left)
         desired = min(desired, max(effective_bankroll - current_total_exposure, 0.0))
-        if timing_regime == "second-wave" and existing_market_notional > 0:
-            desired = max(desired, min(existing_market_notional * 0.35, budget_left, effective_bankroll * cycle_fraction))
         return max(desired, 0.0)
 
     def _vidarx_cycle_fraction(self, *, price_mode: str, timing_regime: str) -> float:
@@ -1092,9 +1090,7 @@ class BTC5mStrategyService:
             fraction = _VIDARX_TILTED_CYCLE_FRACTION
         else:
             fraction = _VIDARX_BALANCED_CYCLE_FRACTION
-        if timing_regime == "second-wave":
-            fraction += 0.01
-        elif timing_regime == "mid-late":
+        if timing_regime == "mid-late":
             fraction += 0.005
         return fraction
 
@@ -1422,7 +1418,7 @@ class BTC5mStrategyService:
         if _VIDARX_MIN_SECONDS <= seconds_into_window <= _VIDARX_EARLY_MID_END:
             return "early-mid", ""
         if has_existing_market_exposure and (_VIDARX_EARLY_MID_END < seconds_into_window <= _VIDARX_MAX_SECONDS):
-            return "second-wave", ""
+            return None, f"vidarx segunda oleada desactivada: {seconds_into_window}s con posicion ya abierta"
         if _VIDARX_MID_LATE_START <= seconds_into_window <= _VIDARX_MAX_SECONDS:
             return "mid-late", ""
         if seconds_into_window < _VIDARX_MIN_SECONDS:

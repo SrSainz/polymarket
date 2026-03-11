@@ -644,7 +644,7 @@ def test_vidarx_micro_uses_real_price_ladder_levels(tmp_path: Path) -> None:
     db.close()
 
 
-def test_vidarx_micro_replenishes_same_price_bucket(tmp_path: Path) -> None:
+def test_vidarx_micro_does_not_reenter_same_market_after_initial_wave(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=170)).isoformat().replace("+00:00", "Z")
@@ -693,9 +693,10 @@ def test_vidarx_micro_replenishes_same_price_bucket(tmp_path: Path) -> None:
 
     assert first_stats["filled"] >= 2
     assert first_replenishment_count == 0
-    assert second_stats["filled"] >= 1
-    assert second_replenishment_count >= 1
-    assert second_exposure > first_exposure
+    assert second_stats["filled"] == 0
+    assert second_replenishment_count == 0
+    assert second_exposure == first_exposure
+    assert "segunda oleada desactivada" in (db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -748,9 +749,10 @@ def test_vidarx_micro_initial_ladder_does_not_count_as_replenishment(tmp_path: P
 
     assert first_stats["filled"] >= 2
     assert first_replenishment_count == 0
-    assert second_stats["filled"] >= 1
-    assert second_replenishment_count >= 1
-    assert second_exposure > first_exposure
+    assert second_stats["filled"] == 0
+    assert second_replenishment_count == 0
+    assert second_exposure == first_exposure
+    assert "segunda oleada desactivada" in (db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -788,7 +790,7 @@ def test_vidarx_micro_cycle_budget_ignores_market_cap_setting(tmp_path: Path) ->
     db.close()
 
 
-def test_vidarx_micro_uses_second_wave_when_market_already_open(tmp_path: Path) -> None:
+def test_vidarx_micro_disables_second_wave_when_market_already_open(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=133)).isoformat().replace("+00:00", "Z")
@@ -854,9 +856,8 @@ def test_vidarx_micro_uses_second_wave_when_market_already_open(tmp_path: Path) 
         current_total_exposure=db.get_total_exposure(),
     )
 
-    assert plan is not None
-    assert plan.timing_regime == "second-wave"
-    assert len(plan.instructions) >= 1
+    assert plan is None
+    assert "segunda oleada desactivada" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
