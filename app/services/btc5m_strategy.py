@@ -650,6 +650,9 @@ class BTC5mStrategyService:
         rich_spread = max(rich_side.best_ask - rich_side.best_bid, 0.0)
         cheap_spread = max(cheap_side.best_ask - cheap_side.best_bid, 0.0)
         seconds_into_window = self._seconds_into_window(market)
+        condition_id = str(market.get("conditionId") or "")
+        existing_market_notional = self._get_condition_exposure(condition_id)
+        has_existing_market_exposure = existing_market_notional >= self.settings.config.min_trade_amount
         price_mode, primary_ratio = self._classify_vidarx_market(rich_side=rich_side, cheap_side=cheap_side)
         if not price_mode:
             self._record_strategy_snapshot(
@@ -669,6 +672,7 @@ class BTC5mStrategyService:
         timing_regime, timing_note = self._select_vidarx_timing_regime(
             seconds_into_window=seconds_into_window,
             price_mode=price_mode,
+            has_existing_market_exposure=has_existing_market_exposure,
         )
         if timing_regime is None:
             self._record_strategy_snapshot(
@@ -731,6 +735,7 @@ class BTC5mStrategyService:
             cash_balance=cash_balance,
             effective_bankroll=effective_bankroll,
             current_total_exposure=current_total_exposure,
+            existing_market_notional=existing_market_notional,
             timing_regime=timing_regime,
             price_mode=price_mode,
         )
@@ -746,8 +751,6 @@ class BTC5mStrategyService:
             )
             return None
 
-        condition_id = str(market.get("conditionId") or "")
-        existing_market_notional = self._get_condition_exposure(condition_id)
         cycle_budget = min(cycle_budget, cash_balance)
         if cycle_budget < self.settings.config.min_trade_amount:
             self._record_strategy_snapshot(
@@ -872,7 +875,7 @@ class BTC5mStrategyService:
             else f"{primary_target.label} en solitario"
         )
         note = (
-            f"{market_bias} | {timing_regime} | banda {price_mode} | "
+            f"{market_bias} | {self._vidarx_timing_label(timing_regime)} | banda {price_mode} | "
             f"mercado {seconds_into_window}s | compras {len(instructions)}"
         )
         return StrategyPlan(
@@ -891,6 +894,11 @@ class BTC5mStrategyService:
             secondary_notional=hedge_notional,
             replenishment_count=replenishment_count,
         )
+
+    def _vidarx_timing_label(self, timing_regime: str) -> str:
+        if timing_regime == "second-wave":
+            return "segunda oleada"
+        return timing_regime
 
     def _build_instruction(
         self,
@@ -975,6 +983,7 @@ class BTC5mStrategyService:
         cash_balance: float,
         effective_bankroll: float,
         current_total_exposure: float,
+        existing_market_notional: float,
         timing_regime: str,
         price_mode: str,
     ) -> float:
@@ -990,6 +999,8 @@ class BTC5mStrategyService:
 
         if timing_regime == "early-mid":
             desired *= 0.85
+        elif timing_regime == "second-wave":
+            desired *= 1.20
         else:
             desired *= 1.0
 
@@ -1003,7 +1014,8 @@ class BTC5mStrategyService:
         budget_left = max(cash_balance, 0.0)
         desired = min(desired, budget_left)
         desired = min(desired, max(effective_bankroll - current_total_exposure, 0.0))
-        desired = min(desired, self.settings.config.max_position_per_market)
+        if timing_regime == "second-wave" and existing_market_notional > 0:
+            desired = max(desired, min(existing_market_notional * 0.75, budget_left))
         return max(desired, 0.0)
 
     def _live_cash_snapshot(self, *, mode: str) -> tuple[float, float]:
@@ -1276,9 +1288,17 @@ class BTC5mStrategyService:
             return "balanced", 0.55
         return None, 0.0
 
-    def _select_vidarx_timing_regime(self, *, seconds_into_window: int, price_mode: str) -> tuple[str | None, str]:
+    def _select_vidarx_timing_regime(
+        self,
+        *,
+        seconds_into_window: int,
+        price_mode: str,
+        has_existing_market_exposure: bool,
+    ) -> tuple[str | None, str]:
         if _VIDARX_MIN_SECONDS <= seconds_into_window <= _VIDARX_EARLY_MID_END:
             return "early-mid", ""
+        if has_existing_market_exposure and (_VIDARX_EARLY_MID_END < seconds_into_window <= _VIDARX_MAX_SECONDS):
+            return "second-wave", ""
         if _VIDARX_MID_LATE_START <= seconds_into_window <= _VIDARX_MAX_SECONDS:
             return "mid-late", ""
         if seconds_into_window < _VIDARX_MIN_SECONDS:

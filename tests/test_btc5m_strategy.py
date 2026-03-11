@@ -754,6 +754,112 @@ def test_vidarx_micro_initial_ladder_does_not_count_as_replenishment(tmp_path: P
     db.close()
 
 
+def test_vidarx_micro_cycle_budget_ignores_market_cap_setting(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="vidarx_micro",
+            bankroll=100.0,
+            strategy_trade_allocation_pct=0.20,
+            max_position_per_market=1.0,
+        ),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    budget = service._target_vidarx_cycle_budget(
+        cash_balance=100.0,
+        effective_bankroll=100.0,
+        current_total_exposure=0.0,
+        existing_market_notional=0.0,
+        timing_regime="mid-late",
+        price_mode="extreme",
+    )
+
+    assert budget > 1.0
+    db.close()
+
+
+def test_vidarx_micro_uses_second_wave_when_market_already_open(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=133)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Second Wave",
+        "slug": "btc-updown-5m-wave",
+        "conditionId": "cond-wave",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    db.upsert_copy_position(
+        asset="asset-up",
+        condition_id="cond-wave",
+        size=8.0,
+        avg_price=0.8,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Second Wave",
+        slug="btc-updown-5m-wave",
+        outcome="Up",
+        category="crypto",
+    )
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.79"}],
+                "asks": [
+                    {"price": "0.77", "size": "20"},
+                    {"price": "0.79", "size": "20"},
+                    {"price": "0.81", "size": "20"},
+                ],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.17"}],
+                "asks": [
+                    {"price": "0.17", "size": "20"},
+                    {"price": "0.19", "size": "20"},
+                    {"price": "0.21", "size": "20"},
+                ],
+            },
+        },
+        balance=100.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=100.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    plan = service._build_vidarx_plan(
+        market=market,
+        cash_balance=92.0,
+        effective_bankroll=100.0,
+        current_total_exposure=db.get_total_exposure(),
+    )
+
+    assert plan is not None
+    assert plan.timing_regime == "second-wave"
+    assert len(plan.instructions) >= 1
+    db.close()
+
+
 def test_vidarx_micro_stops_after_25pct_drawdown(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
