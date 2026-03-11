@@ -133,7 +133,42 @@ def _extract_balance_value(payload: object, key: str) -> float:
         raw_value = payload.get(key)
     else:
         raw_value = getattr(payload, key, None)
+    return _normalize_usdc_balance(raw_value)
+
+
+def _normalize_usdc_balance(raw_value: object) -> float:
+    if raw_value is None:
+        return 0.0
+
+    if isinstance(raw_value, bool):
+        return 0.0
+
+    if isinstance(raw_value, int):
+        return raw_value / 1_000_000
+
+    if isinstance(raw_value, float):
+        if raw_value >= 100_000 and raw_value.is_integer():
+            return raw_value / 1_000_000
+        return raw_value
+
+    if isinstance(raw_value, str):
+        cleaned = raw_value.strip()
+        if not cleaned:
+            return 0.0
+        if cleaned.isdigit():
+            return int(cleaned) / 1_000_000
+        try:
+            parsed = float(cleaned)
+        except ValueError:
+            return 0.0
+        if parsed >= 100_000 and "." not in cleaned and "e" not in cleaned.lower():
+            return parsed / 1_000_000
+        return parsed
+
     try:
-        return float(raw_value or 0.0)
+        parsed = float(raw_value)
     except (TypeError, ValueError):
         return 0.0
+    if parsed >= 100_000 and parsed.is_integer():
+        return parsed / 1_000_000
+    return parsed
