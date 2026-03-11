@@ -81,11 +81,12 @@ autonomous_depreciation_window_minutes: 45
 autonomous_depreciation_threshold_pct: 0.03
 autonomous_reduce_fraction: 0.50
 autonomous_cooldown_minutes: 30
-manual_confirmation_enabled: true
+manual_confirmation_enabled: false
 confirmation_start_hour: 8
 confirmation_end_hour: 20
 confirmation_timeout_minutes: 30
 confirmation_timezone: "Europe/Madrid"
+telegram_execution_notifications_enabled: true
 telegram_daily_summary_enabled: true
 telegram_daily_summary_hour: 20
 telegram_daily_summary_timezone: "Europe/Madrid"

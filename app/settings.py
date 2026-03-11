@@ -111,6 +111,7 @@ class BotConfig(BaseModel):
     confirmation_end_hour: int = 20
     confirmation_timeout_minutes: int = 30
     confirmation_timezone: str = "Europe/Madrid"
+    telegram_execution_notifications_enabled: bool = True
     telegram_daily_summary_enabled: bool = True
     telegram_daily_summary_hour: int = 20
     telegram_daily_summary_timezone: str = "Europe/Madrid"

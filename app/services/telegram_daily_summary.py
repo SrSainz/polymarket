@@ -56,8 +56,9 @@ class TelegramDailySummaryService:
         open_positions = len(self.db.list_copy_positions())
         exposure = self.db.get_total_exposure()
 
+        mode_label = "live" if self.env.live_trading and self.config.execution_mode == "live" else "paper"
         text = (
-            "Resumen diario paper trading\n"
+            f"Resumen diario {mode_label}\n"
             f"Fecha UTC: {today_utc}\n"
             f"PnL neto: ${daily_pnl:.2f}\n"
             f"Ganancias brutas: ${gross_profit:.2f}\n"

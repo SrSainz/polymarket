@@ -15,6 +15,7 @@ from app.models import SignalAction
 from app.polymarket.clob_client import CLOBClient
 from app.services.manual_approval import ManualApprovalService
 from app.services.telegram_daily_summary import TelegramDailySummaryService
+from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.settings import AppSettings
 
 
@@ -40,6 +41,7 @@ class ExecuteCopyService:
         autonomous_decider: AutonomousDecider,
         manual_approval: ManualApprovalService,
         daily_summary: TelegramDailySummaryService,
+        trade_notifier: TelegramTradeNotifierService,
         settings: AppSettings,
         logger: logging.Logger,
     ) -> None:
@@ -51,6 +53,7 @@ class ExecuteCopyService:
         self.autonomous_decider = autonomous_decider
         self.manual_approval = manual_approval
         self.daily_summary = daily_summary
+        self.trade_notifier = trade_notifier
         self.settings = settings
         self.logger = logger
 
@@ -133,6 +136,8 @@ class ExecuteCopyService:
 
                 result = self._execute_instruction(mode=mode, instruction=instruction)
                 self.db.mark_signal_status(signal.id or 0, "executed", result.message)
+                if mode == "live":
+                    self.trade_notifier.send_realized_result(instruction=instruction, result=result)
                 if result.status == "filled":
                     stats["filled"] += 1
                 else:
@@ -276,6 +281,8 @@ class ExecuteCopyService:
                     continue
 
                 result = self._execute_instruction(mode=mode, instruction=instruction)
+                if mode == "live":
+                    self.trade_notifier.send_realized_result(instruction=instruction, result=result)
                 if result.status == "filled":
                     stats["auto_filled"] += 1
                     self.logger.info("autonomous fill asset=%s reason=%s", asset, instruction.reason)
@@ -299,6 +306,8 @@ class ExecuteCopyService:
 
             try:
                 result = self._execute_instruction(mode=mode, instruction=instruction)
+                if mode == "live":
+                    self.trade_notifier.send_realized_result(instruction=instruction, result=result)
                 if result.status == "filled":
                     if source_signal_id > 0:
                         self.db.mark_signal_status(source_signal_id, "executed", result.message)

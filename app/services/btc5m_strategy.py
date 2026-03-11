@@ -9,10 +9,13 @@ from decimal import Decimal, ROUND_DOWN
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
 from app.core.risk import RiskManager
+from app.core.autonomous_decider import AutonomousDecider
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.clob_client import CLOBClient
 from app.polymarket.gamma_client import GammaClient
+from app.services.telegram_daily_summary import TelegramDailySummaryService
+from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.settings import AppSettings
 
 
@@ -45,6 +48,9 @@ class BTC5mStrategyService:
         clob_client: CLOBClient,
         paper_broker: PaperBroker,
         live_broker: LiveBroker,
+        autonomous_decider: AutonomousDecider,
+        daily_summary: TelegramDailySummaryService,
+        trade_notifier: TelegramTradeNotifierService,
         settings: AppSettings,
         logger: logging.Logger,
     ) -> None:
@@ -53,6 +59,9 @@ class BTC5mStrategyService:
         self.clob_client = clob_client
         self.paper_broker = paper_broker
         self.live_broker = live_broker
+        self.autonomous_decider = autonomous_decider
+        self.daily_summary = daily_summary
+        self.trade_notifier = trade_notifier
         self.settings = settings
         self.logger = logger
         self.risk = RiskManager(settings.config)
@@ -79,12 +88,16 @@ class BTC5mStrategyService:
 
         market = self._discover_market()
         if market is None:
+            self._run_autonomous_exits(mode=mode, stats=stats)
+            self.daily_summary.send_if_due()
             stats["skipped"] += 1
             self._record_strategy_snapshot(note="no active btc5m market")
             return stats
 
         opportunity = self._build_opportunity(market)
         if opportunity is None:
+            self._run_autonomous_exits(mode=mode, stats=stats)
+            self.daily_summary.send_if_due()
             stats["skipped"] += 1
             return stats
 
@@ -103,6 +116,8 @@ class BTC5mStrategyService:
                 opportunity=opportunity,
                 note="strategy_max_open_positions reached",
             )
+            self._run_autonomous_exits(mode=mode, stats=stats)
+            self.daily_summary.send_if_due()
             return stats
 
         if self._has_condition_conflict(opportunity.condition_id):
@@ -112,6 +127,8 @@ class BTC5mStrategyService:
                 opportunity=opportunity,
                 note="condition already open",
             )
+            self._run_autonomous_exits(mode=mode, stats=stats)
+            self.daily_summary.send_if_due()
             return stats
 
         try:
@@ -129,6 +146,8 @@ class BTC5mStrategyService:
                 opportunity=opportunity,
                 note=str(error),
             )
+            self._run_autonomous_exits(mode=mode, stats=stats)
+            self.daily_summary.send_if_due()
             return stats
 
         try:
@@ -141,6 +160,8 @@ class BTC5mStrategyService:
                 note=f"execution failed: {error}",
             )
             self.logger.exception("btc5m strategy execution failed: %s", error)
+            self._run_autonomous_exits(mode=mode, stats=stats)
+            self.daily_summary.send_if_due()
             return stats
 
         if result.status == "filled":
@@ -150,6 +171,8 @@ class BTC5mStrategyService:
                 opportunity=opportunity,
                 note=f"filled {instruction.side.value} {instruction.outcome} @ {instruction.price:.3f}",
             )
+            if mode == "live":
+                self.trade_notifier.send_realized_result(instruction=instruction, result=result)
         else:
             stats["skipped"] += 1
             self._record_strategy_snapshot(
@@ -157,6 +180,8 @@ class BTC5mStrategyService:
                 opportunity=opportunity,
                 note=result.message or "not filled",
             )
+        self._run_autonomous_exits(mode=mode, stats=stats)
+        self.daily_summary.send_if_due()
         return stats
 
     def _discover_market(self) -> dict | None:
@@ -434,6 +459,43 @@ class BTC5mStrategyService:
         if mode == "live":
             return self.live_broker.execute(instruction)
         return self.paper_broker.execute(instruction)
+
+    def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:
+        positions = self.db.list_copy_positions()
+        for position in positions:
+            asset = str(position["asset"])
+            avg_price = float(position["avg_price"])
+            size = float(position["size"])
+            if size <= 0:
+                continue
+
+            mark_price = self.clob_client.get_midpoint(asset) or avg_price
+            self.db.record_position_mark(asset, mark_price)
+
+            instruction = self.autonomous_decider.build_exit_instruction(
+                asset=asset,
+                condition_id=str(position["condition_id"]),
+                size=size,
+                avg_price=avg_price,
+                mark_price=mark_price,
+                title=str(position["title"] or ""),
+                slug=str(position["slug"] or ""),
+                outcome=str(position["outcome"] or ""),
+                category=str(position["category"] or ""),
+            )
+            if instruction is None:
+                continue
+
+            stats["opportunities"] += 1
+            try:
+                result = self._execute_instruction(mode=mode, instruction=instruction)
+                if mode == "live":
+                    self.trade_notifier.send_realized_result(instruction=instruction, result=result)
+                if result.status == "filled":
+                    stats["filled"] += 1
+            except Exception as error:  # noqa: BLE001
+                stats["failed"] += 1
+                self.logger.exception("btc5m autonomous exit failed asset=%s: %s", asset, error)
 
 
 def _parse_json_list(raw_value: object) -> list[str]:

@@ -112,6 +112,9 @@ def test_strategy_buy_opposite_uses_cheap_side_and_records_balance(tmp_path: Pat
         clob,
         paper_broker=SimpleNamespace(execute=lambda instruction: None),
         live_broker=broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
         settings=_settings(),
         logger=logging.getLogger("test-btc5m-strategy"),
     )
@@ -161,6 +164,9 @@ def test_strategy_skips_when_opposite_side_is_too_expensive(tmp_path: Path) -> N
         clob,
         paper_broker=SimpleNamespace(execute=lambda instruction: None),
         live_broker=broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
         settings=_settings(),
         logger=logging.getLogger("test-btc5m-strategy"),
     )

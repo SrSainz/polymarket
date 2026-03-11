@@ -27,6 +27,7 @@ from app.services.manual_approval import ManualApprovalService
 from app.services.report import ReportService
 from app.services.sync_wallets import SyncWalletsService
 from app.services.telegram_daily_summary import TelegramDailySummaryService
+from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.settings import AppSettings, load_settings
 
 
@@ -55,6 +56,7 @@ def build_context(
     autonomous_decider = AutonomousDecider(settings.config, db)
     manual_approval = ManualApprovalService(db, settings.config, settings.env, logger)
     daily_summary = TelegramDailySummaryService(db, settings.config, settings.env, logger)
+    trade_notifier = TelegramTradeNotifierService(settings.config, settings.env, logger)
 
     paper_broker = PaperBroker(db)
     live_broker = LiveBroker(db, clob_client, settings.env)
@@ -67,6 +69,7 @@ def build_context(
         autonomous_decider,
         manual_approval,
         daily_summary,
+        trade_notifier,
         settings,
         logger,
     )
@@ -76,6 +79,9 @@ def build_context(
         clob_client,
         paper_broker,
         live_broker,
+        autonomous_decider,
+        daily_summary,
+        trade_notifier,
         settings,
         logger,
     )
