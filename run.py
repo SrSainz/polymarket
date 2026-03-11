@@ -21,6 +21,7 @@ from app.polymarket.clob_client import CLOBClient
 from app.polymarket.gamma_client import GammaClient
 from app.services.detect_changes import DetectChangesService
 from app.services.dashboard_server import run_dashboard_server
+from app.services.btc5m_strategy import BTC5mStrategyService
 from app.services.execute_copy import ExecuteCopyService
 from app.services.manual_approval import ManualApprovalService
 from app.services.report import ReportService
@@ -29,7 +30,9 @@ from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.settings import AppSettings, load_settings
 
 
-def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsService, ExecuteCopyService, ReportService]:
+def build_context(
+    root_dir: Path,
+) -> tuple[AppSettings, Database, SyncWalletsService, ExecuteCopyService, BTC5mStrategyService, ReportService]:
     settings = load_settings(root_dir)
     logger = setup_logger(settings.paths.logs_dir, settings.env.log_level)
 
@@ -67,9 +70,18 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, SyncWalletsSer
         settings,
         logger,
     )
+    strategy_service = BTC5mStrategyService(
+        db,
+        gamma_client,
+        clob_client,
+        paper_broker,
+        live_broker,
+        settings,
+        logger,
+    )
 
     report_service = ReportService(db, settings.paths.reports_dir)
-    return settings, db, sync_service, execute_service, report_service
+    return settings, db, sync_service, execute_service, strategy_service, report_service
 
 
 def run_once(sync_service: SyncWalletsService, execute_service: ExecuteCopyService, mode: str) -> None:
@@ -96,6 +108,16 @@ def run_once(sync_service: SyncWalletsService, execute_service: ExecuteCopyServi
     )
 
 
+def run_strategy_once(strategy_service: BTC5mStrategyService, mode: str) -> None:
+    exec_stats = strategy_service.run(mode=mode)
+    print(
+        "strategy => "
+        f"pending={exec_stats['pending']} filled={exec_stats['filled']} "
+        f"blocked={exec_stats['blocked']} skipped={exec_stats['skipped']} failed={exec_stats['failed']} "
+        f"opportunities={exec_stats.get('opportunities', 0)}"
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Polymarket copy trading bot")
     parser.add_argument(
@@ -110,10 +132,13 @@ def main() -> int:
     args = parse_args()
     root_dir = Path(__file__).resolve().parent
 
-    settings, db, sync_service, execute_service, report_service = build_context(root_dir)
+    settings, db, sync_service, execute_service, strategy_service, report_service = build_context(root_dir)
 
     try:
         if args.command == "sync":
+            if settings.config.strategy_mode == "btc5m_orderbook":
+                print("sync => strategy_mode=btc5m_orderbook (wallet sync disabled)")
+                return 0
             stats = sync_service.run()
             print(
                 "sync => "
@@ -147,7 +172,10 @@ def main() -> int:
             if mode == "live" and not settings.env.live_trading:
                 print("execution_mode=live but LIVE_TRADING=false, falling back to paper")
                 mode = "paper"
-            run_once(sync_service, execute_service, mode)
+            if settings.config.strategy_mode == "btc5m_orderbook":
+                run_strategy_once(strategy_service, mode)
+            else:
+                run_once(sync_service, execute_service, mode)
             return 0
 
         if args.command == "live":
@@ -155,12 +183,18 @@ def main() -> int:
                 print("LIVE_TRADING=false in environment. Refusing to run live mode.")
                 return 1
             while True:
-                run_once(sync_service, execute_service, "live")
+                if settings.config.strategy_mode == "btc5m_orderbook":
+                    run_strategy_once(strategy_service, "live")
+                else:
+                    run_once(sync_service, execute_service, "live")
                 time.sleep(settings.config.polling_interval_seconds)
 
         if args.command == "paper":
             while True:
-                run_once(sync_service, execute_service, "paper")
+                if settings.config.strategy_mode == "btc5m_orderbook":
+                    run_strategy_once(strategy_service, "paper")
+                else:
+                    run_once(sync_service, execute_service, "paper")
                 time.sleep(settings.config.polling_interval_seconds)
 
     except KeyboardInterrupt:

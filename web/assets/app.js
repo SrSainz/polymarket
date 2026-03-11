@@ -66,6 +66,14 @@ function tradingModeLabel(summary) {
   return isLive ? "LIVE" : "PAPER";
 }
 
+function strategyLabel(summary) {
+  const mode = String(summary.strategy_mode || "").trim();
+  const entry = String(summary.strategy_entry_mode || "").trim();
+  if (!mode) return "-";
+  if (mode !== "btc5m_orderbook") return mode;
+  return `BTC5m / ${entry || "-"}`;
+}
+
 function setLiveBadge(summary) {
   const badge = document.getElementById("tradingBadge");
   if (!badge) return;
@@ -195,13 +203,39 @@ function paintSummary(summary) {
   setCardTone("pnl", pnlTotal);
 
   document.getElementById("pendingSignals").textContent = String(summary.pending_signals ?? "-");
-  document.getElementById("liveExecutionsToday").textContent = String(summary.live_executions_today ?? 0);
+  const liveCashBalance = Number(summary.live_cash_balance ?? 0);
+  const liveTotalCapital = Number(summary.live_total_capital ?? 0);
+  document.getElementById("liveCashBalance").textContent = fmtUsdPlain(liveCashBalance, 2);
+  document.getElementById("liveCashMeta").textContent =
+    `equity ${fmtUsdPlain(liveTotalCapital, 2)} | allowance ${fmtUsdPlain(Number(summary.live_cash_allowance ?? 0), 2)}`;
+  document.getElementById("heroCashBalance").textContent = fmtUsdPlain(liveCashBalance, 2);
+  const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
+  if (liveExecutionsTodayNode) {
+    liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
+  }
   const livePnlToday = Number(summary.live_realized_pnl_today ?? 0);
   const livePnlNode = document.getElementById("livePnlToday");
-  livePnlNode.textContent = fmtUsd(livePnlToday, 2);
-  livePnlNode.classList.remove("pnl-pos", "pnl-neg", "pnl-flat");
-  livePnlNode.classList.add(livePnlToday > 0 ? "pnl-pos" : livePnlToday < 0 ? "pnl-neg" : "pnl-flat");
-  document.getElementById("modeSummary").textContent = tradingModeLabel(summary);
+  if (livePnlNode) {
+    livePnlNode.textContent = fmtUsd(livePnlToday, 2);
+    livePnlNode.classList.remove("pnl-pos", "pnl-neg", "pnl-flat");
+    livePnlNode.classList.add(livePnlToday > 0 ? "pnl-pos" : livePnlToday < 0 ? "pnl-neg" : "pnl-flat");
+  }
+  document.getElementById("strategyModeCard").textContent = strategyLabel(summary);
+  const strategyTitle = String(summary.strategy_market_title || summary.strategy_market_slug || "sin setup");
+  const strategyOutcome = String(summary.strategy_target_outcome || "");
+  const strategyPrice = Number(summary.strategy_target_price || 0);
+  const triggerOutcome = String(summary.strategy_trigger_outcome || "");
+  const triggerPrice = Number(summary.strategy_trigger_price_seen || 0);
+  const strategyNote = String(summary.strategy_last_note || "");
+  document.getElementById("strategyCardMeta").textContent =
+    strategyOutcome
+      ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
+      : strategyNote || strategyTitle;
+  document.getElementById("strategyHeroTitle").textContent = strategyTitle;
+  document.getElementById("heroTargetOutcome").textContent =
+    strategyOutcome ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)}` : "-";
+  document.getElementById("heroTriggerSeen").textContent =
+    triggerOutcome ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}` : "-";
   setLiveBadge(summary);
 
   const modeText =
@@ -216,8 +250,9 @@ function paintSummary(summary) {
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const lastLiveExecution = Number(summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
+  const strategyNoteText = strategyNote || "sin trigger";
   document.getElementById("systemNotice").textContent =
-    `Modo ${tradingModeLabel(summary)}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}. Pendientes ${summary.pending_signals ?? 0}, fallidas ${summary.failed_signals ?? 0}, ultima live ${lastLiveText}.`;
+    `Modo ${tradingModeLabel(summary)}. Caja ${fmtUsdPlain(liveCashBalance, 2)}, equity ${fmtUsdPlain(liveTotalCapital, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 }
 
 function paintSelectedWallets(items) {
@@ -634,8 +669,6 @@ async function bootstrap() {
       ? "Copy Trading Monitor (Public API Fallback)"
       : "Copy Trading Monitor (Public API)";
   document.getElementById("runtimeBadge").textContent = modeLabel();
-  document.getElementById("modeSummary").textContent = modeLabel();
-
   const resetBtn = document.getElementById("resetBtn");
   if (runtimeMode !== "local") {
     resetBtn.disabled = true;

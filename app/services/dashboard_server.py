@@ -239,6 +239,21 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         last_live_execution_ts = _single_float(
             conn, "SELECT COALESCE(MAX(ts), 0) AS value FROM executions WHERE mode = 'live'"
         )
+        live_cash_balance = _bot_state_float(conn, "live_cash_balance")
+        live_cash_allowance = _bot_state_float(conn, "live_cash_allowance")
+        live_total_capital = _bot_state_float(conn, "live_total_capital")
+        live_balance_updated_at = _bot_state_int(conn, "live_balance_updated_at")
+        strategy_mode = _bot_state_text(conn, "strategy_mode")
+        strategy_entry_mode = _bot_state_text(conn, "strategy_entry_mode")
+        strategy_runtime_mode = _bot_state_text(conn, "strategy_runtime_mode")
+        strategy_market_slug = _bot_state_text(conn, "strategy_market_slug")
+        strategy_market_title = _bot_state_text(conn, "strategy_market_title")
+        strategy_target_outcome = _bot_state_text(conn, "strategy_target_outcome")
+        strategy_target_price = _bot_state_float(conn, "strategy_target_price")
+        strategy_trigger_outcome = _bot_state_text(conn, "strategy_trigger_outcome")
+        strategy_trigger_price_seen = _bot_state_float(conn, "strategy_trigger_price_seen")
+        strategy_last_note = _bot_state_text(conn, "strategy_last_note")
+        strategy_last_updated_at = _bot_state_int(conn, "strategy_last_updated_at")
         positions = conn.execute(
             "SELECT asset, size, avg_price FROM copy_positions"
         ).fetchall()
@@ -277,6 +292,21 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "live_executions_today": int(live_executions_today),
         "live_realized_pnl_today": round(live_realized_pnl_today, 4),
         "last_live_execution_ts": int(last_live_execution_ts),
+        "live_cash_balance": round(live_cash_balance, 4),
+        "live_cash_allowance": round(live_cash_allowance, 4),
+        "live_total_capital": round(live_total_capital, 4),
+        "live_balance_updated_at": int(live_balance_updated_at),
+        "strategy_mode": strategy_mode,
+        "strategy_entry_mode": strategy_entry_mode,
+        "strategy_runtime_mode": strategy_runtime_mode,
+        "strategy_market_slug": strategy_market_slug,
+        "strategy_market_title": strategy_market_title,
+        "strategy_target_outcome": strategy_target_outcome,
+        "strategy_target_price": round(strategy_target_price, 4),
+        "strategy_trigger_outcome": strategy_trigger_outcome,
+        "strategy_trigger_price_seen": round(strategy_trigger_price_seen, 4),
+        "strategy_last_note": strategy_last_note,
+        "strategy_last_updated_at": int(strategy_last_updated_at),
         "daily_realized_pnl": round(daily_realized_pnl, 4),
         "daily_profit_gross": round(daily_profit_gross, 4),
         "daily_loss_gross": round(daily_loss_gross, 4),
@@ -455,6 +485,29 @@ def _single_float(conn: sqlite3.Connection, query: str, params: tuple = ()) -> f
     if value is None:
         return 0.0
     return float(value)
+
+
+def _bot_state_text(conn: sqlite3.Connection, key: str) -> str:
+    row = conn.execute("SELECT value FROM bot_state WHERE key = ?", (key,)).fetchone()
+    if row is None or row["value"] is None:
+        return ""
+    return str(row["value"])
+
+
+def _bot_state_float(conn: sqlite3.Connection, key: str) -> float:
+    raw_value = _bot_state_text(conn, key)
+    try:
+        return float(raw_value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _bot_state_int(conn: sqlite3.Connection, key: str) -> int:
+    raw_value = _bot_state_text(conn, key)
+    try:
+        return int(float(raw_value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _safe_int(raw: str, default: int, minimum: int, maximum: int) -> int:

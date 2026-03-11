@@ -41,24 +41,24 @@
       <main class="layout">
         <section class="hero panel panel-hero" id="overviewSection">
           <div class="hero-copy">
-            <p class="hero-kicker">Estado actual</p>
-            <h2 class="hero-title">Vista rapida del bot, sin ruido y lista para movil.</h2>
+            <p class="hero-kicker">Estrategia activa</p>
+            <h2 class="hero-title" id="strategyHeroTitle">BTC5m orderbook, caja y trigger en primer plano.</h2>
             <p id="systemNotice" class="hero-text">
               El panel resume capital en riesgo, resultado total, wallets activas y las ultimas decisiones ejecutadas.
             </p>
           </div>
           <div class="hero-side">
             <article class="hero-stat">
-              <span class="hero-stat-label">Ops live hoy</span>
-              <strong id="liveExecutionsToday">-</strong>
+              <span class="hero-stat-label">Caja live</span>
+              <strong id="heroCashBalance">-</strong>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">PnL live hoy</span>
-              <strong id="livePnlToday">-</strong>
+              <span class="hero-stat-label">Objetivo actual</span>
+              <strong id="heroTargetOutcome">-</strong>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Modo</span>
-              <strong id="modeSummary">-</strong>
+              <span class="hero-stat-label">Trigger visto</span>
+              <strong id="heroTriggerSeen">-</strong>
             </article>
           </div>
         </section>
@@ -87,9 +87,19 @@
             <p class="card-subvalue" id="pnlBreakdown">realized - / unrealized -</p>
           </article>
           <article class="card">
+            <p class="card-label">Caja live</p>
+            <p class="card-value" id="liveCashBalance">-</p>
+            <p class="card-subvalue" id="liveCashMeta">equity -</p>
+          </article>
+          <article class="card">
             <p class="card-label">Senales pendientes</p>
             <p class="card-value" id="pendingSignals">-</p>
             <p class="card-subvalue">cola actual del motor</p>
+          </article>
+          <article class="card">
+            <p class="card-label">Estrategia</p>
+            <p class="card-value" id="strategyModeCard">-</p>
+            <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
           </article>
         </section>
 

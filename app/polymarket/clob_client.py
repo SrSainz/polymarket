@@ -55,6 +55,27 @@ class CLOBClient:
         payload = response.json()
         return payload if isinstance(payload, dict) else {}
 
+    def get_collateral_balance(self) -> dict[str, float]:
+        if not self.env.live_trading:
+            raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to fetch balances.")
+
+        client = build_authenticated_clob_client(self.env)
+
+        try:
+            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+        except ImportError as error:
+            raise RuntimeError("py-clob-client install is incomplete for balance queries.") from error
+
+        asset_type = getattr(AssetType, "COLLATERAL", "COLLATERAL")
+        params = _build_balance_params(BalanceAllowanceParams, asset_type)
+        if hasattr(client, "update_balance_allowance"):
+            client.update_balance_allowance(params)
+        response = client.get_balance_allowance(params)
+        return {
+            "balance": _extract_balance_value(response, "balance"),
+            "allowance": _extract_balance_value(response, "allowance"),
+        }
+
     def place_market_order(self, token_id: str, side: str, size: float, *, notional: float | None = None) -> dict[str, Any]:
         if not self.env.live_trading:
             raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to enable order placement.")
@@ -98,3 +119,21 @@ class CLOBClient:
         raise RuntimeError(
             "py-clob-client API mismatch. Expected create_market_order/post_order methods are unavailable."
         )
+
+
+def _build_balance_params(balance_params_cls, asset_type):  # noqa: ANN001
+    try:
+        return balance_params_cls(asset_type=asset_type)
+    except TypeError:
+        return {"asset_type": asset_type}
+
+
+def _extract_balance_value(payload: object, key: str) -> float:
+    if isinstance(payload, dict):
+        raw_value = payload.get(key)
+    else:
+        raw_value = getattr(payload, key, None)
+    try:
+        return float(raw_value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0

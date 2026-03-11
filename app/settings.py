@@ -41,6 +41,16 @@ class BotConfig(BaseModel):
     polling_interval_seconds: int = 45
     execution_mode: Literal["paper", "live"] = "paper"
     dry_run: bool = True
+    strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "copy_wallets"
+    strategy_entry_mode: Literal["buy_above", "buy_opposite"] = "buy_opposite"
+    strategy_trigger_price: float = 0.98
+    strategy_trade_allocation_pct: float = 0.10
+    strategy_fixed_trade_amount: float = 0.0
+    strategy_max_opposite_price: float = 0.25
+    strategy_max_target_spread: float = 0.03
+    strategy_max_open_positions: int = 1
+    strategy_min_seconds_into_window: int = 10
+    strategy_max_seconds_into_window: int = 240
 
     bankroll: float = 1000.0
     sizing_mode: Literal["fixed_amount_per_trade", "proportional_to_source"] = "proportional_to_source"
@@ -163,6 +173,24 @@ class BotConfig(BaseModel):
             raise ValueError("max_price must be between 0 and 1")
         if self.min_price > self.max_price:
             raise ValueError("min_price cannot be greater than max_price")
+        if self.strategy_trigger_price <= 0 or self.strategy_trigger_price > 1:
+            raise ValueError("strategy_trigger_price must be in (0, 1]")
+        if self.strategy_trade_allocation_pct <= 0 or self.strategy_trade_allocation_pct > 1:
+            raise ValueError("strategy_trade_allocation_pct must be in (0, 1]")
+        if self.strategy_fixed_trade_amount < 0:
+            raise ValueError("strategy_fixed_trade_amount must be >= 0")
+        if self.strategy_max_opposite_price <= 0 or self.strategy_max_opposite_price > 1:
+            raise ValueError("strategy_max_opposite_price must be in (0, 1]")
+        if self.strategy_max_target_spread < 0 or self.strategy_max_target_spread > 1:
+            raise ValueError("strategy_max_target_spread must be between 0 and 1")
+        if self.strategy_max_open_positions < 1:
+            raise ValueError("strategy_max_open_positions must be >= 1")
+        if self.strategy_min_seconds_into_window < 0:
+            raise ValueError("strategy_min_seconds_into_window must be >= 0")
+        if self.strategy_max_seconds_into_window < 1:
+            raise ValueError("strategy_max_seconds_into_window must be >= 1")
+        if self.strategy_min_seconds_into_window >= self.strategy_max_seconds_into_window:
+            raise ValueError("strategy_min_seconds_into_window must be lower than strategy_max_seconds_into_window")
         if self.expired_market_grace_hours < 0:
             raise ValueError("expired_market_grace_hours must be >= 0")
         if self.max_market_horizon_days < 1:
