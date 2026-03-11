@@ -18,9 +18,9 @@ from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.settings import AppSettings
 
-_OPERATIVE_TRIGGER_PRICE = 0.75
-_OPERATIVE_MAX_OPPOSITE_PRICE = 0.06
-_OPERATIVE_MAX_TARGET_SPREAD = 0.03
+_OPERATIVE_TRIGGER_PRICE = 0.85
+_OPERATIVE_MAX_OPPOSITE_PRICE = 0.15
+_OPERATIVE_MAX_TARGET_SPREAD = 0.04
 _OPERATIVE_MAX_SECONDS_INTO_WINDOW = 240
 
 
@@ -405,6 +405,8 @@ class BTC5mStrategyService:
             desired = cash_balance * self.settings.config.strategy_trade_allocation_pct
 
         budget_left = max(cash_balance, 0.0)
+        if desired < self.settings.config.min_trade_amount and budget_left >= self.settings.config.min_trade_amount:
+            desired = self.settings.config.min_trade_amount
         desired = min(desired, budget_left)
         desired = min(desired, self.settings.config.max_position_per_market)
         desired = min(desired, max(effective_bankroll - current_total_exposure, 0.0))

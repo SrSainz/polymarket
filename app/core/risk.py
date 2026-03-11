@@ -4,6 +4,8 @@ from app.core.market_classifier import is_btc5m_market, is_dynamic_market
 from app.models import CopyInstruction, TradeSide
 from app.settings import BotConfig
 
+_BTC5M_RELAXED_MIN_PRICE = 0.02
+
 
 class RiskManager:
     def __init__(self, config: BotConfig) -> None:
@@ -71,7 +73,11 @@ class RiskManager:
         btc5m_relaxed = market_is_btc5m and self.config.btc5m_relaxed_risk
 
         if instruction.side == TradeSide.BUY:
-            if instruction.price < self.config.min_price:
+            effective_min_price = self.config.min_price
+            if btc5m_relaxed:
+                effective_min_price = min(self.config.min_price, _BTC5M_RELAXED_MIN_PRICE)
+
+            if instruction.price < effective_min_price:
                 return False, "min_price filter"
 
             if instruction.price > self.config.max_price:
