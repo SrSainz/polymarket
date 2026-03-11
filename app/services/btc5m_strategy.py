@@ -42,6 +42,7 @@ _VIDARX_BALANCED_CHEAP_MAX = 0.48
 _VIDARX_EARLY_MID_END = 125
 _VIDARX_MID_LATE_START = 140
 _VIDARX_BUCKET_TOLERANCE = 0.015
+_VIDARX_MAX_DRAWDOWN_PCT = 0.25
 
 
 @dataclass(frozen=True)
@@ -319,6 +320,29 @@ class BTC5mStrategyService:
             total_exposure=total_exposure,
             live_total_capital=live_total_capital,
         )
+
+        drawdown_floor = self.settings.config.bankroll * (1.0 - _VIDARX_MAX_DRAWDOWN_PCT)
+        if live_total_capital <= drawdown_floor:
+            note = (
+                f"vidarx drawdown stop: capital {live_total_capital:.2f} <= "
+                f"{drawdown_floor:.2f} ({_VIDARX_MAX_DRAWDOWN_PCT:.0%} loss)"
+            )
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                note=note,
+                extra_state=self._vidarx_state_defaults(
+                    strategy_resolution_mode="paper-settle-at-close",
+                ),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
 
         market = self._discover_market()
         if market is None:
@@ -724,12 +748,11 @@ class BTC5mStrategyService:
 
         condition_id = str(market.get("conditionId") or "")
         existing_market_notional = self._get_condition_exposure(condition_id)
-        budget_cap = max(self.settings.config.max_position_per_market - existing_market_notional, 0.0)
-        cycle_budget = min(cycle_budget, budget_cap, cash_balance)
+        cycle_budget = min(cycle_budget, cash_balance)
         if cycle_budget < self.settings.config.min_trade_amount:
             self._record_strategy_snapshot(
                 market=market,
-                note="vidarx market cap exhausted",
+                note="vidarx bankroll exhausted",
                 extra_state=self._vidarx_state_defaults(
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_current_market_exposure=f"{existing_market_notional:.6f}",
@@ -807,6 +830,9 @@ class BTC5mStrategyService:
                     daily_profit_gross=self.db.get_daily_profit_gross(datetime.now(timezone.utc).date().isoformat()),
                     effective_bankroll=effective_bankroll,
                     reference_price=instruction.price,
+                    ignore_market_cap=True,
+                    ignore_total_exposure_cap=True,
+                    ignore_reserved_cap=True,
                 )
                 if not allowed:
                     rejection_reasons.append(reason)
@@ -1319,17 +1345,21 @@ class BTC5mStrategyService:
 
     def _vidarx_bucket_fill_cap(self, *, price_mode: str, timing_regime: str, role: str) -> int:
         if price_mode == "extreme":
-            return 6 if timing_regime == "mid-late" or role == "primary" else 4
+            if role == "primary":
+                return 10 if timing_regime == "mid-late" else 8
+            return 7 if timing_regime == "mid-late" else 5
         if price_mode == "tilted":
-            return 5 if role == "primary" else 3
-        return 4 if role == "primary" else 3
+            return 8 if role == "primary" else 5
+        return 5 if role == "primary" else 4
 
     def _vidarx_initial_level_cap(self, *, price_mode: str, timing_regime: str, role: str) -> int:
         if price_mode == "extreme":
-            return 4 if timing_regime == "mid-late" and role == "primary" else 3
+            if role == "primary":
+                return 6 if timing_regime == "mid-late" else 5
+            return 4 if timing_regime == "mid-late" else 3
         if price_mode == "tilted":
-            return 3 if role == "primary" else 2
-        return 2
+            return 5 if role == "primary" else 3
+        return 3 if role == "primary" else 2
 
     def _select_vidarx_entry_levels(
         self,
@@ -1424,11 +1454,19 @@ class BTC5mStrategyService:
             return [_round_down(budget, "0.01")]
 
         if price_mode == "extreme":
-            weights = [0.34, 0.28, 0.22, 0.16] if timing_regime == "mid-late" else [0.42, 0.33, 0.25]
+            weights = (
+                [0.24, 0.20, 0.17, 0.14, 0.11, 0.08, 0.06]
+                if timing_regime == "mid-late"
+                else [0.28, 0.23, 0.18, 0.14, 0.10, 0.07]
+            )
         elif price_mode == "tilted":
-            weights = [0.42, 0.32, 0.26] if timing_regime == "mid-late" else [0.55, 0.45]
+            weights = (
+                [0.28, 0.23, 0.19, 0.16, 0.14]
+                if timing_regime == "mid-late"
+                else [0.34, 0.26, 0.20, 0.12, 0.08]
+            )
         else:
-            weights = [0.56, 0.44]
+            weights = [0.42, 0.33, 0.25]
 
         if role == "hedge" and len(weights) > 1:
             weights = weights[:-1]

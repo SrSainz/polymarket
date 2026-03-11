@@ -717,19 +717,11 @@ def test_vidarx_micro_initial_ladder_does_not_count_as_replenishment(tmp_path: P
         books={
             "asset-up": {
                 "bids": [{"price": "0.79"}],
-                "asks": [
-                    {"price": "0.77", "size": "20"},
-                    {"price": "0.79", "size": "20"},
-                    {"price": "0.81", "size": "20"},
-                ],
+                "asks": [{"price": "0.81", "size": "1000"}],
             },
             "asset-down": {
                 "bids": [{"price": "0.17"}],
-                "asks": [
-                    {"price": "0.17", "size": "20"},
-                    {"price": "0.19", "size": "20"},
-                    {"price": "0.21", "size": "20"},
-                ],
+                "asks": [{"price": "0.19", "size": "1000"}],
             },
         },
         balance=100.0,
@@ -759,6 +751,30 @@ def test_vidarx_micro_initial_ladder_does_not_count_as_replenishment(tmp_path: P
     assert second_stats["filled"] >= 1
     assert second_replenishment_count >= 1
     assert second_exposure > first_exposure
+    db.close()
+
+
+def test_vidarx_micro_stops_after_25pct_drawdown(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.add_daily_pnl(datetime.now(timezone.utc).date().isoformat(), -30.0)
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=100.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["blocked"] == 1
+    assert "drawdown stop" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 

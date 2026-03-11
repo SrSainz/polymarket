@@ -52,6 +52,9 @@ class RiskManager:
         daily_profit_gross: float,
         effective_bankroll: float | None = None,
         reference_price: float,
+        ignore_market_cap: bool = False,
+        ignore_total_exposure_cap: bool = False,
+        ignore_reserved_cap: bool = False,
     ) -> tuple[bool, str]:
         bankroll = self._resolve_bankroll(effective_bankroll)
         if not self.is_tag_allowed(instruction.category):
@@ -83,8 +86,8 @@ class RiskManager:
             if instruction.price > self.config.max_price:
                 return False, "max_price filter"
 
-            market_limit = min(self.config.max_position_per_market, bankroll)
-            if mode == "live" and market_is_btc5m:
+            market_limit = bankroll if ignore_market_cap else min(self.config.max_position_per_market, bankroll)
+            if not ignore_market_cap and mode == "live" and market_is_btc5m:
                 live_ticket_cap = bankroll * self.config.live_btc5m_ticket_allocation_pct
                 if bankroll >= self.config.min_trade_amount:
                     live_ticket_cap = max(live_ticket_cap, self.config.min_trade_amount)
@@ -104,11 +107,13 @@ class RiskManager:
                     btc5m_cap = bankroll * self.config.btc5m_reserved_allocation_pct
                 else:
                     btc5m_cap = min(self.config.btc5m_reserved_notional, bankroll)
-            if market_is_btc5m:
+            if market_is_btc5m and not ignore_reserved_cap:
                 resulting_btc5m_exposure = current_btc5m_exposure + instruction.notional
                 if resulting_btc5m_exposure > btc5m_cap:
                     return False, "btc5m_reserved_cap exceeded"
             elif (
+                not ignore_reserved_cap
+                and
                 self.config.btc5m_reserve_enabled
                 and btc5m_cap > 0
                 and self.config.btc5m_reserve_protected_pct > 0
@@ -120,7 +125,11 @@ class RiskManager:
                 if resulting_non_btc5m_exposure > non_btc5m_cap:
                     return False, "reserved_for_btc5m"
 
-            if not btc5m_relaxed and not (market_is_btc5m and self.config.btc5m_ignore_global_exposure_limit):
+            if (
+                not ignore_total_exposure_cap
+                and not btc5m_relaxed
+                and not (market_is_btc5m and self.config.btc5m_ignore_global_exposure_limit)
+            ):
                 resulting_exposure = current_total_exposure + instruction.notional
                 if resulting_exposure > exposure_limit:
                     return False, "max_total_exposure exceeded"

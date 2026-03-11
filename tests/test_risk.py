@@ -584,3 +584,38 @@ def test_btc5m_reserved_allocation_pct_uses_bankroll_percentage() -> None:
     )
     assert not blocked
     assert "btc5m_reserved_cap" in reason
+
+
+def test_ignore_caps_allows_vidarx_style_btc5m_instruction() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=100.0,
+        max_position_per_market=1.0,
+        max_total_exposure=1.0,
+        max_daily_loss=20.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.3,
+        btc5m_reserve_enabled=True,
+        btc5m_reserved_allocation_pct=0.01,
+        btc5m_relaxed_risk=True,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=20.0)
+    instruction.title = "BTC 5 Minute Up or Down"
+    instruction.slug = "btc-updown-5m-test"
+
+    allowed, reason = risk.evaluate_instruction(
+        instruction,
+        current_market_notional=5.0,
+        current_total_exposure=5.0,
+        current_btc5m_exposure=5.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+        ignore_market_cap=True,
+        ignore_total_exposure_cap=True,
+        ignore_reserved_cap=True,
+    )
+
+    assert allowed
+    assert reason == "ok"
