@@ -93,18 +93,31 @@ class BTC5mStrategyService:
 
         market = self._discover_market()
         if market is None:
-            self._run_autonomous_exits(mode=mode, stats=stats)
-            self.daily_summary.send_if_due()
             stats["skipped"] += 1
-            self._record_strategy_snapshot(note="no active btc5m market")
-            return stats
+            note = "no active btc5m market"
+            self._record_strategy_snapshot(note=note)
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
 
         opportunity = self._build_opportunity(market)
         if opportunity is None:
-            self._run_autonomous_exits(mode=mode, stats=stats)
-            self.daily_summary.send_if_due()
             stats["skipped"] += 1
-            return stats
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=self.db.get_bot_state("strategy_last_note") or "no opportunity",
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
 
         stats["pending"] = 1
         stats["opportunities"] = 1
@@ -116,25 +129,31 @@ class BTC5mStrategyService:
 
         if self._get_open_btc5m_positions_count() >= self.settings.config.strategy_max_open_positions:
             stats["blocked"] += 1
-            self._record_strategy_snapshot(
-                market=market,
-                opportunity=opportunity,
-                note="strategy_max_open_positions reached",
+            note = "strategy_max_open_positions reached"
+            self._record_strategy_snapshot(market=market, opportunity=opportunity, note=note)
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
             )
-            self._run_autonomous_exits(mode=mode, stats=stats)
-            self.daily_summary.send_if_due()
-            return stats
 
         if self._has_condition_conflict(opportunity.condition_id):
             stats["blocked"] += 1
-            self._record_strategy_snapshot(
-                market=market,
-                opportunity=opportunity,
-                note="condition already open",
+            note = "condition already open"
+            self._record_strategy_snapshot(market=market, opportunity=opportunity, note=note)
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
             )
-            self._run_autonomous_exits(mode=mode, stats=stats)
-            self.daily_summary.send_if_due()
-            return stats
 
         try:
             instruction = self._build_instruction(
@@ -146,48 +165,54 @@ class BTC5mStrategyService:
             )
         except ValueError as error:
             stats["blocked"] += 1
-            self._record_strategy_snapshot(
-                market=market,
-                opportunity=opportunity,
-                note=str(error),
+            note = str(error)
+            self._record_strategy_snapshot(market=market, opportunity=opportunity, note=note)
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
             )
-            self._run_autonomous_exits(mode=mode, stats=stats)
-            self.daily_summary.send_if_due()
-            return stats
 
         try:
             result = self._execute_instruction(mode=mode, instruction=instruction)
         except Exception as error:  # noqa: BLE001
             stats["failed"] += 1
-            self._record_strategy_snapshot(
-                market=market,
-                opportunity=opportunity,
-                note=f"execution failed: {error}",
-            )
+            note = f"execution failed: {error}"
+            self._record_strategy_snapshot(market=market, opportunity=opportunity, note=note)
             self.logger.exception("btc5m strategy execution failed: %s", error)
-            self._run_autonomous_exits(mode=mode, stats=stats)
-            self.daily_summary.send_if_due()
-            return stats
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
 
         if result.status == "filled":
             stats["filled"] += 1
-            self._record_strategy_snapshot(
-                market=market,
-                opportunity=opportunity,
-                note=f"filled {instruction.side.value} {instruction.outcome} @ {instruction.price:.3f}",
-            )
+            note = f"filled {instruction.side.value} {instruction.outcome} @ {instruction.price:.3f}"
+            self._record_strategy_snapshot(market=market, opportunity=opportunity, note=note)
             if mode == "live":
                 self.trade_notifier.send_realized_result(instruction=instruction, result=result)
         else:
             stats["skipped"] += 1
-            self._record_strategy_snapshot(
-                market=market,
-                opportunity=opportunity,
-                note=result.message or "not filled",
-            )
-        self._run_autonomous_exits(mode=mode, stats=stats)
-        self.daily_summary.send_if_due()
-        return stats
+            note = result.message or "not filled"
+            self._record_strategy_snapshot(market=market, opportunity=opportunity, note=note)
+        return self._complete_cycle(
+            mode=mode,
+            stats=stats,
+            note=note,
+            cash_balance=cash_balance,
+            allowance=allowance,
+            total_exposure=total_exposure,
+            live_total_capital=live_total_capital,
+        )
 
     def _discover_market(self) -> dict | None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
@@ -474,6 +499,67 @@ class BTC5mStrategyService:
 
     def _effective_max_seconds_into_window(self) -> int:
         return max(self.settings.config.strategy_max_seconds_into_window, _OPERATIVE_MAX_SECONDS_INTO_WINDOW)
+
+    def _complete_cycle(
+        self,
+        *,
+        mode: str,
+        stats: dict[str, int],
+        note: str,
+        cash_balance: float,
+        allowance: float,
+        total_exposure: float,
+        live_total_capital: float,
+    ) -> dict[str, int]:
+        self._run_autonomous_exits(mode=mode, stats=stats)
+        self.daily_summary.send_if_due()
+        self._log_cycle_summary(
+            mode=mode,
+            stats=stats,
+            note=note,
+            cash_balance=cash_balance,
+            allowance=allowance,
+            total_exposure=total_exposure,
+            live_total_capital=live_total_capital,
+        )
+        return stats
+
+    def _log_cycle_summary(
+        self,
+        *,
+        mode: str,
+        stats: dict[str, int],
+        note: str,
+        cash_balance: float,
+        allowance: float,
+        total_exposure: float,
+        live_total_capital: float,
+    ) -> None:
+        available_to_trade = self._available_to_trade(cash_balance=cash_balance, allowance=allowance)
+        self.logger.info(
+            "strategy => mode=%s pending=%s filled=%s blocked=%s skipped=%s failed=%s opportunities=%s note=%s "
+            "cash_balance=%.4f available_to_trade=%.4f allowance=%.4f exposure=%.4f live_total_capital=%.4f",
+            mode,
+            stats["pending"],
+            stats["filled"],
+            stats["blocked"],
+            stats["skipped"],
+            stats["failed"],
+            stats["opportunities"],
+            note,
+            cash_balance,
+            available_to_trade,
+            allowance,
+            total_exposure,
+            live_total_capital,
+        )
+
+    def _available_to_trade(self, *, cash_balance: float, allowance: float) -> float:
+        normalized_balance = max(cash_balance, 0.0)
+        normalized_allowance = max(allowance, 0.0)
+        if normalized_allowance <= 0:
+            return normalized_balance
+        return min(normalized_balance, normalized_allowance)
 
     def _execute_instruction(self, *, mode: str, instruction: CopyInstruction) -> ExecutionResult:
         if mode == "live":

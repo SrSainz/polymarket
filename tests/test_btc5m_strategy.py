@@ -308,3 +308,54 @@ def test_strategy_autonomous_exit_skips_missing_midpoint(tmp_path: Path) -> None
     assert broker.instructions[0].asset == "asset-down"
     assert "stale-asset" not in exit_assets
     db.close()
+
+
+def test_strategy_logs_skip_reason_and_available_cash(tmp_path: Path, caplog) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.74"}],
+                "asks": [{"price": "0.74", "size": "1000"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.02"}],
+                "asks": [{"price": "0.03", "size": "1000"}],
+            },
+        },
+        balance=12.34,
+    )
+    logger = logging.getLogger("test-btc5m-strategy-log")
+    caplog.set_level(logging.INFO, logger=logger.name)
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_trigger_price=0.98),
+        logger=logger,
+    )
+
+    stats = service.run(mode="live")
+
+    assert stats["skipped"] == 1
+    assert "note=no trigger: richest ask 0.740 < 0.750" in caplog.text
+    assert "cash_balance=12.3400" in caplog.text
+    assert "available_to_trade=12.3400" in caplog.text
+    db.close()
