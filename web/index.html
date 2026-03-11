@@ -49,16 +49,16 @@
           </div>
           <div class="hero-side">
             <article class="hero-stat">
-              <span class="hero-stat-label">Dinero disponible</span>
+              <span class="hero-stat-label">Caja disponible ahora</span>
               <strong id="heroCashBalance">-</strong>
               <small id="heroCashMeta" class="hero-stat-meta">capital total -</small>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Reparto actual</span>
+              <span class="hero-stat-label">Reparto de esta ventana</span>
               <strong id="heroTargetOutcome">-</strong>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Momento de la ventana</span>
+              <span class="hero-stat-label">Momento de esta ventana</span>
               <strong id="heroTriggerSeen">-</strong>
             </article>
           </div>
@@ -73,32 +73,32 @@
 
         <section class="cards">
           <article class="card accent">
-            <p class="card-label">Compras abiertas</p>
+            <p class="card-label">Compras abiertas total</p>
             <p class="card-value" id="openPositions">-</p>
             <p class="card-subvalue">operaciones vivas ahora mismo</p>
           </article>
           <article class="card">
-            <p class="card-label">Dinero metido</p>
+            <p class="card-label">Dinero metido total</p>
             <p class="card-value" id="exposure">-</p>
             <p class="card-subvalue" id="exposureMark">valor actualizado -</p>
           </article>
           <article class="card">
-            <p class="card-label">Ganancia / perdida total</p>
+            <p class="card-label">Ganancia / perdida total simulador</p>
             <p class="card-value" id="pnl">-</p>
             <p class="card-subvalue" id="pnlBreakdown">cerrado - / en vivo -</p>
           </article>
           <article class="card">
-            <p class="card-label">Capital del simulador</p>
+            <p class="card-label">Capital total del simulador</p>
             <p class="card-value" id="liveCashBalance">-</p>
             <p class="card-subvalue" id="liveCashMeta">disponible -</p>
           </article>
           <article class="card">
-            <p class="card-label">Compras previstas</p>
+            <p class="card-label">Compras previstas en esta ventana</p>
             <p class="card-value" id="pendingSignals">-</p>
             <p class="card-subvalue">intentos de la ventana actual</p>
           </article>
           <article class="card">
-            <p class="card-label">Estado</p>
+            <p class="card-label">Estado de la ventana</p>
             <p class="card-value" id="strategyModeCard">-</p>
             <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
           </article>
@@ -208,6 +208,15 @@
             </div>
             <ul id="opsPnlList" class="mini-list"></ul>
             <p id="opsPnlMeta" class="mini-meta">ultimas operaciones</p>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head panel-head-tight">
+              <h2>Setups que mejor van</h2>
+              <span id="strategySetupsCount" class="badge">0</span>
+            </div>
+            <ul id="strategySetupsList" class="mini-list"></ul>
+            <p id="strategySetupsMeta" class="mini-meta">sin historial suficiente</p>
           </article>
         </section>
 

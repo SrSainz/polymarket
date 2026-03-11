@@ -148,6 +148,29 @@ CREATE TABLE IF NOT EXISTS bot_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS strategy_windows (
+    slug TEXT PRIMARY KEY,
+    condition_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    opened_at INTEGER NOT NULL,
+    first_trade_at INTEGER NOT NULL DEFAULT 0,
+    last_trade_at INTEGER NOT NULL DEFAULT 0,
+    closed_at INTEGER,
+    price_mode TEXT NOT NULL DEFAULT '',
+    timing_regime TEXT NOT NULL DEFAULT '',
+    primary_outcome TEXT NOT NULL DEFAULT '',
+    hedge_outcome TEXT NOT NULL DEFAULT '',
+    primary_ratio REAL NOT NULL DEFAULT 0,
+    planned_budget REAL NOT NULL DEFAULT 0,
+    current_exposure REAL NOT NULL DEFAULT 0,
+    filled_orders INTEGER NOT NULL DEFAULT 0,
+    replenishment_count INTEGER NOT NULL DEFAULT 0,
+    realized_pnl REAL NOT NULL DEFAULT 0,
+    winning_outcome TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -721,3 +744,144 @@ class Database:
             "SELECT COALESCE(SUM(ABS(size * avg_price)), 0) AS exposure FROM copy_positions"
         ).fetchone()
         return float(row["exposure"])
+
+    def upsert_strategy_window(
+        self,
+        *,
+        slug: str,
+        condition_id: str,
+        title: str,
+        price_mode: str,
+        timing_regime: str,
+        primary_outcome: str,
+        hedge_outcome: str,
+        primary_ratio: float,
+        planned_budget: float,
+        current_exposure: float,
+        notes: str,
+    ) -> None:
+        now_ts = int(time.time())
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO strategy_windows (
+                    slug, condition_id, title, status, opened_at, price_mode, timing_regime,
+                    primary_outcome, hedge_outcome, primary_ratio, planned_budget, current_exposure, notes
+                ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(slug) DO UPDATE SET
+                    condition_id=excluded.condition_id,
+                    title=excluded.title,
+                    price_mode=excluded.price_mode,
+                    timing_regime=excluded.timing_regime,
+                    primary_outcome=excluded.primary_outcome,
+                    hedge_outcome=excluded.hedge_outcome,
+                    primary_ratio=excluded.primary_ratio,
+                    planned_budget=excluded.planned_budget,
+                    current_exposure=excluded.current_exposure,
+                    notes=excluded.notes
+                """,
+                (
+                    slug,
+                    condition_id,
+                    title,
+                    now_ts,
+                    price_mode,
+                    timing_regime,
+                    primary_outcome,
+                    hedge_outcome,
+                    primary_ratio,
+                    planned_budget,
+                    current_exposure,
+                    notes,
+                ),
+            )
+
+    def record_strategy_window_fills(
+        self,
+        *,
+        slug: str,
+        fill_count: int,
+        added_notional: float,
+        replenishment_count: int,
+        notes: str,
+    ) -> None:
+        now_ts = int(time.time())
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE strategy_windows
+                SET status = 'open',
+                    first_trade_at = CASE WHEN first_trade_at = 0 THEN ? ELSE first_trade_at END,
+                    last_trade_at = ?,
+                    filled_orders = filled_orders + ?,
+                    current_exposure = current_exposure + ?,
+                    replenishment_count = replenishment_count + ?,
+                    notes = ?
+                WHERE slug = ?
+                """,
+                (
+                    now_ts,
+                    now_ts,
+                    fill_count,
+                    added_notional,
+                    replenishment_count,
+                    notes,
+                    slug,
+                ),
+            )
+
+    def close_strategy_window(
+        self,
+        *,
+        slug: str,
+        realized_pnl: float,
+        winning_outcome: str,
+        current_exposure: float,
+        notes: str,
+    ) -> None:
+        now_ts = int(time.time())
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE strategy_windows
+                SET status = 'closed',
+                    closed_at = ?,
+                    realized_pnl = realized_pnl + ?,
+                    winning_outcome = ?,
+                    current_exposure = ?,
+                    notes = ?
+                WHERE slug = ?
+                """,
+                (
+                    now_ts,
+                    realized_pnl,
+                    winning_outcome,
+                    current_exposure,
+                    notes,
+                    slug,
+                ),
+            )
+
+    def get_strategy_setup_stats(self, *, price_mode: str, timing_regime: str) -> dict[str, float]:
+        row = self.conn.execute(
+            """
+            SELECT
+                COUNT(*) AS windows,
+                COALESCE(SUM(realized_pnl), 0) AS pnl_total,
+                COALESCE(AVG(realized_pnl), 0) AS pnl_avg,
+                SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins
+            FROM strategy_windows
+            WHERE status = 'closed' AND price_mode = ? AND timing_regime = ?
+            """,
+            (price_mode, timing_regime),
+        ).fetchone()
+        windows = int(row["windows"] or 0) if row is not None else 0
+        wins = int(row["wins"] or 0) if row is not None else 0
+        win_rate = (wins / windows) if windows > 0 else 0.0
+        return {
+            "windows": float(windows),
+            "wins": float(wins),
+            "win_rate": float(win_rate),
+            "pnl_total": float(row["pnl_total"] or 0.0) if row is not None else 0.0,
+            "pnl_avg": float(row["pnl_avg"] or 0.0) if row is not None else 0.0,
+        }

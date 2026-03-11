@@ -287,6 +287,7 @@ function paintSummary(summary) {
   const strategyBias = ratioLabel(summary);
   const strategyCycleBudget = Number(summary.strategy_cycle_budget || 0);
   const currentMarketLivePnl = Number(summary.strategy_current_market_live_pnl || 0);
+  const currentMarketExposure = Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0);
   const replenishmentCount = Number(summary.strategy_replenishment_count || 0);
   const timing = timingLabel(summary);
   document.getElementById("strategyCardMeta").textContent = isVidarxLab(summary)
@@ -324,7 +325,9 @@ function paintSummary(summary) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   const strategyNoteText = strategyNote || "sin trigger";
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
-    ? `Simulacion en ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, dinero metido ${fmtUsdPlain(Number(summary.strategy_current_market_total_exposure || summary.exposure || 0), 2)}, resultado vivo ${fmtUsd(currentMarketLivePnl, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+    ? currentMarketExposure > 0
+      ? `Ventana actual en ${tradingModeLabel(summary)}. En esta ventana hay ${fmtUsdPlain(currentMarketExposure, 2)} metidos y va ${fmtUsd(currentMarketLivePnl, 2)}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      : `Ventana actual en ${tradingModeLabel(summary)} sin posicion abierta. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ultima lectura de ventana: ${strategyNoteText}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
   paintLabOverview(summary);
@@ -527,6 +530,38 @@ function paintOperationPnl(items) {
   meta.textContent = `ultimos ${latest.length}: metido ${fmtUsdPlain(invested, 2)} | resultado ${fmtUsd(sum, 4)}`;
 }
 
+function paintStrategySetups(summary) {
+  const body = document.getElementById("strategySetupsList");
+  const count = document.getElementById("strategySetupsCount");
+  const meta = document.getElementById("strategySetupsMeta");
+  const items = Array.isArray(summary?.strategy_setup_performance) ? summary.strategy_setup_performance : [];
+  count.textContent = String(items.length);
+
+  if (!items.length) {
+    body.innerHTML = `<li class="mini-item"><strong>Sin datos cerrados</strong><span>Necesitamos mas ventanas resueltas para comparar setups</span></li>`;
+    meta.textContent = "sin historial suficiente";
+    return;
+  }
+
+  body.innerHTML = items
+    .map((item) => {
+      const pnlClass =
+        Number(item.pnl_total || 0) > 0 ? "pnl-pos" : Number(item.pnl_total || 0) < 0 ? "pnl-neg" : "pnl-flat";
+      const ratioPct = Number(item.primary_ratio_avg || 0) * 100;
+      return `
+        <li class="mini-item">
+          <strong>${escapeHtml(String(item.price_mode || "-"))} / ${escapeHtml(timingLabel({ strategy_timing_regime: item.timing_regime }))}</strong>
+          <span>${Number(item.windows || 0)} ventanas | acierto ${fmtPct(Number(item.win_rate_pct || 0), 0)} | sesgo ${fmtPct(ratioPct, 0)}</span>
+          <span class="${pnlClass}">total ${fmtUsd(Number(item.pnl_total || 0), 2)} | media ${fmtUsd(Number(item.pnl_avg || 0), 2)}</span>
+        </li>
+      `;
+    })
+    .join("");
+
+  const best = items[0];
+  meta.textContent = `mejor ahora: ${String(best.price_mode || "-")} / ${timingLabel({ strategy_timing_regime: best.timing_regime })} | ${fmtUsd(Number(best.pnl_total || 0), 2)}`;
+}
+
 function renderPositionRows(items, emptyLabel) {
   if (!items.length) {
     return `<tr><td colspan="7">${escapeHtml(emptyLabel)}</td></tr>`;
@@ -684,6 +719,7 @@ async function refreshAll() {
       paintRiskBlocks(riskBlocks || {});
       paintExposureDonut(summary || {});
       paintOperationPnl(executions.items || []);
+      paintStrategySetups(summary || {});
       return;
     }
 
@@ -740,6 +776,7 @@ async function refreshAll() {
     paintRiskBlocks({ items: [], hours: 24, blocked_total: 0 });
     paintExposureDonut(summary);
     paintOperationPnl(executions);
+    paintStrategySetups(summary);
   } catch (error) {
     document.getElementById("lastUpdated").textContent = `Error de actualizacion: ${error.message}`;
   }

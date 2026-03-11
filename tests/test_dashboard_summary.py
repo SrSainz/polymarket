@@ -157,3 +157,69 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     assert summary["strategy_recent_resolutions"][0]["slug"] == "btc-updown-5m-1773233400"
     assert summary["strategy_resolution_count_today"] == 1
     assert summary["strategy_resolution_pnl_today"] == 6.0
+
+
+def test_summary_payload_exposes_setup_performance(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-1",
+        condition_id="cond-1",
+        title="Bitcoin Up or Down - 1",
+        price_mode="extreme",
+        timing_regime="second-wave",
+        primary_outcome="Up",
+        hedge_outcome="Down",
+        primary_ratio=0.8,
+        planned_budget=120.0,
+        current_exposure=120.0,
+        notes="setup 1",
+    )
+    db.record_strategy_window_fills(
+        slug="btc-updown-5m-1",
+        fill_count=6,
+        added_notional=118.0,
+        replenishment_count=2,
+        notes="fills 1",
+    )
+    db.close_strategy_window(
+        slug="btc-updown-5m-1",
+        realized_pnl=32.5,
+        winning_outcome="Up",
+        current_exposure=0.0,
+        notes="resolved 1",
+    )
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-2",
+        condition_id="cond-2",
+        title="Bitcoin Up or Down - 2",
+        price_mode="balanced",
+        timing_regime="early-mid",
+        primary_outcome="Down",
+        hedge_outcome="Up",
+        primary_ratio=0.55,
+        planned_budget=80.0,
+        current_exposure=80.0,
+        notes="setup 2",
+    )
+    db.close_strategy_window(
+        slug="btc-updown-5m-2",
+        realized_pnl=-12.0,
+        winning_outcome="Up",
+        current_exposure=0.0,
+        notes="resolved 2",
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    assert len(summary["strategy_setup_performance"]) == 2
+    assert summary["strategy_setup_performance"][0]["price_mode"] == "extreme"
+    assert summary["strategy_setup_performance"][0]["timing_regime"] == "second-wave"
+    assert summary["strategy_setup_performance"][0]["pnl_total"] == 32.5

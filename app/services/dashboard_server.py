@@ -294,6 +294,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "SELECT asset, condition_id, size, avg_price, slug, title, outcome FROM copy_positions"
         ).fetchall()
         recent_resolution_windows = _recent_vidarx_resolution_windows(conn, limit=6)
+        setup_performance = _vidarx_setup_performance(conn, limit=8)
 
     unrealized_pnl = 0.0
     exposure_mark = 0.0
@@ -433,6 +434,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_current_market_hedge_exposure": round(hedge_exposure_actual, 4),
         "strategy_current_market_breakdown": current_market_breakdown,
         "strategy_recent_resolutions": recent_resolution_windows,
+        "strategy_setup_performance": setup_performance,
         "strategy_resolution_count_today": int(strategy_resolution_count_today),
         "strategy_resolution_pnl_today": round(strategy_resolution_pnl_today, 4),
         "strategy_is_lab": strategy_entry_mode == "vidarx_micro",
@@ -617,6 +619,29 @@ def _single_float(conn: sqlite3.Connection, query: str, params: tuple = ()) -> f
 
 
 def _recent_vidarx_resolution_windows(conn: sqlite3.Connection, *, limit: int) -> list[dict]:
+    strategy_rows = conn.execute(
+        """
+        SELECT slug, closed_at, realized_pnl, planned_budget, filled_orders, winning_outcome
+        FROM strategy_windows
+        WHERE status = 'closed'
+        ORDER BY COALESCE(closed_at, 0) DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    if strategy_rows:
+        return [
+            {
+                "slug": str(row["slug"] or ""),
+                "resolved_at": int(row["closed_at"] or 0),
+                "pnl": round(float(row["realized_pnl"] or 0.0), 4),
+                "notional": round(float(row["planned_budget"] or 0.0), 4),
+                "legs": int(row["filled_orders"] or 0),
+                "winning_outcome": str(row["winning_outcome"] or ""),
+            }
+            for row in strategy_rows
+        ]
+
     rows = conn.execute(
         """
         SELECT ts, notes, pnl_delta, notional
@@ -666,6 +691,48 @@ def _recent_vidarx_resolution_windows(conn: sqlite3.Connection, *, limit: int) -
         }
         for item in ordered
     ]
+
+
+def _vidarx_setup_performance(conn: sqlite3.Connection, *, limit: int) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT
+            price_mode,
+            timing_regime,
+            COUNT(*) AS windows,
+            COALESCE(SUM(realized_pnl), 0) AS pnl_total,
+            COALESCE(AVG(realized_pnl), 0) AS pnl_avg,
+            COALESCE(SUM(planned_budget), 0) AS budget_total,
+            COALESCE(AVG(primary_ratio), 0) AS primary_ratio_avg,
+            SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins
+        FROM strategy_windows
+        WHERE status = 'closed'
+        GROUP BY price_mode, timing_regime
+        HAVING windows > 0
+        ORDER BY pnl_total DESC, windows DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    items: list[dict] = []
+    for row in rows:
+        windows = int(row["windows"] or 0)
+        wins = int(row["wins"] or 0)
+        win_rate = (wins / windows) * 100 if windows > 0 else 0.0
+        items.append(
+            {
+                "price_mode": str(row["price_mode"] or "-"),
+                "timing_regime": str(row["timing_regime"] or "-"),
+                "windows": windows,
+                "wins": wins,
+                "win_rate_pct": round(win_rate, 2),
+                "pnl_total": round(float(row["pnl_total"] or 0.0), 4),
+                "pnl_avg": round(float(row["pnl_avg"] or 0.0), 4),
+                "budget_total": round(float(row["budget_total"] or 0.0), 4),
+                "primary_ratio_avg": round(float(row["primary_ratio_avg"] or 0.0), 4),
+            }
+        )
+    return items
 
 
 def _bot_state_text(conn: sqlite3.Connection, key: str) -> str:

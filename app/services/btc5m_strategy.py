@@ -43,6 +43,11 @@ _VIDARX_EARLY_MID_END = 125
 _VIDARX_MID_LATE_START = 140
 _VIDARX_BUCKET_TOLERANCE = 0.015
 _VIDARX_MAX_DRAWDOWN_PCT = 0.25
+_VIDARX_BALANCED_CYCLE_FRACTION = 0.04
+_VIDARX_TILTED_CYCLE_FRACTION = 0.06
+_VIDARX_EXTREME_CYCLE_FRACTION = 0.08
+_VIDARX_SETUP_DISABLE_MIN_WINDOWS = 4
+_VIDARX_SETUP_DISABLE_MAX_WIN_RATE = 0.50
 
 
 @dataclass(frozen=True)
@@ -312,13 +317,16 @@ class BTC5mStrategyService:
         self._settle_resolved_paper_positions(stats)
         total_exposure = self.db.get_total_exposure()
         cash_balance, allowance = self._live_cash_snapshot(mode="paper")
-        live_total_capital = cash_balance + total_exposure
+        marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
+        live_total_capital = cash_balance + marked_exposure
         self._record_balance_snapshot(
             mode="paper",
             cash_balance=cash_balance,
             allowance=allowance,
             total_exposure=total_exposure,
             live_total_capital=live_total_capital,
+            marked_exposure=marked_exposure,
+            unrealized_pnl=unrealized_pnl,
         )
 
         drawdown_floor = self.settings.config.bankroll * (1.0 - _VIDARX_MAX_DRAWDOWN_PCT)
@@ -408,8 +416,22 @@ class BTC5mStrategyService:
                 "strategy_replenishment_count": str(plan.replenishment_count),
             },
         )
+        self.db.upsert_strategy_window(
+            slug=str(market.get("slug") or ""),
+            condition_id=str(market.get("conditionId") or ""),
+            title=str(market.get("question") or market.get("slug") or ""),
+            price_mode=plan.price_mode,
+            timing_regime=plan.timing_regime,
+            primary_outcome=plan.primary_target.label,
+            hedge_outcome=plan.secondary_target.label if plan.secondary_target else "",
+            primary_ratio=plan.primary_ratio,
+            planned_budget=plan.cycle_budget,
+            current_exposure=self._get_condition_exposure(str(market.get("conditionId") or "")),
+            notes=plan.note,
+        )
 
         note = plan.note
+        filled_notional = 0.0
         for instruction in plan.instructions:
             try:
                 result = self.paper_broker.execute(instruction)
@@ -421,6 +443,7 @@ class BTC5mStrategyService:
 
             if result.status == "filled":
                 stats["filled"] += 1
+                filled_notional += result.notional
                 fill_state = self._vidarx_fill_state_from_reason(instruction.reason)
                 if fill_state is not None:
                     bucket_price, is_replenishment = fill_state
@@ -438,6 +461,15 @@ class BTC5mStrategyService:
             elif result.status == "skipped":
                 stats["skipped"] += 1
                 note = result.message or note
+
+        if stats["filled"] > 0:
+            self.db.record_strategy_window_fills(
+                slug=str(market.get("slug") or ""),
+                fill_count=stats["filled"],
+                added_notional=filled_notional,
+                replenishment_count=plan.replenishment_count,
+                notes=note,
+            )
 
         self._record_strategy_snapshot(
             market=market,
@@ -465,13 +497,16 @@ class BTC5mStrategyService:
         )
         total_exposure = self.db.get_total_exposure()
         cash_balance, allowance = self._live_cash_snapshot(mode="paper")
-        live_total_capital = cash_balance + total_exposure
+        marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
+        live_total_capital = cash_balance + marked_exposure
         self._record_balance_snapshot(
             mode="paper",
             cash_balance=cash_balance,
             allowance=allowance,
             total_exposure=total_exposure,
             live_total_capital=live_total_capital,
+            marked_exposure=marked_exposure,
+            unrealized_pnl=unrealized_pnl,
         )
         return self._complete_cycle(
             mode="paper",
@@ -714,6 +749,19 @@ class BTC5mStrategyService:
             )
             return None
 
+        setup_allowed, setup_note = self._vidarx_setup_allowed(price_mode=price_mode, timing_regime=timing_regime)
+        if not setup_allowed:
+            self._record_strategy_snapshot(
+                market=market,
+                note=setup_note,
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_price_mode=price_mode,
+                    strategy_timing_regime=timing_regime,
+                ),
+            )
+            return None
+
         primary_target = rich_side
         hedge_target = cheap_side
         primary_in_band = self._price_matches_vidarx_band(rich_side.best_ask, price_mode=price_mode, role="primary")
@@ -739,6 +787,12 @@ class BTC5mStrategyService:
             timing_regime=timing_regime,
             price_mode=price_mode,
         )
+        if hedge_in_band:
+            hedge_share = min(primary_ratio, 1 - primary_ratio)
+            if hedge_share > 0:
+                min_dual_leg_budget = (self.settings.config.min_trade_amount * 1.10) / hedge_share
+                if cash_balance >= min_dual_leg_budget:
+                    cycle_budget = max(cycle_budget, min_dual_leg_budget)
         if cycle_budget < self.settings.config.min_trade_amount:
             self._record_strategy_snapshot(
                 market=market,
@@ -1011,12 +1065,55 @@ class BTC5mStrategyService:
         else:
             desired *= 0.90
 
+        equity_ratio = effective_bankroll / max(self.settings.config.bankroll, 1e-9)
+        if equity_ratio < 0.85:
+            desired *= 0.35
+        elif equity_ratio < 0.90:
+            desired *= 0.50
+        elif equity_ratio < 0.95:
+            desired *= 0.70
+        elif equity_ratio < 0.98:
+            desired *= 0.85
+
+        cycle_fraction = self._vidarx_cycle_fraction(price_mode=price_mode, timing_regime=timing_regime)
+        desired = min(desired, effective_bankroll * cycle_fraction)
+
         budget_left = max(cash_balance, 0.0)
         desired = min(desired, budget_left)
         desired = min(desired, max(effective_bankroll - current_total_exposure, 0.0))
         if timing_regime == "second-wave" and existing_market_notional > 0:
-            desired = max(desired, min(existing_market_notional * 0.75, budget_left))
+            desired = max(desired, min(existing_market_notional * 0.35, budget_left, effective_bankroll * cycle_fraction))
         return max(desired, 0.0)
+
+    def _vidarx_cycle_fraction(self, *, price_mode: str, timing_regime: str) -> float:
+        if price_mode == "extreme":
+            fraction = _VIDARX_EXTREME_CYCLE_FRACTION
+        elif price_mode == "tilted":
+            fraction = _VIDARX_TILTED_CYCLE_FRACTION
+        else:
+            fraction = _VIDARX_BALANCED_CYCLE_FRACTION
+        if timing_regime == "second-wave":
+            fraction += 0.01
+        elif timing_regime == "mid-late":
+            fraction += 0.005
+        return fraction
+
+    def _vidarx_setup_allowed(self, *, price_mode: str, timing_regime: str) -> tuple[bool, str]:
+        stats = self.db.get_strategy_setup_stats(price_mode=price_mode, timing_regime=timing_regime)
+        windows = int(stats["windows"])
+        win_rate = float(stats["win_rate"])
+        pnl_total = float(stats["pnl_total"])
+        if (
+            windows >= _VIDARX_SETUP_DISABLE_MIN_WINDOWS
+            and pnl_total < 0
+            and win_rate <= _VIDARX_SETUP_DISABLE_MAX_WIN_RATE
+        ):
+            return (
+                False,
+                f"setup bloqueado por historial: {price_mode}/{timing_regime} "
+                f"{windows} ventanas, win {win_rate * 100:.0f}%, pnl {pnl_total:.2f}",
+            )
+        return True, ""
 
     def _live_cash_snapshot(self, *, mode: str) -> tuple[float, float]:
         if mode != "live":
@@ -1037,6 +1134,8 @@ class BTC5mStrategyService:
         allowance: float,
         total_exposure: float,
         live_total_capital: float,
+        marked_exposure: float | None = None,
+        unrealized_pnl: float | None = None,
     ) -> None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
         self.db.set_bot_state("live_cash_balance", f"{cash_balance:.8f}")
@@ -1045,6 +1144,31 @@ class BTC5mStrategyService:
         self.db.set_bot_state("live_balance_updated_at", str(now_ts))
         self.db.set_bot_state("strategy_runtime_mode", mode)
         self.db.set_bot_state("strategy_total_exposure", f"{total_exposure:.8f}")
+        if marked_exposure is not None:
+            self.db.set_bot_state("live_marked_exposure", f"{marked_exposure:.8f}")
+        if unrealized_pnl is not None:
+            self.db.set_bot_state("live_unrealized_pnl", f"{unrealized_pnl:.8f}")
+
+    def _paper_mark_to_market_snapshot(self) -> tuple[float, float]:
+        marked_exposure = 0.0
+        unrealized_pnl = 0.0
+        for row in self.db.list_copy_positions():
+            size = float(row["size"] or 0.0)
+            if size <= 0:
+                continue
+            avg_price = float(row["avg_price"] or 0.0)
+            asset = str(row["asset"] or "")
+            mark_price = avg_price
+            try:
+                midpoint = self.clob_client.get_midpoint(asset)
+            except Exception:  # noqa: BLE001
+                midpoint = None
+            if midpoint is not None:
+                mark_price = float(midpoint)
+                self.db.record_position_mark(asset, mark_price)
+            marked_exposure += abs(size * mark_price)
+            unrealized_pnl += (mark_price - avg_price) * size
+        return marked_exposure, unrealized_pnl
 
     def _record_strategy_snapshot(
         self,
@@ -1558,6 +1682,7 @@ class BTC5mStrategyService:
         if not self.db.list_copy_positions():
             return
 
+        resolved_totals: dict[str, dict[str, object]] = {}
         for row in list(self.db.list_copy_positions()):
             slug = str(row["slug"] or "")
             asset = str(row["asset"] or "")
@@ -1590,6 +1715,23 @@ class BTC5mStrategyService:
             stats["opportunities"] += 1
             if result.status == "filled":
                 stats["filled"] += 1
+                bucket = resolved_totals.setdefault(
+                    slug,
+                    {
+                        "pnl": 0.0,
+                        "winning_outcome": self._resolved_winning_outcome(market),
+                    },
+                )
+                bucket["pnl"] = float(bucket["pnl"]) + float(result.pnl_delta)
+
+        for slug, payload in resolved_totals.items():
+            self.db.close_strategy_window(
+                slug=slug,
+                realized_pnl=float(payload["pnl"]),
+                winning_outcome=str(payload["winning_outcome"] or ""),
+                current_exposure=0.0,
+                notes=f"resolved {payload['winning_outcome'] or '-'}",
+            )
 
     def _resolved_price_for_asset(self, market: dict, asset: str) -> float | None:
         token_ids = _parse_json_list(market.get("clobTokenIds"))
@@ -1604,6 +1746,17 @@ class BTC5mStrategyService:
             except (TypeError, ValueError):
                 return None
         return None
+
+    def _resolved_winning_outcome(self, market: dict) -> str:
+        outcomes = _parse_json_list(market.get("outcomes"))
+        prices = _parse_json_list(market.get("outcomePrices"))
+        for outcome, price in zip(outcomes, prices):
+            try:
+                if float(price) >= 0.999:
+                    return str(outcome)
+            except (TypeError, ValueError):
+                continue
+        return ""
 
 
 def _parse_json_list(raw_value: object) -> list[str]:
