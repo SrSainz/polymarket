@@ -23,6 +23,7 @@ class Copier:
         current_total_exposure: float,
         current_dynamic_exposure: float = 0.0,
         current_btc5m_exposure: float = 0.0,
+        current_market_notional: float | None = None,
         daily_pnl: float,
         daily_profit_gross: float,
         effective_bankroll: float | None = None,
@@ -63,9 +64,14 @@ class Copier:
             reason="",
         )
 
-        market_notional = abs(copy_position_size * (copy_position_avg_price or execution_price))
+        market_notional = (
+            float(current_market_notional)
+            if current_market_notional is not None
+            else abs(copy_position_size * (copy_position_avg_price or execution_price))
+        )
         allowed, reason = self.risk.evaluate_instruction(
             instruction,
+            mode=mode,
             current_market_notional=market_notional,
             current_total_exposure=current_total_exposure,
             current_dynamic_exposure=current_dynamic_exposure,

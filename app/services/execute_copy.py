@@ -96,6 +96,7 @@ class ExecuteCopyService:
                 copy_position = self.db.get_copy_position(signal.asset)
                 copy_size = float(copy_position["size"]) if copy_position else 0.0
                 copy_avg_price = float(copy_position["avg_price"]) if copy_position else execution_price
+                current_market_notional = self._get_condition_exposure(signal.condition_id)
                 total_exposure = self.db.get_total_exposure()
                 dynamic_exposure = self._get_dynamic_exposure()
                 btc5m_exposure = self._get_btc5m_exposure()
@@ -111,6 +112,7 @@ class ExecuteCopyService:
                     current_total_exposure=total_exposure,
                     current_dynamic_exposure=dynamic_exposure,
                     current_btc5m_exposure=btc5m_exposure,
+                    current_market_notional=current_market_notional,
                     daily_pnl=daily_pnl,
                     daily_profit_gross=daily_profit_gross,
                     effective_bankroll=effective_bankroll,
@@ -176,7 +178,28 @@ class ExecuteCopyService:
 
         if self._get_open_btc5m_positions_count() >= self.settings.config.live_btc5m_max_open_positions:
             return "live_btc5m_max_open_positions"
+        if self._has_live_condition_conflict(asset=signal.asset, condition_id=signal.condition_id):
+            return "live_condition_conflict"
         return ""
+
+    def _get_condition_exposure(self, condition_id: str) -> float:
+        exposure = 0.0
+        for row in self.db.list_copy_positions():
+            if str(row["condition_id"] or "") != condition_id:
+                continue
+            exposure += abs(float(row["size"]) * float(row["avg_price"]))
+        return exposure
+
+    def _has_live_condition_conflict(self, *, asset: str, condition_id: str) -> bool:
+        for row in self.db.list_copy_positions():
+            if str(row["condition_id"] or "") != condition_id:
+                continue
+            if str(row["asset"] or "") == asset:
+                continue
+            if float(row["size"] or 0.0) <= 0:
+                continue
+            return True
+        return False
 
     def _get_dynamic_exposure(self) -> float:
         exposure = 0.0

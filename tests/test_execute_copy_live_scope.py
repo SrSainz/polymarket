@@ -43,6 +43,7 @@ def test_live_scope_keeps_btc5m_entries() -> None:
         settings=SimpleNamespace(config=BotConfig(watched_wallets=["0xabc"], live_only_btc5m=True)),
         db=SimpleNamespace(get_copy_position=lambda asset: None, list_copy_positions=lambda: []),
         _get_open_btc5m_positions_count=lambda: 0,
+        _has_live_condition_conflict=lambda asset, condition_id: False,
     )
     signal = _signal("BTC 5 Minute Up or Down", "btc-updown-5m")
 
@@ -68,3 +69,26 @@ def test_live_scope_blocks_when_btc5m_open_positions_cap_is_reached() -> None:
     skip_reason = ExecuteCopyService._skip_reason_for_mode(fake_service, signal=signal, mode="live")
 
     assert skip_reason == "live_btc5m_max_open_positions"
+
+
+def test_live_scope_blocks_opposite_side_of_same_condition() -> None:
+    fake_service = SimpleNamespace(
+        settings=SimpleNamespace(config=BotConfig(watched_wallets=["0xabc"], live_only_btc5m=True)),
+        db=SimpleNamespace(
+            get_copy_position=lambda asset: None,
+            list_copy_positions=lambda: [
+                {
+                    "asset": "other-asset",
+                    "condition_id": "cond",
+                    "size": 5.0,
+                }
+            ],
+        ),
+        _get_open_btc5m_positions_count=lambda: 0,
+        _has_live_condition_conflict=lambda asset, condition_id: True,
+    )
+    signal = _signal("BTC 5 Minute Up or Down", "btc-updown-5m")
+
+    skip_reason = ExecuteCopyService._skip_reason_for_mode(fake_service, signal=signal, mode="live")
+
+    assert skip_reason == "live_condition_conflict"

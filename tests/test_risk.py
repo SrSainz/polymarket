@@ -444,7 +444,7 @@ def test_btc5m_can_bypass_global_exposure_limit_when_enabled() -> None:
     assert allowed
 
 
-def test_btc5m_relaxed_risk_bypasses_price_and_dynamic_caps() -> None:
+def test_btc5m_relaxed_risk_still_enforces_price_filters() -> None:
     config = BotConfig(
         watched_wallets=["0xabc"],
         bankroll=1000.0,
@@ -468,6 +468,7 @@ def test_btc5m_relaxed_risk_bypasses_price_and_dynamic_caps() -> None:
 
     allowed, reason = risk.evaluate_instruction(
         instruction,
+        mode="live",
         current_market_notional=200.0,
         current_total_exposure=980.0,
         current_dynamic_exposure=195.0,
@@ -476,7 +477,8 @@ def test_btc5m_relaxed_risk_bypasses_price_and_dynamic_caps() -> None:
         daily_profit_gross=0.0,
         reference_price=0.70,
     )
-    assert allowed, reason
+    assert not allowed
+    assert "max_price" in reason
 
 
 def test_btc5m_relaxed_risk_still_enforces_reserved_cap() -> None:
@@ -493,7 +495,7 @@ def test_btc5m_relaxed_risk_still_enforces_reserved_cap() -> None:
         btc5m_relaxed_risk=True,
     )
     risk = RiskManager(config)
-    instruction = _instruction(notional=30.0)
+    instruction = _instruction(notional=15.0)
     instruction.title = "BTC 5 Minute Up or Down"
 
     allowed, reason = risk.evaluate_instruction(
@@ -508,6 +510,39 @@ def test_btc5m_relaxed_risk_still_enforces_reserved_cap() -> None:
     )
     assert not allowed
     assert "btc5m_reserved_cap" in reason
+
+
+def test_live_btc5m_ticket_cap_limits_total_market_exposure() -> None:
+    config = BotConfig(
+        watched_wallets=["0xabc"],
+        bankroll=1000.0,
+        max_position_per_market=1000.0,
+        max_total_exposure=1000.0,
+        max_daily_loss=20.0,
+        max_daily_loss_pct=0.10,
+        slippage_limit=0.3,
+        btc5m_reserve_enabled=True,
+        btc5m_reserved_notional=500.0,
+        btc5m_relaxed_risk=True,
+        live_btc5m_ticket_allocation_pct=0.10,
+    )
+    risk = RiskManager(config)
+    instruction = _instruction(notional=20.0)
+    instruction.title = "BTC 5 Minute Up or Down"
+
+    allowed, reason = risk.evaluate_instruction(
+        instruction,
+        mode="live",
+        current_market_notional=90.0,
+        current_total_exposure=90.0,
+        current_dynamic_exposure=0.0,
+        current_btc5m_exposure=90.0,
+        daily_pnl=0.0,
+        daily_profit_gross=0.0,
+        reference_price=0.5,
+    )
+    assert not allowed
+    assert "max_position_per_market" in reason
 
 
 def test_btc5m_reserved_allocation_pct_uses_bankroll_percentage() -> None:

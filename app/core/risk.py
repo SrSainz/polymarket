@@ -41,6 +41,7 @@ class RiskManager:
         self,
         instruction: CopyInstruction,
         *,
+        mode: str = "paper",
         current_market_notional: float,
         current_total_exposure: float,
         current_dynamic_exposure: float = 0.0,
@@ -70,20 +71,22 @@ class RiskManager:
         btc5m_relaxed = market_is_btc5m and self.config.btc5m_relaxed_risk
 
         if instruction.side == TradeSide.BUY:
+            if instruction.price < self.config.min_price:
+                return False, "min_price filter"
+
+            if instruction.price > self.config.max_price:
+                return False, "max_price filter"
+
+            market_limit = min(self.config.max_position_per_market, bankroll)
+            if mode == "live" and market_is_btc5m:
+                market_limit = min(market_limit, bankroll * self.config.live_btc5m_ticket_allocation_pct)
+            resulting_market_notional = current_market_notional + instruction.notional
+            if resulting_market_notional > market_limit:
+                return False, "max_position_per_market exceeded"
+
             if not btc5m_relaxed:
-                if instruction.price < self.config.min_price:
-                    return False, "min_price filter"
-
-                if instruction.price > self.config.max_price:
-                    return False, "max_price filter"
-
                 if daily_pnl <= -self.daily_loss_limit(daily_profit_gross, effective_bankroll=bankroll):
                     return False, "max_daily_loss reached"
-
-                market_limit = min(self.config.max_position_per_market, bankroll)
-                resulting_market_notional = current_market_notional + instruction.notional
-                if resulting_market_notional > market_limit:
-                    return False, "max_position_per_market exceeded"
 
             exposure_limit = min(self.config.max_total_exposure, bankroll)
             btc5m_cap = 0.0
