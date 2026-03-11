@@ -254,6 +254,34 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_trigger_price_seen = _bot_state_float(conn, "strategy_trigger_price_seen")
         strategy_last_note = _bot_state_text(conn, "strategy_last_note")
         strategy_last_updated_at = _bot_state_int(conn, "strategy_last_updated_at")
+        strategy_market_bias = _bot_state_text(conn, "strategy_market_bias")
+        strategy_plan_legs = _bot_state_int(conn, "strategy_plan_legs")
+        strategy_window_seconds = _bot_state_int(conn, "strategy_window_seconds")
+        strategy_cycle_budget = _bot_state_float(conn, "strategy_cycle_budget")
+        strategy_current_market_exposure = _bot_state_float(conn, "strategy_current_market_exposure")
+        strategy_resolution_mode = _bot_state_text(conn, "strategy_resolution_mode")
+        strategy_resolution_count_today = _single_float(
+            conn,
+            """
+            SELECT COUNT(*) AS value
+            FROM executions
+            WHERE mode = 'paper'
+              AND notes LIKE 'vidarx_resolution:%'
+              AND strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (today_utc,),
+        )
+        strategy_resolution_pnl_today = _single_float(
+            conn,
+            """
+            SELECT COALESCE(SUM(pnl_delta), 0) AS value
+            FROM executions
+            WHERE mode = 'paper'
+              AND notes LIKE 'vidarx_resolution:%'
+              AND strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+            """,
+            (today_utc,),
+        )
         positions = conn.execute(
             "SELECT asset, size, avg_price FROM copy_positions"
         ).fetchall()
@@ -314,6 +342,15 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_trigger_price_seen": round(strategy_trigger_price_seen, 4),
         "strategy_last_note": strategy_last_note,
         "strategy_last_updated_at": int(strategy_last_updated_at),
+        "strategy_market_bias": strategy_market_bias,
+        "strategy_plan_legs": int(strategy_plan_legs),
+        "strategy_window_seconds": int(strategy_window_seconds),
+        "strategy_cycle_budget": round(strategy_cycle_budget, 4),
+        "strategy_current_market_exposure": round(strategy_current_market_exposure, 4),
+        "strategy_resolution_mode": strategy_resolution_mode,
+        "strategy_resolution_count_today": int(strategy_resolution_count_today),
+        "strategy_resolution_pnl_today": round(strategy_resolution_pnl_today, 4),
+        "strategy_is_lab": strategy_entry_mode == "vidarx_micro",
         "daily_realized_pnl": round(daily_realized_pnl, 4),
         "daily_profit_gross": round(daily_profit_gross, 4),
         "daily_loss_gross": round(daily_loss_gross, 4),

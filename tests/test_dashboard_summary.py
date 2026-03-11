@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.core.paper_broker import PaperBroker
 from app.db import Database
-from app.models import CopyInstruction, SignalAction, TradeSide
+from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.services.dashboard_server import _summary_payload
 
 
@@ -59,3 +59,58 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     assert summary["strategy_mode"] == "btc5m_orderbook"
     assert summary["strategy_entry_mode"] == "buy_opposite"
     assert summary["strategy_target_outcome"] == "Down"
+
+
+def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+
+    db.set_bot_state("live_cash_balance", "28.00")
+    db.set_bot_state("live_cash_allowance", "28.00")
+    db.set_bot_state("live_total_capital", "30.75")
+    db.set_bot_state("strategy_mode", "btc5m_orderbook")
+    db.set_bot_state("strategy_entry_mode", "vidarx_micro")
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-1773233700")
+    db.set_bot_state("strategy_market_bias", "Down primary / Up hedge")
+    db.set_bot_state("strategy_plan_legs", "2")
+    db.set_bot_state("strategy_window_seconds", "176")
+    db.set_bot_state("strategy_cycle_budget", "3.25")
+    db.set_bot_state("strategy_current_market_exposure", "5.54")
+    db.set_bot_state("strategy_resolution_mode", "paper-settle-at-close")
+    db.record_execution(
+        result=ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.CLOSE,
+            asset="asset-1",
+            size=10.0,
+            price=1.0,
+            notional=10.0,
+            pnl_delta=6.0,
+            message="resolved",
+        ),
+        side=TradeSide.SELL.value,
+        condition_id="cond-1",
+        source_wallet="strategy:vidarx_micro",
+        source_signal_id=0,
+        notes="vidarx_resolution:btc-updown-5m-1773233400:Up",
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    assert summary["strategy_is_lab"] is True
+    assert summary["strategy_market_bias"] == "Down primary / Up hedge"
+    assert summary["strategy_plan_legs"] == 2
+    assert summary["strategy_window_seconds"] == 176
+    assert summary["strategy_cycle_budget"] == 3.25
+    assert summary["strategy_current_market_exposure"] == 5.54
+    assert summary["strategy_resolution_mode"] == "paper-settle-at-close"
+    assert summary["strategy_resolution_count_today"] == 1
+    assert summary["strategy_resolution_pnl_today"] == 6.0

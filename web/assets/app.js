@@ -10,6 +10,7 @@ const DONUT_LOSS_COLOR = "#d0675f";
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
 let apiBase = "";
+let lastSummary = null;
 
 const fmt = (value, digits = 4) => {
   const asNumber = Number(value);
@@ -70,8 +71,13 @@ function strategyLabel(summary) {
   const mode = String(summary.strategy_mode || "").trim();
   const entry = String(summary.strategy_entry_mode || "").trim();
   if (!mode) return "-";
+  if (entry === "vidarx_micro") return "Vidarx Micro";
   if (mode !== "btc5m_orderbook") return mode;
   return `BTC5m / ${entry || "-"}`;
+}
+
+function isVidarxLab(summary = lastSummary) {
+  return Boolean(summary && summary.strategy_entry_mode === "vidarx_micro");
 }
 
 function setLiveBadge(summary) {
@@ -191,6 +197,7 @@ function saveApiBase(value) {
 }
 
 function paintSummary(summary) {
+  lastSummary = summary;
   document.getElementById("openPositions").textContent = String(summary.open_positions ?? 0);
   document.getElementById("exposure").textContent = fmt(summary.exposure, 2);
   document.getElementById("exposureMark").textContent = `mark-to-market ${fmtUsdPlain(Number(summary.exposure_mark ?? summary.exposure ?? 0), 2)}`;
@@ -202,7 +209,9 @@ function paintSummary(summary) {
   document.getElementById("pnlBreakdown").textContent = `realized ${fmtUsd(realized, 2)} / unrealized ${fmtUsd(unrealized, 2)}`;
   setCardTone("pnl", pnlTotal);
 
-  document.getElementById("pendingSignals").textContent = String(summary.pending_signals ?? "-");
+  document.getElementById("pendingSignals").textContent = isVidarxLab(summary)
+    ? String(summary.strategy_plan_legs ?? 0)
+    : String(summary.pending_signals ?? "-");
   const liveCashBalance = Number(summary.live_cash_balance ?? 0);
   const liveAvailableToTrade = Number(summary.live_available_to_trade ?? liveCashBalance);
   const liveEquityEstimate = Number(summary.live_equity_estimate ?? summary.live_total_capital ?? liveCashBalance);
@@ -210,9 +219,10 @@ function paintSummary(summary) {
   const liveSnapshotText = liveBalanceUpdatedAt > 0 ? tsToIso(liveBalanceUpdatedAt) : "sin snapshot";
   document.getElementById("liveCashBalance").textContent = fmtUsdPlain(liveCashBalance, 2);
   document.getElementById("liveCashMeta").textContent =
-    `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | equity bot ${fmtUsdPlain(liveEquityEstimate, 2)} | snapshot ${liveSnapshotText}`;
+    `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | snapshot ${liveSnapshotText}`;
   document.getElementById("heroCashBalance").textContent = fmtUsdPlain(liveAvailableToTrade, 2);
-  document.getElementById("heroCashMeta").textContent = `saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}`;
+  document.getElementById("heroCashMeta").textContent =
+    `equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
@@ -231,15 +241,28 @@ function paintSummary(summary) {
   const triggerOutcome = String(summary.strategy_trigger_outcome || "");
   const triggerPrice = Number(summary.strategy_trigger_price_seen || 0);
   const strategyNote = String(summary.strategy_last_note || "");
-  document.getElementById("strategyCardMeta").textContent =
-    strategyOutcome
-      ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
-      : strategyNote || strategyTitle;
+  const strategyWindowSeconds = Number(summary.strategy_window_seconds || 0);
+  const strategyPlanLegs = Number(summary.strategy_plan_legs || 0);
+  const strategyBias = String(summary.strategy_market_bias || "");
+  const strategyCycleBudget = Number(summary.strategy_cycle_budget || 0);
+  document.getElementById("strategyCardMeta").textContent = isVidarxLab(summary)
+    ? `${strategyBias || "sin bias"} | ciclo ${fmtUsdPlain(strategyCycleBudget, 2)} | ${strategyNote || strategyTitle}`
+    : strategyOutcome
+    ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
+    : strategyNote || strategyTitle;
   document.getElementById("strategyHeroTitle").textContent = strategyTitle;
-  document.getElementById("heroTargetOutcome").textContent =
-    strategyOutcome ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)}` : "-";
-  document.getElementById("heroTriggerSeen").textContent =
-    triggerOutcome ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}` : "-";
+  document.getElementById("heroTargetOutcome").textContent = isVidarxLab(summary)
+    ? strategyBias || "-"
+    : strategyOutcome
+    ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)}`
+    : "-";
+  document.getElementById("heroTriggerSeen").textContent = isVidarxLab(summary)
+    ? strategyWindowSeconds > 0
+      ? `${strategyWindowSeconds}s | ${strategyPlanLegs} capas`
+      : "-"
+    : triggerOutcome
+    ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}`
+    : "-";
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
 
@@ -256,12 +279,59 @@ function paintSummary(summary) {
   const lastLiveExecution = Number(summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   const strategyNoteText = strategyNote || "sin trigger";
-  document.getElementById("systemNotice").textContent =
-    `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
+  document.getElementById("systemNotice").textContent = isVidarxLab(summary)
+    ? `Laboratorio en ${tradingModeLabel(summary)} teorico. Equity ${fmtUsdPlain(liveEquityEstimate, 2)}, disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}. Bias ${strategyBias || "sin bias"}, ventana ${strategyWindowSeconds || 0}s, capas ${strategyPlanLegs || 0}, ciclo ${fmtUsdPlain(strategyCycleBudget, 2)}. Resoluciones hoy ${summary.strategy_resolution_count_today ?? 0}, PnL ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}. Nota: ${strategyNoteText}.`
+    : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
+
+  paintLabOverview(summary);
+}
+
+function paintLabOverview(summary) {
+  const windowSeconds = Math.max(Number(summary.strategy_window_seconds || 0), 0);
+  const windowPct = Math.min((windowSeconds / 300) * 100, 100);
+  const deployed = Math.max(Number(summary.strategy_current_market_exposure || 0), 0);
+  const totalExposure = Math.max(Number(summary.exposure || 0), 0);
+  const exposurePct = totalExposure > 0 ? Math.min((deployed / totalExposure) * 100, 100) : 0;
+
+  document.getElementById("labModeValue").textContent = isVidarxLab(summary)
+    ? String(summary.strategy_resolution_mode || "paper").replaceAll("-", " ")
+    : strategyLabel(summary);
+  document.getElementById("labWindowValue").textContent =
+    String(summary.strategy_market_slug || summary.strategy_market_title || "-");
+  document.getElementById("labWindowFill").style.width = `${windowPct}%`;
+  document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
+  document.getElementById("labMeta").textContent = isVidarxLab(summary)
+    ? `ventana ${windowSeconds}s | bias ${summary.strategy_market_bias || "sin bias"} | capas ${summary.strategy_plan_legs || 0} | mercado ${fmtUsdPlain(deployed, 2)}`
+    : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
 function paintSelectedWallets(items) {
   const body = document.getElementById("selectedWalletsList");
+  if (isVidarxLab()) {
+    const planRows = [
+      ["Mercado", String(lastSummary?.strategy_market_slug || "-")],
+      ["Bias", String(lastSummary?.strategy_market_bias || "sin bias")],
+      ["Capas", String(lastSummary?.strategy_plan_legs || 0)],
+      ["Ventana", `${Number(lastSummary?.strategy_window_seconds || 0)}s`],
+      ["Ciclo", fmtUsdPlain(Number(lastSummary?.strategy_cycle_budget || 0), 2)],
+      ["Objetivo", String(lastSummary?.strategy_target_outcome || "-")],
+    ];
+    document.getElementById("selectedWalletsCount").textContent = String(planRows.length);
+    body.innerHTML = planRows
+      .map(
+        ([label, value]) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(value)}</span>
+      </li>
+    `
+      )
+      .join("");
+    document.getElementById("selectedWalletsMeta").textContent =
+      String(lastSummary?.strategy_last_note || "sin plan actual");
+    return;
+  }
+
   document.getElementById("selectedWalletsCount").textContent = String(items.length);
   if (!items.length) {
     body.innerHTML = `<li class="mini-item"><strong>Sin wallets seleccionadas</strong><span>Revisa filtros y API</span></li>`;
@@ -285,6 +355,29 @@ function paintSelectedWallets(items) {
 }
 
 function paintRiskBlocks(payload) {
+  if (isVidarxLab()) {
+    const body = document.getElementById("riskBlocksList");
+    const items = [
+      ["Resoluciones hoy", String(lastSummary?.strategy_resolution_count_today || 0)],
+      ["PnL resuelto", fmtUsd(Number(lastSummary?.strategy_resolution_pnl_today || 0), 2)],
+      ["Modo", String(lastSummary?.strategy_resolution_mode || "-")],
+      ["Ultima nota", String(lastSummary?.strategy_last_note || "sin nota")],
+    ];
+    document.getElementById("riskBlocksCount").textContent = String(Number(lastSummary?.strategy_resolution_count_today || 0));
+    body.innerHTML = items
+      .map(
+        ([label, value]) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(value)}</span>
+      </li>
+    `
+      )
+      .join("");
+    document.getElementById("riskBlocksMeta").textContent = "cierres teoricos por resolucion";
+    return;
+  }
+
   const items = payload.items || [];
   const hours = Number(payload.hours || 24);
   const blockedTotal = Number(payload.blocked_total || 0);
@@ -441,9 +534,21 @@ function paintPositions(items) {
   document.getElementById("btcBucketExposure").textContent = fmtUsdPlain(btcSummary.exposure, 2);
   document.getElementById("btcBucketPnl").textContent = fmtUsd(btcSummary.unrealized, 2);
 
-  document.getElementById("generalBucketCount").textContent = `${generalItems.length} pos.`;
-  document.getElementById("generalBucketExposure").textContent = fmtUsdPlain(generalSummary.exposure, 2);
-  document.getElementById("generalBucketPnl").textContent = fmtUsd(generalSummary.unrealized, 2);
+  if (isVidarxLab()) {
+    document.getElementById("generalBucketCount").textContent = `${Number(lastSummary?.strategy_resolution_count_today || 0)} cierres`;
+    document.getElementById("generalBucketExposure").textContent = fmtUsdPlain(
+      Number(lastSummary?.strategy_cycle_budget || 0),
+      2
+    );
+    document.getElementById("generalBucketPnl").textContent = fmtUsd(
+      Number(lastSummary?.strategy_resolution_pnl_today || 0),
+      2
+    );
+  } else {
+    document.getElementById("generalBucketCount").textContent = `${generalItems.length} pos.`;
+    document.getElementById("generalBucketExposure").textContent = fmtUsdPlain(generalSummary.exposure, 2);
+    document.getElementById("generalBucketPnl").textContent = fmtUsd(generalSummary.unrealized, 2);
+  }
 }
 
 function paintExecutions(items) {
@@ -669,10 +774,10 @@ async function bootstrap() {
 
   document.querySelector(".kicker").textContent =
     runtimeMode === "local"
-      ? "Copy Trading Monitor (Local DB)"
+      ? "Proyecto principal (Local DB)"
       : runtimeMode === "public-fallback"
-      ? "Copy Trading Monitor (Public API Fallback)"
-      : "Copy Trading Monitor (Public API)";
+      ? "Proyecto principal (Public API Fallback)"
+      : "Proyecto principal (Public API)";
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const resetBtn = document.getElementById("resetBtn");
   if (runtimeMode !== "local") {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Polymarket Copy Bot Dashboard</title>
+    <title>Vidarx Microstructure Lab</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -19,8 +19,8 @@
     <div class="app-shell">
       <header class="topbar shell-card">
         <div class="brand">
-          <p class="kicker">Copy Trading Monitor</p>
-          <h1>Polymarket Bot</h1>
+          <p class="kicker">Proyecto principal</p>
+          <h1>Vidarx Microstructure Lab</h1>
           <div class="brand-meta">
             <span id="runtimeBadge" class="soft-badge">Local DB</span>
             <span id="tradingBadge" class="soft-badge accent-badge">PAPER</span>
@@ -41,24 +41,24 @@
       <main class="layout">
         <section class="hero panel panel-hero" id="overviewSection">
           <div class="hero-copy">
-            <p class="hero-kicker">Estrategia activa</p>
-            <h2 class="hero-title" id="strategyHeroTitle">BTC5m orderbook, caja y trigger en primer plano.</h2>
+            <p class="hero-kicker">Laboratorio activo</p>
+            <h2 class="hero-title" id="strategyHeroTitle">Simulacion teorica sobre el mercado real BTC 5m.</h2>
             <p id="systemNotice" class="hero-text">
-              El panel resume capital en riesgo, resultado total, wallets activas y las ultimas decisiones ejecutadas.
+              El panel resume capital teorico, layering actual, resoluciones al cierre y el ultimo plan de ejecucion.
             </p>
           </div>
           <div class="hero-side">
             <article class="hero-stat">
-              <span class="hero-stat-label">Disponible para operar</span>
+              <span class="hero-stat-label">Capital teorico disponible</span>
               <strong id="heroCashBalance">-</strong>
-              <small id="heroCashMeta" class="hero-stat-meta">saldo wallet -</small>
+              <small id="heroCashMeta" class="hero-stat-meta">equity teorica -</small>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Objetivo actual</span>
+              <span class="hero-stat-label">Bias actual</span>
               <strong id="heroTargetOutcome">-</strong>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Trigger visto</span>
+              <span class="hero-stat-label">Ventana / capas</span>
               <strong id="heroTriggerSeen">-</strong>
             </article>
           </div>
@@ -73,32 +73,32 @@
 
         <section class="cards">
           <article class="card accent">
-            <p class="card-label">Posiciones abiertas</p>
+            <p class="card-label">Patas abiertas</p>
             <p class="card-value" id="openPositions">-</p>
-            <p class="card-subvalue">mercados vivos en cartera</p>
+            <p class="card-subvalue">inventario teorico vivo</p>
           </article>
           <article class="card">
-            <p class="card-label">Exposicion (USDC)</p>
+            <p class="card-label">Capital desplegado</p>
             <p class="card-value" id="exposure">-</p>
             <p class="card-subvalue" id="exposureMark">mark-to-market -</p>
           </article>
           <article class="card">
-            <p class="card-label">PnL total</p>
+            <p class="card-label">PnL laboratorio</p>
             <p class="card-value" id="pnl">-</p>
             <p class="card-subvalue" id="pnlBreakdown">realized - / unrealized -</p>
           </article>
           <article class="card">
-            <p class="card-label">Saldo wallet</p>
+            <p class="card-label">Equity teorica</p>
             <p class="card-value" id="liveCashBalance">-</p>
             <p class="card-subvalue" id="liveCashMeta">equity -</p>
           </article>
           <article class="card">
-            <p class="card-label">Senales pendientes</p>
+            <p class="card-label">Capas del plan</p>
             <p class="card-value" id="pendingSignals">-</p>
-            <p class="card-subvalue">cola actual del motor</p>
+            <p class="card-subvalue">tramos del ciclo actual</p>
           </article>
           <article class="card">
-            <p class="card-label">Estrategia</p>
+            <p class="card-label">Modo</p>
             <p class="card-value" id="strategyModeCard">-</p>
             <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
           </article>
@@ -107,43 +107,43 @@
         <section class="strategy-grid" id="strategySection">
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Asignacion</h2>
+              <h2>Microestructura</h2>
             </div>
             <div class="allocation-bars">
               <div class="allocation-row">
-                <span>BTC 5m</span>
-                <strong>50%</strong>
+                <span>Modo</span>
+                <strong id="labModeValue">-</strong>
               </div>
               <div class="progress">
-                <span class="progress-fill progress-fill-btc" style="width: 50%"></span>
+                <span id="labWindowFill" class="progress-fill progress-fill-btc" style="width: 0%"></span>
               </div>
               <div class="allocation-row">
-                <span>General daily / weekly</span>
-                <strong>50%</strong>
+                <span>Mercado actual</span>
+                <strong id="labWindowValue">-</strong>
               </div>
               <div class="progress">
-                <span class="progress-fill progress-fill-core" style="width: 50%"></span>
+                <span id="labExposureFill" class="progress-fill progress-fill-core" style="width: 0%"></span>
               </div>
             </div>
-            <p class="mini-meta">Beneficios: 50% se reinvierte y 50% se reserva.</p>
+            <p id="labMeta" class="mini-meta">sin datos del laboratorio</p>
           </article>
 
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Wallets activas</h2>
+              <h2>Plan de capas</h2>
               <span id="selectedWalletsCount" class="badge">0</span>
             </div>
             <ul id="selectedWalletsList" class="mini-list"></ul>
-            <p id="selectedWalletsMeta" class="mini-meta">sin datos</p>
+            <p id="selectedWalletsMeta" class="mini-meta">sin plan actual</p>
           </article>
 
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Bloqueos de riesgo</h2>
+              <h2>Liquidacion teorica</h2>
               <span id="riskBlocksCount" class="badge">0</span>
             </div>
             <ul id="riskBlocksList" class="mini-list"></ul>
-            <p id="riskBlocksMeta" class="mini-meta">sin datos</p>
+            <p id="riskBlocksMeta" class="mini-meta">sin resoluciones</p>
           </article>
         </section>
 
@@ -151,8 +151,8 @@
           <article class="panel bucket-summary bucket-summary-btc">
             <div class="panel-head panel-head-tight">
               <div>
-                <h2>BTC 5m</h2>
-                <p class="panel-copy">Bucket reservado para Bitcoin 5 Minute Up or Down.</p>
+                <h2>Mercado actual</h2>
+                <p class="panel-copy">Exposicion viva en la ventana BTC 5m que se esta simulando.</p>
               </div>
               <span id="btcBucketCount" class="badge">0 pos.</span>
             </div>
@@ -171,8 +171,8 @@
           <article class="panel bucket-summary bucket-summary-core">
             <div class="panel-head panel-head-tight">
               <div>
-                <h2>General</h2>
-                <p class="panel-copy">Resto del capital en wallets daily / weekly con mejor resultado.</p>
+                <h2>Resoluciones</h2>
+                <p class="panel-copy">Resultado de patas teoricas cerradas al resolverse el mercado.</p>
               </div>
               <span id="generalBucketCount" class="badge">0 pos.</span>
             </div>
@@ -215,8 +215,8 @@
           <article class="panel bucket-panel">
             <div class="panel-head">
               <div>
-                <h2>Posiciones BTC 5m</h2>
-                <p class="panel-copy">Aqui solo debe aparecer el mercado real de Bitcoin a 5 minutos.</p>
+                <h2>Patas abiertas</h2>
+                <p class="panel-copy">Capas teoricas que siguen vivas dentro del mercado BTC 5m.</p>
               </div>
               <span id="positionsBtcCount" class="badge">0</span>
             </div>
@@ -241,8 +241,8 @@
           <article class="panel bucket-panel">
             <div class="panel-head">
               <div>
-                <h2>Posiciones General</h2>
-                <p class="panel-copy">Mercados daily / weekly del resto de wallets seleccionadas.</p>
+                <h2>Otras patas / archivo</h2>
+                <p class="panel-copy">Legs fuera del mercado actual o remanentes hasta la siguiente resolucion.</p>
               </div>
               <span id="positionsGeneralCount" class="badge">0</span>
             </div>

@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
+from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import ExecutionResult, SignalAction
 from app.services.btc5m_strategy import BTC5mStrategyService
@@ -16,9 +17,16 @@ class _FakeGammaClient:
         self.market = market
 
     def get_market_by_slug(self, slug: str) -> dict | None:
-        payload = dict(self.market)
-        payload["slug"] = slug
-        return payload
+        if "question" in self.market or "conditionId" in self.market:
+            payload = dict(self.market)
+            payload["slug"] = slug
+            return payload
+        payload = self.market.get(slug)
+        if payload is None:
+            return None
+        copy = dict(payload)
+        copy["slug"] = slug
+        return copy
 
 
 class _FakeCLOBClient:
@@ -420,4 +428,130 @@ def test_strategy_logs_skip_reason_and_available_cash(tmp_path: Path, caplog) ->
     assert "note=no trigger: richest ask 0.740 < 0.800" in caplog.text
     assert "cash_balance=12.3400" in caplog.text
     assert "available_to_trade=12.3400" in caplog.text
+    db.close()
+
+
+def test_vidarx_micro_builds_dual_leg_plan_in_paper(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-vidarx",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.63"}],
+                "asks": [{"price": "0.67", "size": "1000"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.29"}],
+                "asks": [{"price": "0.33", "size": "1000"}],
+            },
+        },
+        balance=30.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=30.0, max_position_per_market=10.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] == 2
+    positions = db.list_copy_positions()
+    assert len(positions) == 2
+    assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
+    assert db.get_bot_state("strategy_plan_legs") == "2"
+    assert "primary /" in str(db.get_bot_state("strategy_market_bias") or "")
+    db.close()
+
+
+def test_vidarx_micro_settles_closed_market_in_paper(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.upsert_copy_position(
+        asset="asset-up",
+        condition_id="cond-old",
+        size=10.0,
+        avg_price=0.4,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Old",
+        slug="btc-updown-5m-old",
+        outcome="Up",
+        category="crypto",
+    )
+    gamma = _FakeGammaClient(
+        {
+            "btc-updown-5m-old": {
+                "question": "Bitcoin Up or Down - Old",
+                "conditionId": "cond-old",
+                "closed": True,
+                "acceptingOrders": False,
+                "outcomes": "[\"Up\", \"Down\"]",
+                "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+                "outcomePrices": "[\"1\", \"0\"]",
+                "events": [{"startTime": "2026-03-11T10:00:00Z"}],
+            }
+        }
+    )
+    clob = _FakeCLOBClient(books={}, balance=25.0)
+    service = BTC5mStrategyService(
+        db,
+        gamma,
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=25.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] >= 1
+    assert db.get_copy_position("asset-up") is None
+    executions = db.get_recent_executions(limit=5)
+    assert any(str(row["notes"]).startswith("vidarx_resolution:") for row in executions)
+    assert db.get_cumulative_pnl() == 6.0
+    db.close()
+
+
+def test_vidarx_micro_refuses_live_mode(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=20.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=20.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    stats = service.run(mode="live")
+
+    assert stats["blocked"] == 1
+    assert "paper-only" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()

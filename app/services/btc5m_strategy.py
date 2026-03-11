@@ -22,6 +22,12 @@ _OPERATIVE_TRIGGER_PRICE = 0.80
 _OPERATIVE_MAX_OPPOSITE_PRICE = 0.20
 _OPERATIVE_MAX_TARGET_SPREAD = 0.05
 _OPERATIVE_MAX_SECONDS_INTO_WINDOW = 270
+_VIDARX_MIN_SECONDS = 30
+_VIDARX_MAX_SECONDS = 245
+_VIDARX_RICH_TRIGGER_FLOOR = 0.58
+_VIDARX_CHEAP_ENTRY_CEILING = 0.42
+_VIDARX_RICH_ENTRY_CEILING = 0.86
+_VIDARX_MAX_SPREAD = 0.08
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,18 @@ class StrategyOpportunity:
     trigger: MarketOutcome
     rationale: str
     event_start_ts: int
+
+
+@dataclass(frozen=True)
+class StrategyPlan:
+    instructions: tuple[CopyInstruction, ...]
+    note: str
+    primary_target: MarketOutcome
+    secondary_target: MarketOutcome | None
+    trigger: MarketOutcome
+    window_seconds: int
+    cycle_budget: float
+    market_bias: str
 
 
 class BTC5mStrategyService:
@@ -72,6 +90,9 @@ class BTC5mStrategyService:
         self.risk = RiskManager(settings.config)
 
     def run(self, mode: str = "paper") -> dict[str, int]:
+        if self.settings.config.strategy_entry_mode == "vidarx_micro":
+            return self._run_vidarx_micro(mode=mode)
+
         stats = {
             "pending": 0,
             "filled": 0,
@@ -82,7 +103,7 @@ class BTC5mStrategyService:
         }
         total_exposure = self.db.get_total_exposure()
         cash_balance, allowance = self._live_cash_snapshot(mode=mode)
-        live_total_capital = cash_balance + total_exposure if mode == "live" else max(self.settings.config.bankroll, total_exposure)
+        live_total_capital = cash_balance + total_exposure
         self._record_balance_snapshot(
             mode=mode,
             cash_balance=cash_balance,
@@ -214,6 +235,165 @@ class BTC5mStrategyService:
             live_total_capital=live_total_capital,
         )
 
+    def _run_vidarx_micro(self, *, mode: str) -> dict[str, int]:
+        stats = {
+            "pending": 0,
+            "filled": 0,
+            "blocked": 0,
+            "failed": 0,
+            "skipped": 0,
+            "opportunities": 0,
+        }
+        if mode == "live":
+            total_exposure = self.db.get_total_exposure()
+            cash_balance, allowance = self._live_cash_snapshot(mode="paper")
+            live_total_capital = cash_balance + total_exposure
+            note = "vidarx_micro is paper-only; use `python run.py paper` or `python run.py once`"
+            stats["blocked"] += 1
+            self._record_balance_snapshot(
+                mode="paper",
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+            self._record_strategy_snapshot(note=note, extra_state={"strategy_resolution_mode": "paper-settle-at-close"})
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        self._settle_resolved_paper_positions(stats)
+        total_exposure = self.db.get_total_exposure()
+        cash_balance, allowance = self._live_cash_snapshot(mode="paper")
+        live_total_capital = cash_balance + total_exposure
+        self._record_balance_snapshot(
+            mode="paper",
+            cash_balance=cash_balance,
+            allowance=allowance,
+            total_exposure=total_exposure,
+            live_total_capital=live_total_capital,
+        )
+
+        market = self._discover_market()
+        if market is None:
+            stats["skipped"] += 1
+            note = "no active btc5m market"
+            self._record_strategy_snapshot(
+                note=note,
+                extra_state={
+                    "strategy_resolution_mode": "paper-settle-at-close",
+                    "strategy_market_bias": "flat",
+                    "strategy_plan_legs": "0",
+                    "strategy_window_seconds": "0",
+                    "strategy_cycle_budget": "0.000000",
+                    "strategy_current_market_exposure": "0.000000",
+                },
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        plan = self._build_vidarx_plan(
+            market=market,
+            cash_balance=cash_balance,
+            effective_bankroll=live_total_capital,
+            current_total_exposure=total_exposure,
+        )
+        if plan is None:
+            stats["skipped"] += 1
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=self.db.get_bot_state("strategy_last_note") or "no vidarx plan",
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        stats["pending"] = len(plan.instructions)
+        stats["opportunities"] = len(plan.instructions)
+        self._record_strategy_snapshot(
+            market=market,
+            note=plan.note,
+            extra_state={
+                "strategy_target_outcome": plan.primary_target.label,
+                "strategy_target_price": f"{plan.primary_target.best_ask:.6f}",
+                "strategy_trigger_outcome": plan.trigger.label,
+                "strategy_trigger_price_seen": f"{plan.trigger.best_ask:.6f}",
+                "strategy_market_bias": plan.market_bias,
+                "strategy_plan_legs": str(len(plan.instructions)),
+                "strategy_window_seconds": str(plan.window_seconds),
+                "strategy_cycle_budget": f"{plan.cycle_budget:.6f}",
+                "strategy_current_market_exposure": f"{self._get_condition_exposure(str(market.get('conditionId') or '')):.6f}",
+                "strategy_resolution_mode": "paper-settle-at-close",
+            },
+        )
+
+        note = plan.note
+        for instruction in plan.instructions:
+            try:
+                result = self.paper_broker.execute(instruction)
+            except Exception as error:  # noqa: BLE001
+                stats["failed"] += 1
+                note = f"vidarx_micro execution failed: {error}"
+                self.logger.exception("vidarx_micro paper execution failed: %s", error)
+                continue
+
+            if result.status == "filled":
+                stats["filled"] += 1
+            elif result.status == "skipped":
+                stats["skipped"] += 1
+                note = result.message or note
+
+        self._record_strategy_snapshot(
+            market=market,
+            note=note,
+            extra_state={
+                "strategy_target_outcome": plan.primary_target.label,
+                "strategy_target_price": f"{plan.primary_target.best_ask:.6f}",
+                "strategy_trigger_outcome": plan.trigger.label,
+                "strategy_trigger_price_seen": f"{plan.trigger.best_ask:.6f}",
+                "strategy_market_bias": plan.market_bias,
+                "strategy_plan_legs": str(len(plan.instructions)),
+                "strategy_window_seconds": str(plan.window_seconds),
+                "strategy_cycle_budget": f"{plan.cycle_budget:.6f}",
+                "strategy_current_market_exposure": f"{self._get_condition_exposure(str(market.get('conditionId') or '')):.6f}",
+                "strategy_resolution_mode": "paper-settle-at-close",
+            },
+        )
+        total_exposure = self.db.get_total_exposure()
+        cash_balance, allowance = self._live_cash_snapshot(mode="paper")
+        live_total_capital = cash_balance + total_exposure
+        self._record_balance_snapshot(
+            mode="paper",
+            cash_balance=cash_balance,
+            allowance=allowance,
+            total_exposure=total_exposure,
+            live_total_capital=live_total_capital,
+        )
+        return self._complete_cycle(
+            mode="paper",
+            stats=stats,
+            note=note,
+            cash_balance=cash_balance,
+            allowance=allowance,
+            total_exposure=total_exposure,
+            live_total_capital=live_total_capital,
+        )
+
     def _discover_market(self) -> dict | None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
         base_start = now_ts - (now_ts % 300)
@@ -335,6 +515,207 @@ class BTC5mStrategyService:
             event_start_ts=event_start_ts,
         )
 
+    def _build_vidarx_plan(
+        self,
+        *,
+        market: dict,
+        cash_balance: float,
+        effective_bankroll: float,
+        current_total_exposure: float,
+    ) -> StrategyPlan | None:
+        outcomes = _parse_json_list(market.get("outcomes"))
+        token_ids = _parse_json_list(market.get("clobTokenIds"))
+        if len(outcomes) != 2 or len(token_ids) != 2:
+            self._record_strategy_snapshot(market=market, note="market outcomes unavailable")
+            return None
+
+        priced_outcomes: list[MarketOutcome] = []
+        for label, token_id in zip(outcomes, token_ids):
+            book = self._safe_book(token_id)
+            if not book:
+                self._record_strategy_snapshot(market=market, note=f"no orderbook for {label}")
+                return None
+            best_ask = _best_ask(book)
+            best_bid = _best_bid(book)
+            best_ask_size = _best_ask_size(book)
+            if best_ask is None or best_bid is None or best_ask_size is None:
+                self._record_strategy_snapshot(market=market, note=f"incomplete book for {label}")
+                return None
+            priced_outcomes.append(
+                MarketOutcome(
+                    label=str(label),
+                    asset_id=str(token_id),
+                    best_ask=best_ask,
+                    best_bid=best_bid,
+                    best_ask_size=best_ask_size,
+                )
+            )
+
+        priced_outcomes.sort(key=lambda item: item.best_ask, reverse=True)
+        rich_side = priced_outcomes[0]
+        cheap_side = priced_outcomes[1]
+        rich_spread = max(rich_side.best_ask - rich_side.best_bid, 0.0)
+        cheap_spread = max(cheap_side.best_ask - cheap_side.best_bid, 0.0)
+        seconds_into_window = self._seconds_into_window(market)
+        min_seconds = max(self.settings.config.strategy_min_seconds_into_window, _VIDARX_MIN_SECONDS)
+        max_seconds = min(self._effective_max_seconds_into_window(), _VIDARX_MAX_SECONDS)
+
+        if seconds_into_window < min_seconds:
+            self._record_strategy_snapshot(
+                market=market,
+                note=f"vidarx early: {seconds_into_window}s < {min_seconds}s",
+                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+            )
+            return None
+        if seconds_into_window > max_seconds:
+            self._record_strategy_snapshot(
+                market=market,
+                note=f"vidarx late: {seconds_into_window}s > {max_seconds}s",
+                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+            )
+            return None
+
+        if rich_side.best_ask < _VIDARX_RICH_TRIGGER_FLOOR:
+            self._record_strategy_snapshot(
+                market=market,
+                note=f"vidarx no pressure: richest ask {rich_side.best_ask:.3f} < {_VIDARX_RICH_TRIGGER_FLOOR:.3f}",
+                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+            )
+            return None
+
+        if rich_spread > _VIDARX_MAX_SPREAD or cheap_spread > _VIDARX_MAX_SPREAD:
+            self._record_strategy_snapshot(
+                market=market,
+                note=(
+                    f"vidarx spreads wide: {rich_side.label} {rich_spread:.3f} / "
+                    f"{cheap_side.label} {cheap_spread:.3f}"
+                ),
+                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+            )
+            return None
+
+        cheap_active = cheap_side.best_ask <= _VIDARX_CHEAP_ENTRY_CEILING
+        rich_active = rich_side.best_ask <= _VIDARX_RICH_ENTRY_CEILING and seconds_into_window >= 120
+        if not cheap_active and not rich_active:
+            self._record_strategy_snapshot(
+                market=market,
+                note=(
+                    f"vidarx bands inactive: cheap {cheap_side.label} ask={cheap_side.best_ask:.3f}, "
+                    f"rich {rich_side.label} ask={rich_side.best_ask:.3f}"
+                ),
+                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+            )
+            return None
+
+        cycle_budget = self._target_vidarx_cycle_budget(
+            cash_balance=cash_balance,
+            effective_bankroll=effective_bankroll,
+            current_total_exposure=current_total_exposure,
+            seconds_into_window=seconds_into_window,
+        )
+        if cycle_budget < self.settings.config.min_trade_amount:
+            self._record_strategy_snapshot(
+                market=market,
+                note="vidarx cash below min_trade_amount",
+                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+            )
+            return None
+
+        condition_id = str(market.get("conditionId") or "")
+        existing_market_notional = self._get_condition_exposure(condition_id)
+        budget_cap = max(self.settings.config.max_position_per_market - existing_market_notional, 0.0)
+        cycle_budget = min(cycle_budget, budget_cap, cash_balance)
+        if cycle_budget < self.settings.config.min_trade_amount:
+            self._record_strategy_snapshot(
+                market=market,
+                note="vidarx market cap exhausted",
+                extra_state={
+                    "strategy_window_seconds": str(seconds_into_window),
+                    "strategy_current_market_exposure": f"{existing_market_notional:.6f}",
+                },
+            )
+            return None
+
+        desired_both_sides = cheap_active and rich_active and cycle_budget >= self.settings.config.min_trade_amount * 2
+        if desired_both_sides:
+            cheap_budget = cycle_budget * 0.62
+            rich_budget = cycle_budget - cheap_budget
+        elif cheap_active:
+            cheap_budget = cycle_budget
+            rich_budget = 0.0
+        else:
+            cheap_budget = 0.0
+            rich_budget = cycle_budget
+
+        instructions: list[CopyInstruction] = []
+        projected_market_notional = existing_market_notional
+        projected_total_exposure = current_total_exposure
+        rejection_reasons: list[str] = []
+
+        for target, budget, label in (
+            (cheap_side, cheap_budget, "primary"),
+            (rich_side, rich_budget, "hedge"),
+        ):
+            for idx, tranche_notional in enumerate(self._build_vidarx_tranches(budget, seconds_into_window=seconds_into_window), start=1):
+                if tranche_notional < self.settings.config.min_trade_amount:
+                    continue
+                instruction = self._build_vidarx_instruction(
+                    market=market,
+                    target=target,
+                    tranche_notional=tranche_notional,
+                    reason_label=label,
+                    tranche_index=idx,
+                )
+                if instruction is None:
+                    rejection_reasons.append(f"{label} size unavailable")
+                    continue
+                allowed, reason = self.risk.evaluate_instruction(
+                    instruction,
+                    mode="paper",
+                    current_market_notional=projected_market_notional,
+                    current_total_exposure=projected_total_exposure,
+                    current_dynamic_exposure=0.0,
+                    current_btc5m_exposure=projected_total_exposure,
+                    daily_pnl=self.db.get_daily_pnl(datetime.now(timezone.utc).date().isoformat()),
+                    daily_profit_gross=self.db.get_daily_profit_gross(datetime.now(timezone.utc).date().isoformat()),
+                    effective_bankroll=effective_bankroll,
+                    reference_price=target.best_ask,
+                )
+                if not allowed:
+                    rejection_reasons.append(reason)
+                    continue
+                instructions.append(instruction)
+                projected_market_notional += instruction.notional
+                projected_total_exposure += instruction.notional
+
+        if not instructions:
+            note = rejection_reasons[-1] if rejection_reasons else "vidarx no viable tranche"
+            self._record_strategy_snapshot(
+                market=market,
+                note=note,
+                extra_state={
+                    "strategy_window_seconds": str(seconds_into_window),
+                    "strategy_current_market_exposure": f"{existing_market_notional:.6f}",
+                },
+            )
+            return None
+
+        market_bias = f"{cheap_side.label} primary / {rich_side.label} hedge" if len(instructions) > 1 else f"{instructions[0].outcome} single-leg"
+        note = (
+            f"vidarx_micro {market_bias} | window {seconds_into_window}s | "
+            f"cycle {cycle_budget:.2f} | legs {len(instructions)}"
+        )
+        return StrategyPlan(
+            instructions=tuple(instructions),
+            note=note,
+            primary_target=cheap_side if cheap_budget >= rich_budget else rich_side,
+            secondary_target=rich_side if len(instructions) > 1 else None,
+            trigger=rich_side,
+            window_seconds=seconds_into_window,
+            cycle_budget=cycle_budget,
+            market_bias=market_bias,
+        )
+
     def _build_instruction(
         self,
         *,
@@ -412,9 +793,41 @@ class BTC5mStrategyService:
         desired = min(desired, max(effective_bankroll - current_total_exposure, 0.0))
         return max(desired, 0.0)
 
+    def _target_vidarx_cycle_budget(
+        self,
+        *,
+        cash_balance: float,
+        effective_bankroll: float,
+        current_total_exposure: float,
+        seconds_into_window: int,
+    ) -> float:
+        if self.settings.config.strategy_fixed_trade_amount > 0:
+            desired = self.settings.config.strategy_fixed_trade_amount
+        else:
+            desired = cash_balance * self.settings.config.strategy_trade_allocation_pct
+
+        if cash_balance >= self.settings.config.min_trade_amount * 2:
+            desired = max(desired, self.settings.config.min_trade_amount * 2)
+        elif cash_balance >= self.settings.config.min_trade_amount:
+            desired = max(desired, self.settings.config.min_trade_amount)
+
+        if seconds_into_window < 90:
+            desired *= 0.65
+        elif seconds_into_window < 150:
+            desired *= 0.9
+        elif seconds_into_window > 225:
+            desired *= 0.8
+
+        budget_left = max(cash_balance, 0.0)
+        desired = min(desired, budget_left)
+        desired = min(desired, max(effective_bankroll - current_total_exposure, 0.0))
+        desired = min(desired, self.settings.config.max_position_per_market)
+        return max(desired, 0.0)
+
     def _live_cash_snapshot(self, *, mode: str) -> tuple[float, float]:
         if mode != "live":
-            return max(self.settings.config.bankroll - self.db.get_total_exposure(), 0.0), 0.0
+            paper_equity = self.settings.config.bankroll + self.db.get_cumulative_pnl()
+            return max(paper_equity - self.db.get_total_exposure(), 0.0), 0.0
         try:
             balance = self.clob_client.get_collateral_balance()
             return float(balance.get("balance") or 0.0), float(balance.get("allowance") or 0.0)
@@ -445,6 +858,7 @@ class BTC5mStrategyService:
         market: dict | None = None,
         opportunity: StrategyOpportunity | None = None,
         note: str = "",
+        extra_state: dict[str, str] | None = None,
     ) -> None:
         self.db.set_bot_state("strategy_mode", self.settings.config.strategy_mode)
         self.db.set_bot_state("strategy_entry_mode", self.settings.config.strategy_entry_mode)
@@ -458,6 +872,8 @@ class BTC5mStrategyService:
             self.db.set_bot_state("strategy_target_price", f"{opportunity.target.best_ask:.6f}")
             self.db.set_bot_state("strategy_trigger_outcome", opportunity.trigger.label)
             self.db.set_bot_state("strategy_trigger_price_seen", f"{opportunity.trigger.best_ask:.6f}")
+        for key, value in (extra_state or {}).items():
+            self.db.set_bot_state(key, value)
 
     def _has_condition_conflict(self, condition_id: str) -> bool:
         for row in self.db.list_copy_positions():
@@ -477,6 +893,18 @@ class BTC5mStrategyService:
                 continue
             total += 1
         return total
+
+    def _get_condition_exposure(self, condition_id: str) -> float:
+        exposure = 0.0
+        for row in self.db.list_copy_positions():
+            if str(row["condition_id"] or "") != condition_id:
+                continue
+            size = float(row["size"] or 0.0)
+            avg_price = float(row["avg_price"] or 0.0)
+            if size <= 0:
+                continue
+            exposure += abs(size * avg_price)
+        return exposure
 
     def _seconds_into_window(self, market: dict) -> int:
         start_ts = _to_timestamp(str((market.get("events") or [{}])[0].get("startTime") or market.get("eventStartTime") or ""))
@@ -569,6 +997,8 @@ class BTC5mStrategyService:
         return self.paper_broker.execute(instruction)
 
     def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:
+        if self.settings.config.strategy_entry_mode == "vidarx_micro":
+            return
         positions = self.db.list_copy_positions()
         for position in positions:
             asset = str(position["asset"])
@@ -627,6 +1057,109 @@ class BTC5mStrategyService:
 
     def _missing_midpoint_state_key(self, asset: str) -> str:
         return f"btc5m_missing_midpoint:{asset}"
+
+    def _build_vidarx_tranches(self, budget: float, *, seconds_into_window: int) -> list[float]:
+        if budget < self.settings.config.min_trade_amount:
+            return []
+        if budget < self.settings.config.min_trade_amount * 2:
+            return [_round_down(budget, "0.01")]
+
+        if seconds_into_window >= 150:
+            first = _round_down(budget * 0.58, "0.01")
+        else:
+            first = _round_down(budget * 0.65, "0.01")
+        second = _round_down(budget - first, "0.01")
+        if first < self.settings.config.min_trade_amount or second < self.settings.config.min_trade_amount:
+            return [_round_down(budget, "0.01")]
+        return [first, second]
+
+    def _build_vidarx_instruction(
+        self,
+        *,
+        market: dict,
+        target: MarketOutcome,
+        tranche_notional: float,
+        reason_label: str,
+        tranche_index: int,
+    ) -> CopyInstruction | None:
+        max_notional = target.best_ask * target.best_ask_size
+        effective_notional = min(tranche_notional, max_notional)
+        if effective_notional < self.settings.config.min_trade_amount:
+            return None
+        raw_size = effective_notional / target.best_ask
+        size = _round_down(raw_size, "0.0001")
+        if size <= 0:
+            return None
+        notional = size * target.best_ask
+        if notional < self.settings.config.min_trade_amount:
+            return None
+        return CopyInstruction(
+            action=SignalAction.ADD if self.db.get_copy_position(target.asset_id) else SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset=target.asset_id,
+            condition_id=str(market.get("conditionId") or ""),
+            size=size,
+            price=target.best_ask,
+            notional=notional,
+            source_wallet="strategy:vidarx_micro",
+            source_signal_id=0,
+            title=str(market.get("question") or market.get("slug") or ""),
+            slug=str(market.get("slug") or ""),
+            outcome=target.label,
+            category="crypto",
+            reason=f"vidarx_micro:{reason_label}:tranche-{tranche_index}",
+        )
+
+    def _settle_resolved_paper_positions(self, stats: dict[str, int]) -> None:
+        if not self.db.list_copy_positions():
+            return
+
+        for row in list(self.db.list_copy_positions()):
+            slug = str(row["slug"] or "")
+            asset = str(row["asset"] or "")
+            size = float(row["size"] or 0.0)
+            if size <= 0 or "btc-updown-5m-" not in slug:
+                continue
+            market = self.gamma_client.get_market_by_slug(slug)
+            if not market or not bool(market.get("closed")):
+                continue
+            settlement_price = self._resolved_price_for_asset(market, asset)
+            if settlement_price is None:
+                continue
+            instruction = CopyInstruction(
+                action=SignalAction.CLOSE,
+                side=TradeSide.SELL,
+                asset=asset,
+                condition_id=str(row["condition_id"] or ""),
+                size=size,
+                price=settlement_price,
+                notional=size * settlement_price,
+                source_wallet="strategy:vidarx_micro",
+                source_signal_id=0,
+                title=str(row["title"] or ""),
+                slug=slug,
+                outcome=str(row["outcome"] or ""),
+                category=str(row["category"] or "crypto"),
+                reason=f"vidarx_resolution:{slug}:{row['outcome'] or ''}",
+            )
+            result = self.paper_broker.execute(instruction)
+            stats["opportunities"] += 1
+            if result.status == "filled":
+                stats["filled"] += 1
+
+    def _resolved_price_for_asset(self, market: dict, asset: str) -> float | None:
+        token_ids = _parse_json_list(market.get("clobTokenIds"))
+        prices = _parse_json_list(market.get("outcomePrices"))
+        if len(token_ids) != len(prices):
+            return None
+        for token_id, price in zip(token_ids, prices):
+            if str(token_id) != asset:
+                continue
+            try:
+                return float(price)
+            except (TypeError, ValueError):
+                return None
+        return None
 
 
 def _parse_json_list(raw_value: object) -> list[str]:

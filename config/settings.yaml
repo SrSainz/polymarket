@@ -29,7 +29,7 @@ polling_interval_seconds: 45
 execution_mode: "paper"
 dry_run: true
 strategy_mode: "btc5m_orderbook"
-strategy_entry_mode: "buy_opposite"
+strategy_entry_mode: "vidarx_micro"
 strategy_trigger_price: 0.98
 strategy_trade_allocation_pct: 0.10
 strategy_fixed_trade_amount: 0.0
@@ -74,7 +74,7 @@ btc5m_reserve_keywords:
   - "btc 5 minute up or down"
   - "bitcoin 5 minute up or down"
   - "btc-updown-5m"
-autonomous_decisions_enabled: true
+autonomous_decisions_enabled: false
 autonomous_take_profit_pct: 0.12
 autonomous_stop_loss_pct: 0.08
 autonomous_depreciation_window_minutes: 45

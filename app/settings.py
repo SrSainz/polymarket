@@ -42,7 +42,7 @@ class BotConfig(BaseModel):
     execution_mode: Literal["paper", "live"] = "paper"
     dry_run: bool = True
     strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "copy_wallets"
-    strategy_entry_mode: Literal["buy_above", "buy_opposite"] = "buy_opposite"
+    strategy_entry_mode: Literal["buy_above", "buy_opposite", "vidarx_micro"] = "buy_opposite"
     strategy_trigger_price: float = 0.98
     strategy_trade_allocation_pct: float = 0.10
     strategy_fixed_trade_amount: float = 0.0
