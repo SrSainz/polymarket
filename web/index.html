@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Vidarx Microstructure Lab</title>
+    <title>Simulador BTC 5m</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -20,7 +20,7 @@
       <header class="topbar shell-card">
         <div class="brand">
           <p class="kicker">Proyecto principal</p>
-          <h1>Vidarx Microstructure Lab</h1>
+          <h1>Simulador BTC 5m</h1>
           <div class="brand-meta">
             <span id="runtimeBadge" class="soft-badge">Local DB</span>
             <span id="tradingBadge" class="soft-badge accent-badge">PAPER</span>
@@ -41,24 +41,24 @@
       <main class="layout">
         <section class="hero panel panel-hero" id="overviewSection">
           <div class="hero-copy">
-            <p class="hero-kicker">Laboratorio activo</p>
-            <h2 class="hero-title" id="strategyHeroTitle">Simulacion teorica sobre el mercado real BTC 5m.</h2>
+            <p class="hero-kicker">Modo teorico</p>
+            <h2 class="hero-title" id="strategyHeroTitle">Seguimiento simple de la ventana actual de Bitcoin en Polymarket.</h2>
             <p id="systemNotice" class="hero-text">
-              El panel resume capital teorico, layering actual, resoluciones al cierre y el ultimo plan de ejecucion.
+              Aqui veremos cuanto dinero lleva metido el simulador, como va repartido entre subida y bajada, y cuanto gana o pierde al cerrarse cada ventana.
             </p>
           </div>
           <div class="hero-side">
             <article class="hero-stat">
-              <span class="hero-stat-label">Capital teorico disponible</span>
+              <span class="hero-stat-label">Dinero disponible</span>
               <strong id="heroCashBalance">-</strong>
-              <small id="heroCashMeta" class="hero-stat-meta">equity teorica -</small>
+              <small id="heroCashMeta" class="hero-stat-meta">capital total -</small>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Bias actual</span>
+              <span class="hero-stat-label">Reparto actual</span>
               <strong id="heroTargetOutcome">-</strong>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Ventana / capas</span>
+              <span class="hero-stat-label">Momento de la ventana</span>
               <strong id="heroTriggerSeen">-</strong>
             </article>
           </div>
@@ -66,39 +66,39 @@
 
         <nav class="section-nav" aria-label="Secciones del dashboard">
           <a href="#overviewSection" class="section-link">Resumen</a>
-          <a href="#strategySection" class="section-link">Estrategia</a>
+          <a href="#strategySection" class="section-link">Mercado</a>
           <a href="#positionsSection" class="section-link">Posiciones</a>
-          <a href="#activitySection" class="section-link">Actividad</a>
+          <a href="#activitySection" class="section-link">Resultados</a>
         </nav>
 
         <section class="cards">
           <article class="card accent">
-            <p class="card-label">Patas abiertas</p>
+            <p class="card-label">Compras abiertas</p>
             <p class="card-value" id="openPositions">-</p>
-            <p class="card-subvalue">inventario teorico vivo</p>
+            <p class="card-subvalue">operaciones vivas ahora mismo</p>
           </article>
           <article class="card">
-            <p class="card-label">Capital desplegado</p>
+            <p class="card-label">Dinero metido</p>
             <p class="card-value" id="exposure">-</p>
-            <p class="card-subvalue" id="exposureMark">mark-to-market -</p>
+            <p class="card-subvalue" id="exposureMark">valor actualizado -</p>
           </article>
           <article class="card">
-            <p class="card-label">PnL laboratorio</p>
+            <p class="card-label">Ganancia / perdida total</p>
             <p class="card-value" id="pnl">-</p>
-            <p class="card-subvalue" id="pnlBreakdown">realized - / unrealized -</p>
+            <p class="card-subvalue" id="pnlBreakdown">cerrado - / en vivo -</p>
           </article>
           <article class="card">
-            <p class="card-label">Equity teorica</p>
+            <p class="card-label">Capital del simulador</p>
             <p class="card-value" id="liveCashBalance">-</p>
-            <p class="card-subvalue" id="liveCashMeta">equity -</p>
+            <p class="card-subvalue" id="liveCashMeta">disponible -</p>
           </article>
           <article class="card">
-            <p class="card-label">Capas del plan</p>
+            <p class="card-label">Compras previstas</p>
             <p class="card-value" id="pendingSignals">-</p>
-            <p class="card-subvalue">tramos del ciclo actual</p>
+            <p class="card-subvalue">intentos de la ventana actual</p>
           </article>
           <article class="card">
-            <p class="card-label">Modo</p>
+            <p class="card-label">Estado</p>
             <p class="card-value" id="strategyModeCard">-</p>
             <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
           </article>
@@ -107,7 +107,7 @@
         <section class="strategy-grid" id="strategySection">
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Microestructura</h2>
+              <h2>Mercado en juego</h2>
             </div>
             <div class="allocation-bars">
               <div class="allocation-row">
@@ -125,25 +125,25 @@
                 <span id="labExposureFill" class="progress-fill progress-fill-core" style="width: 0%"></span>
               </div>
             </div>
-            <p id="labMeta" class="mini-meta">sin datos del laboratorio</p>
+            <p id="labMeta" class="mini-meta">sin datos del mercado actual</p>
           </article>
 
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Plan de capas</h2>
+              <h2>Como se reparte el dinero</h2>
               <span id="selectedWalletsCount" class="badge">0</span>
             </div>
             <ul id="selectedWalletsList" class="mini-list"></ul>
-            <p id="selectedWalletsMeta" class="mini-meta">sin plan actual</p>
+            <p id="selectedWalletsMeta" class="mini-meta">sin reparto actual</p>
           </article>
 
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Liquidacion teorica</h2>
+              <h2>Ventanas cerradas</h2>
               <span id="riskBlocksCount" class="badge">0</span>
             </div>
             <ul id="riskBlocksList" class="mini-list"></ul>
-            <p id="riskBlocksMeta" class="mini-meta">sin resoluciones</p>
+            <p id="riskBlocksMeta" class="mini-meta">sin ventanas cerradas aun</p>
           </article>
         </section>
 
@@ -152,7 +152,7 @@
             <div class="panel-head panel-head-tight">
               <div>
                 <h2>Mercado actual</h2>
-                <p class="panel-copy">Exposicion viva en la ventana BTC 5m que se esta simulando.</p>
+                <p class="panel-copy">Lo que sigue abierto dentro de la ventana actual.</p>
               </div>
               <span id="btcBucketCount" class="badge">0 pos.</span>
             </div>
@@ -172,7 +172,7 @@
             <div class="panel-head panel-head-tight">
               <div>
                 <h2>Resoluciones</h2>
-                <p class="panel-copy">Resultado de patas teoricas cerradas al resolverse el mercado.</p>
+                <p class="panel-copy">Resultado final de las ventanas ya cerradas.</p>
               </div>
               <span id="generalBucketCount" class="badge">0 pos.</span>
             </div>
@@ -192,7 +192,7 @@
         <section class="mini-panels">
           <article class="panel">
             <div class="panel-head panel-head-tight">
-              <h2>Ganancia neta vs perdida diaria</h2>
+                <h2>Ganado hoy vs perdido hoy</h2>
             </div>
             <div class="donut-row">
               <div id="exposureDonut" class="donut-chart"></div>
@@ -203,7 +203,7 @@
 
           <article class="panel" id="activitySection">
             <div class="panel-head panel-head-tight">
-              <h2>Dolares por operacion</h2>
+                <h2>Ultimos resultados</h2>
               <span id="opsPnlCount" class="badge">0</span>
             </div>
             <ul id="opsPnlList" class="mini-list"></ul>
@@ -216,7 +216,7 @@
             <div class="panel-head">
               <div>
                 <h2>Patas abiertas</h2>
-                <p class="panel-copy">Capas teoricas que siguen vivas dentro del mercado BTC 5m.</p>
+                <p class="panel-copy">Compras que siguen abiertas dentro del mercado actual.</p>
               </div>
               <span id="positionsBtcCount" class="badge">0</span>
             </div>
@@ -242,7 +242,7 @@
             <div class="panel-head">
               <div>
                 <h2>Otras patas / archivo</h2>
-                <p class="panel-copy">Legs fuera del mercado actual o remanentes hasta la siguiente resolucion.</p>
+                <p class="panel-copy">Operaciones fuera del mercado principal o ya desplazadas.</p>
               </div>
               <span id="positionsGeneralCount" class="badge">0</span>
             </div>
@@ -269,7 +269,7 @@
           <summary class="panel-head">
             <div>
               <h2>Ejecuciones recientes</h2>
-              <p class="panel-copy">Compras, ventas y resultado por operacion.</p>
+              <p class="panel-copy">Todas las compras y cierres que ha ido haciendo el simulador.</p>
             </div>
             <span class="badge">Ultimas 50</span>
           </summary>
@@ -296,7 +296,7 @@
           <summary class="panel-head">
             <div>
               <h2>Senales</h2>
-              <p class="panel-copy">Cambios detectados en las wallets que disparan el motor.</p>
+              <p class="panel-copy">Registro tecnico interno del motor.</p>
             </div>
             <span class="badge">Ultimas 100</span>
           </summary>

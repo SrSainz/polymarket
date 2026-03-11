@@ -478,7 +478,156 @@ def test_vidarx_micro_builds_dual_leg_plan_in_paper(tmp_path: Path) -> None:
     assert len(positions) == 2
     assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
     assert db.get_bot_state("strategy_plan_legs") == "2"
-    assert "primary /" in str(db.get_bot_state("strategy_market_bias") or "")
+    assert "lidera" in str(db.get_bot_state("strategy_market_bias") or "")
+    db.close()
+
+
+def test_vidarx_micro_uses_extreme_80_20_bias(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=170)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Extreme",
+        "slug": "btc-updown-5m-extreme",
+        "conditionId": "cond-extreme",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.79"}],
+                "asks": [{"price": "0.81", "size": "1000"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.17"}],
+                "asks": [{"price": "0.19", "size": "1000"}],
+            },
+        },
+        balance=40.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=40.0, max_position_per_market=10.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] >= 2
+    assert float(db.get_bot_state("strategy_primary_ratio") or "0") >= 0.79
+    assert db.get_bot_state("strategy_price_mode") == "extreme"
+    assert db.get_bot_state("strategy_primary_outcome") == "Up"
+    db.close()
+
+
+def test_vidarx_micro_uses_balanced_55_45_bias(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=75)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Balanced",
+        "slug": "btc-updown-5m-balanced",
+        "conditionId": "cond-balanced",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.58"}],
+                "asks": [{"price": "0.60", "size": "1000"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.38"}],
+                "asks": [{"price": "0.40", "size": "1000"}],
+            },
+        },
+        balance=40.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=40.0, max_position_per_market=10.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] >= 2
+    assert 0.54 <= float(db.get_bot_state("strategy_primary_ratio") or "0") <= 0.56
+    assert db.get_bot_state("strategy_price_mode") == "balanced"
+    db.close()
+
+
+def test_vidarx_micro_replenishes_same_price_bucket(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=170)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Repeat",
+        "slug": "btc-updown-5m-repeat",
+        "conditionId": "cond-repeat",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.79"}],
+                "asks": [{"price": "0.81", "size": "1000"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.17"}],
+                "asks": [{"price": "0.19", "size": "1000"}],
+            },
+        },
+        balance=100.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=100.0, max_position_per_market=60.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    first_stats = service.run(mode="paper")
+    first_exposure = db.get_total_exposure()
+    second_stats = service.run(mode="paper")
+    second_exposure = db.get_total_exposure()
+
+    assert first_stats["filled"] >= 2
+    assert second_stats["filled"] >= 1
+    assert second_exposure > first_exposure
+    assert int(db.get_bot_state("strategy_replenishment_count") or "0") >= 1
     db.close()
 
 

@@ -260,6 +260,14 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_cycle_budget = _bot_state_float(conn, "strategy_cycle_budget")
         strategy_current_market_exposure = _bot_state_float(conn, "strategy_current_market_exposure")
         strategy_resolution_mode = _bot_state_text(conn, "strategy_resolution_mode")
+        strategy_timing_regime = _bot_state_text(conn, "strategy_timing_regime")
+        strategy_price_mode = _bot_state_text(conn, "strategy_price_mode")
+        strategy_primary_ratio = _bot_state_float(conn, "strategy_primary_ratio")
+        strategy_primary_outcome = _bot_state_text(conn, "strategy_primary_outcome")
+        strategy_hedge_outcome = _bot_state_text(conn, "strategy_hedge_outcome")
+        strategy_primary_exposure = _bot_state_float(conn, "strategy_primary_exposure")
+        strategy_hedge_exposure = _bot_state_float(conn, "strategy_hedge_exposure")
+        strategy_replenishment_count = _bot_state_int(conn, "strategy_replenishment_count")
         strategy_resolution_count_today = _single_float(
             conn,
             """
@@ -283,11 +291,13 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             (today_utc,),
         )
         positions = conn.execute(
-            "SELECT asset, size, avg_price FROM copy_positions"
+            "SELECT asset, condition_id, size, avg_price, slug, title, outcome FROM copy_positions"
         ).fetchall()
+        recent_resolution_windows = _recent_vidarx_resolution_windows(conn, limit=6)
 
     unrealized_pnl = 0.0
     exposure_mark = 0.0
+    market_groups: dict[str, dict] = {}
     for row in positions:
         asset = str(row["asset"])
         size = float(row["size"])
@@ -295,8 +305,31 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         mark_price = _midpoint_for_asset(clob_host=clob_host, asset=asset)
         if mark_price is None:
             mark_price = avg_price
-        unrealized_pnl += (mark_price - avg_price) * size
+        line_unrealized = (mark_price - avg_price) * size
+        unrealized_pnl += line_unrealized
         exposure_mark += abs(size * mark_price)
+        market_key = str(row["slug"] or row["condition_id"] or row["asset"])
+        group = market_groups.setdefault(
+            market_key,
+            {
+                "slug": str(row["slug"] or ""),
+                "title": str(row["title"] or row["slug"] or row["asset"]),
+                "condition_id": str(row["condition_id"] or ""),
+                "total_exposure": 0.0,
+                "unrealized_pnl": 0.0,
+                "outcomes": {},
+            },
+        )
+        line_exposure = abs(size * avg_price)
+        group["total_exposure"] += line_exposure
+        group["unrealized_pnl"] += line_unrealized
+        outcome_key = str(row["outcome"] or "-")
+        outcome_group = group["outcomes"].setdefault(
+            outcome_key,
+            {"outcome": outcome_key, "exposure": 0.0, "unrealized_pnl": 0.0},
+        )
+        outcome_group["exposure"] += line_exposure
+        outcome_group["unrealized_pnl"] += line_unrealized
 
     pnl_total = realized_pnl + unrealized_pnl
     live_mode_active = execution_mode == "live" and live_trading_enabled
@@ -305,6 +338,44 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         live_cash_allowance=live_cash_allowance,
     )
     live_equity_estimate = live_cash_balance + exposure_mark
+    current_market_group = market_groups.get(strategy_market_slug) if strategy_market_slug else None
+    if current_market_group is None and strategy_market_title:
+        current_market_group = next(
+            (item for item in market_groups.values() if str(item["title"]) == strategy_market_title),
+            None,
+        )
+    current_market_breakdown: list[dict] = []
+    current_market_live_pnl = 0.0
+    primary_exposure_actual = 0.0
+    hedge_exposure_actual = 0.0
+    current_market_total_exposure = strategy_current_market_exposure
+    if current_market_group is not None:
+        current_market_live_pnl = float(current_market_group["unrealized_pnl"])
+        current_market_total_exposure = float(current_market_group["total_exposure"])
+        for outcome_row in sorted(
+            current_market_group["outcomes"].values(),
+            key=lambda item: float(item["exposure"]),
+            reverse=True,
+        ):
+            share_pct = (
+                (float(outcome_row["exposure"]) / current_market_total_exposure) * 100
+                if current_market_total_exposure > 0
+                else 0.0
+            )
+            current_market_breakdown.append(
+                {
+                    "outcome": outcome_row["outcome"],
+                    "exposure": round(float(outcome_row["exposure"]), 4),
+                    "unrealized_pnl": round(float(outcome_row["unrealized_pnl"]), 4),
+                    "share_pct": round(share_pct, 2),
+                }
+            )
+        primary_exposure_actual = float(
+            current_market_group["outcomes"].get(strategy_primary_outcome or "", {}).get("exposure", 0.0)
+        )
+        hedge_exposure_actual = float(
+            current_market_group["outcomes"].get(strategy_hedge_outcome or "", {}).get("exposure", 0.0)
+        )
 
     return {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -348,6 +419,20 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_cycle_budget": round(strategy_cycle_budget, 4),
         "strategy_current_market_exposure": round(strategy_current_market_exposure, 4),
         "strategy_resolution_mode": strategy_resolution_mode,
+        "strategy_timing_regime": strategy_timing_regime,
+        "strategy_price_mode": strategy_price_mode,
+        "strategy_primary_ratio": round(strategy_primary_ratio, 4),
+        "strategy_primary_outcome": strategy_primary_outcome,
+        "strategy_hedge_outcome": strategy_hedge_outcome,
+        "strategy_primary_exposure": round(strategy_primary_exposure, 4),
+        "strategy_hedge_exposure": round(strategy_hedge_exposure, 4),
+        "strategy_replenishment_count": int(strategy_replenishment_count),
+        "strategy_current_market_live_pnl": round(current_market_live_pnl, 4),
+        "strategy_current_market_total_exposure": round(current_market_total_exposure, 4),
+        "strategy_current_market_primary_exposure": round(primary_exposure_actual, 4),
+        "strategy_current_market_hedge_exposure": round(hedge_exposure_actual, 4),
+        "strategy_current_market_breakdown": current_market_breakdown,
+        "strategy_recent_resolutions": recent_resolution_windows,
         "strategy_resolution_count_today": int(strategy_resolution_count_today),
         "strategy_resolution_pnl_today": round(strategy_resolution_pnl_today, 4),
         "strategy_is_lab": strategy_entry_mode == "vidarx_micro",
@@ -529,6 +614,58 @@ def _single_float(conn: sqlite3.Connection, query: str, params: tuple = ()) -> f
     if value is None:
         return 0.0
     return float(value)
+
+
+def _recent_vidarx_resolution_windows(conn: sqlite3.Connection, *, limit: int) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT ts, notes, pnl_delta, notional
+        FROM executions
+        WHERE mode = 'paper' AND notes LIKE 'vidarx_resolution:%'
+        ORDER BY ts DESC
+        LIMIT 400
+        """
+    ).fetchall()
+
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        notes = str(row["notes"] or "")
+        parts = notes.split(":")
+        slug = parts[1] if len(parts) > 1 else "desconocido"
+        outcome = parts[2] if len(parts) > 2 else ""
+        entry = grouped.setdefault(
+            slug,
+            {
+                "slug": slug,
+                "resolved_at": int(row["ts"]),
+                "pnl": 0.0,
+                "notional": 0.0,
+                "legs": 0,
+                "winning_outcome": outcome,
+                "_best_leg_pnl": float("-inf"),
+            },
+        )
+        pnl_delta = float(row["pnl_delta"] or 0.0)
+        entry["resolved_at"] = max(int(row["ts"]), int(entry["resolved_at"]))
+        entry["pnl"] += pnl_delta
+        entry["notional"] += abs(float(row["notional"] or 0.0))
+        entry["legs"] += 1
+        if pnl_delta >= float(entry["_best_leg_pnl"]):
+            entry["_best_leg_pnl"] = pnl_delta
+            entry["winning_outcome"] = outcome
+
+    ordered = sorted(grouped.values(), key=lambda item: int(item["resolved_at"]), reverse=True)[:limit]
+    return [
+        {
+            "slug": str(item["slug"]),
+            "resolved_at": int(item["resolved_at"]),
+            "pnl": round(float(item["pnl"]), 4),
+            "notional": round(float(item["notional"]), 4),
+            "legs": int(item["legs"]),
+            "winning_outcome": str(item["winning_outcome"] or ""),
+        }
+        for item in ordered
+    ]
 
 
 def _bot_state_text(conn: sqlite3.Connection, key: str) -> str:

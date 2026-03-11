@@ -72,12 +72,43 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_mode", "btc5m_orderbook")
     db.set_bot_state("strategy_entry_mode", "vidarx_micro")
     db.set_bot_state("strategy_market_slug", "btc-updown-5m-1773233700")
+    db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Current")
     db.set_bot_state("strategy_market_bias", "Down primary / Up hedge")
     db.set_bot_state("strategy_plan_legs", "2")
     db.set_bot_state("strategy_window_seconds", "176")
     db.set_bot_state("strategy_cycle_budget", "3.25")
     db.set_bot_state("strategy_current_market_exposure", "5.54")
     db.set_bot_state("strategy_resolution_mode", "paper-settle-at-close")
+    db.set_bot_state("strategy_timing_regime", "mid-late")
+    db.set_bot_state("strategy_price_mode", "extreme")
+    db.set_bot_state("strategy_primary_ratio", "0.80")
+    db.set_bot_state("strategy_primary_outcome", "Up")
+    db.set_bot_state("strategy_hedge_outcome", "Down")
+    db.set_bot_state("strategy_primary_exposure", "4.40")
+    db.set_bot_state("strategy_hedge_exposure", "1.14")
+    db.set_bot_state("strategy_replenishment_count", "2")
+    db.upsert_copy_position(
+        asset="asset-up",
+        condition_id="cond-current",
+        size=10.0,
+        avg_price=0.8,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Current",
+        slug="btc-updown-5m-1773233700",
+        outcome="Up",
+        category="crypto",
+    )
+    db.upsert_copy_position(
+        asset="asset-down",
+        condition_id="cond-current",
+        size=5.0,
+        avg_price=0.2,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Current",
+        slug="btc-updown-5m-1773233700",
+        outcome="Down",
+        category="crypto",
+    )
     db.record_execution(
         result=ExecutionResult(
             mode="paper",
@@ -112,5 +143,17 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     assert summary["strategy_cycle_budget"] == 3.25
     assert summary["strategy_current_market_exposure"] == 5.54
     assert summary["strategy_resolution_mode"] == "paper-settle-at-close"
+    assert summary["strategy_timing_regime"] == "mid-late"
+    assert summary["strategy_price_mode"] == "extreme"
+    assert summary["strategy_primary_ratio"] == 0.8
+    assert summary["strategy_primary_outcome"] == "Up"
+    assert summary["strategy_hedge_outcome"] == "Down"
+    assert summary["strategy_replenishment_count"] == 2
+    assert summary["strategy_current_market_total_exposure"] == 9.0
+    assert summary["strategy_current_market_primary_exposure"] == 8.0
+    assert summary["strategy_current_market_hedge_exposure"] == 1.0
+    assert len(summary["strategy_current_market_breakdown"]) == 2
+    assert summary["strategy_current_market_breakdown"][0]["outcome"] == "Up"
+    assert summary["strategy_recent_resolutions"][0]["slug"] == "btc-updown-5m-1773233400"
     assert summary["strategy_resolution_count_today"] == 1
     assert summary["strategy_resolution_pnl_today"] == 6.0

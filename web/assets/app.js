@@ -31,6 +31,12 @@ function fmtUsdPlain(value, digits = 2) {
   return `$${asNumber.toFixed(digits)}`;
 }
 
+function fmtPct(value, digits = 0) {
+  const asNumber = Number(value);
+  if (Number.isNaN(asNumber)) return "-";
+  return `${asNumber.toFixed(digits)}%`;
+}
+
 function tsToIso(ts) {
   if (!ts) return "-";
   const date = new Date(ts * 1000);
@@ -71,13 +77,48 @@ function strategyLabel(summary) {
   const mode = String(summary.strategy_mode || "").trim();
   const entry = String(summary.strategy_entry_mode || "").trim();
   if (!mode) return "-";
-  if (entry === "vidarx_micro") return "Vidarx Micro";
+  if (entry === "vidarx_micro") return "Simulador Vidarx";
   if (mode !== "btc5m_orderbook") return mode;
   return `BTC5m / ${entry || "-"}`;
 }
 
 function isVidarxLab(summary = lastSummary) {
   return Boolean(summary && summary.strategy_entry_mode === "vidarx_micro");
+}
+
+function currentBreakdown(summary) {
+  return Array.isArray(summary?.strategy_current_market_breakdown) ? summary.strategy_current_market_breakdown : [];
+}
+
+function ratioLabel(summary) {
+  const breakdown = currentBreakdown(summary);
+  if (breakdown.length >= 2) {
+    const [first, second] = breakdown;
+    return `${first.outcome} ${fmtPct(first.share_pct, 0)} / ${second.outcome} ${fmtPct(second.share_pct, 0)}`;
+  }
+  if (summary?.strategy_primary_outcome) {
+    const primaryPct = Number(summary.strategy_primary_ratio || 0) * 100;
+    const hedgePct = Math.max(100 - primaryPct, 0);
+    if (summary.strategy_hedge_outcome) {
+      return `${summary.strategy_primary_outcome} ${fmtPct(primaryPct, 0)} / ${summary.strategy_hedge_outcome} ${fmtPct(hedgePct, 0)}`;
+    }
+    return `${summary.strategy_primary_outcome} ${fmtPct(primaryPct, 0)}`;
+  }
+  return summary?.strategy_market_bias || "-";
+}
+
+function timingLabel(summary) {
+  const regime = String(summary?.strategy_timing_regime || "").trim();
+  if (!regime) return "-";
+  if (regime === "early-mid") return "inicio-mitad";
+  if (regime === "mid-late") return "mitad-final";
+  return regime;
+}
+
+function shortSlug(slug) {
+  const value = String(slug || "");
+  if (!value) return "-";
+  return value.replace("btc-updown-5m-", "BTC5m ");
 }
 
 function setLiveBadge(summary) {
@@ -199,14 +240,14 @@ function saveApiBase(value) {
 function paintSummary(summary) {
   lastSummary = summary;
   document.getElementById("openPositions").textContent = String(summary.open_positions ?? 0);
-  document.getElementById("exposure").textContent = fmt(summary.exposure, 2);
-  document.getElementById("exposureMark").textContent = `mark-to-market ${fmtUsdPlain(Number(summary.exposure_mark ?? summary.exposure ?? 0), 2)}`;
+  document.getElementById("exposure").textContent = fmtUsdPlain(Number(summary.exposure ?? 0), 2);
+  document.getElementById("exposureMark").textContent = `valor ahora ${fmtUsdPlain(Number(summary.exposure_mark ?? summary.exposure ?? 0), 2)}`;
 
   const pnlTotal = Number(summary.pnl_total ?? summary.cumulative_pnl ?? 0);
   const realized = Number(summary.realized_pnl ?? summary.cumulative_pnl ?? 0);
   const unrealized = Number(summary.unrealized_pnl ?? 0);
   document.getElementById("pnl").textContent = fmtUsd(pnlTotal, 2);
-  document.getElementById("pnlBreakdown").textContent = `realized ${fmtUsd(realized, 2)} / unrealized ${fmtUsd(unrealized, 2)}`;
+  document.getElementById("pnlBreakdown").textContent = `cerrado ${fmtUsd(realized, 2)} / en vivo ${fmtUsd(unrealized, 2)}`;
   setCardTone("pnl", pnlTotal);
 
   document.getElementById("pendingSignals").textContent = isVidarxLab(summary)
@@ -217,12 +258,12 @@ function paintSummary(summary) {
   const liveEquityEstimate = Number(summary.live_equity_estimate ?? summary.live_total_capital ?? liveCashBalance);
   const liveBalanceUpdatedAt = Number(summary.live_balance_updated_at ?? 0);
   const liveSnapshotText = liveBalanceUpdatedAt > 0 ? tsToIso(liveBalanceUpdatedAt) : "sin snapshot";
-  document.getElementById("liveCashBalance").textContent = fmtUsdPlain(liveCashBalance, 2);
+  document.getElementById("liveCashBalance").textContent = fmtUsdPlain(liveEquityEstimate, 2);
   document.getElementById("liveCashMeta").textContent =
-    `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | snapshot ${liveSnapshotText}`;
+    `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | snapshot ${liveSnapshotText}`;
   document.getElementById("heroCashBalance").textContent = fmtUsdPlain(liveAvailableToTrade, 2);
   document.getElementById("heroCashMeta").textContent =
-    `equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)}`;
+    `capital total ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
@@ -243,10 +284,13 @@ function paintSummary(summary) {
   const strategyNote = String(summary.strategy_last_note || "");
   const strategyWindowSeconds = Number(summary.strategy_window_seconds || 0);
   const strategyPlanLegs = Number(summary.strategy_plan_legs || 0);
-  const strategyBias = String(summary.strategy_market_bias || "");
+  const strategyBias = ratioLabel(summary);
   const strategyCycleBudget = Number(summary.strategy_cycle_budget || 0);
+  const currentMarketLivePnl = Number(summary.strategy_current_market_live_pnl || 0);
+  const replenishmentCount = Number(summary.strategy_replenishment_count || 0);
+  const timing = timingLabel(summary);
   document.getElementById("strategyCardMeta").textContent = isVidarxLab(summary)
-    ? `${strategyBias || "sin bias"} | ciclo ${fmtUsdPlain(strategyCycleBudget, 2)} | ${strategyNote || strategyTitle}`
+    ? `${strategyBias || "sin reparto"} | plan ${fmtUsdPlain(strategyCycleBudget, 2)} | ${strategyNote || strategyTitle}`
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
     : strategyNote || strategyTitle;
@@ -258,7 +302,7 @@ function paintSummary(summary) {
     : "-";
   document.getElementById("heroTriggerSeen").textContent = isVidarxLab(summary)
     ? strategyWindowSeconds > 0
-      ? `${strategyWindowSeconds}s | ${strategyPlanLegs} capas`
+      ? `${timing} | ${strategyWindowSeconds}s | ${strategyPlanLegs} compras`
       : "-"
     : triggerOutcome
     ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}`
@@ -280,7 +324,7 @@ function paintSummary(summary) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   const strategyNoteText = strategyNote || "sin trigger";
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
-    ? `Laboratorio en ${tradingModeLabel(summary)} teorico. Equity ${fmtUsdPlain(liveEquityEstimate, 2)}, disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}. Bias ${strategyBias || "sin bias"}, ventana ${strategyWindowSeconds || 0}s, capas ${strategyPlanLegs || 0}, ciclo ${fmtUsdPlain(strategyCycleBudget, 2)}. Resoluciones hoy ${summary.strategy_resolution_count_today ?? 0}, PnL ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}. Nota: ${strategyNoteText}.`
+    ? `Simulacion en ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, dinero metido ${fmtUsdPlain(Number(summary.strategy_current_market_total_exposure || summary.exposure || 0), 2)}, resultado vivo ${fmtUsd(currentMarketLivePnl, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
   paintLabOverview(summary);
@@ -289,32 +333,36 @@ function paintSummary(summary) {
 function paintLabOverview(summary) {
   const windowSeconds = Math.max(Number(summary.strategy_window_seconds || 0), 0);
   const windowPct = Math.min((windowSeconds / 300) * 100, 100);
-  const deployed = Math.max(Number(summary.strategy_current_market_exposure || 0), 0);
-  const totalExposure = Math.max(Number(summary.exposure || 0), 0);
-  const exposurePct = totalExposure > 0 ? Math.min((deployed / totalExposure) * 100, 100) : 0;
+  const deployed = Math.max(Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0), 0);
+  const cycleBudget = Math.max(Number(summary.strategy_cycle_budget || 0), 0);
+  const exposurePct = cycleBudget > 0 ? Math.min((deployed / cycleBudget) * 100, 100) : 0;
 
   document.getElementById("labModeValue").textContent = isVidarxLab(summary)
-    ? String(summary.strategy_resolution_mode || "paper").replaceAll("-", " ")
+    ? `${timingLabel(summary)} / ${String(summary.strategy_price_mode || "sin banda").replaceAll("-", " ")}`
     : strategyLabel(summary);
   document.getElementById("labWindowValue").textContent =
-    String(summary.strategy_market_slug || summary.strategy_market_title || "-");
+    String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `ventana ${windowSeconds}s | bias ${summary.strategy_market_bias || "sin bias"} | capas ${summary.strategy_plan_legs || 0} | mercado ${fmtUsdPlain(deployed, 2)}`
+    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
 function paintSelectedWallets(items) {
   const body = document.getElementById("selectedWalletsList");
   if (isVidarxLab()) {
+    const primaryExposure =
+      Number(lastSummary?.strategy_current_market_primary_exposure || lastSummary?.strategy_primary_exposure || 0);
+    const hedgeExposure =
+      Number(lastSummary?.strategy_current_market_hedge_exposure || lastSummary?.strategy_hedge_exposure || 0);
     const planRows = [
-      ["Mercado", String(lastSummary?.strategy_market_slug || "-")],
-      ["Bias", String(lastSummary?.strategy_market_bias || "sin bias")],
-      ["Capas", String(lastSummary?.strategy_plan_legs || 0)],
-      ["Ventana", `${Number(lastSummary?.strategy_window_seconds || 0)}s`],
-      ["Ciclo", fmtUsdPlain(Number(lastSummary?.strategy_cycle_budget || 0), 2)],
-      ["Objetivo", String(lastSummary?.strategy_target_outcome || "-")],
+      ["Mercado", String(lastSummary?.strategy_market_title || lastSummary?.strategy_market_slug || "-")],
+      ["Lado principal", `${String(lastSummary?.strategy_primary_outcome || "-")} | ${fmtUsdPlain(primaryExposure, 2)}`],
+      ["Cobertura", `${String(lastSummary?.strategy_hedge_outcome || "-")} | ${fmtUsdPlain(hedgeExposure, 2)}`],
+      ["Reparto", ratioLabel(lastSummary)],
+      ["Compras previstas", String(lastSummary?.strategy_plan_legs || 0)],
+      ["Reposiciones", String(lastSummary?.strategy_replenishment_count || 0)],
     ];
     document.getElementById("selectedWalletsCount").textContent = String(planRows.length);
     body.innerHTML = planRows
@@ -328,7 +376,7 @@ function paintSelectedWallets(items) {
       )
       .join("");
     document.getElementById("selectedWalletsMeta").textContent =
-      String(lastSummary?.strategy_last_note || "sin plan actual");
+      `momento ${timingLabel(lastSummary)} | plan ${fmtUsdPlain(Number(lastSummary?.strategy_cycle_budget || 0), 2)}`;
     return;
   }
 
@@ -357,24 +405,25 @@ function paintSelectedWallets(items) {
 function paintRiskBlocks(payload) {
   if (isVidarxLab()) {
     const body = document.getElementById("riskBlocksList");
-    const items = [
-      ["Resoluciones hoy", String(lastSummary?.strategy_resolution_count_today || 0)],
-      ["PnL resuelto", fmtUsd(Number(lastSummary?.strategy_resolution_pnl_today || 0), 2)],
-      ["Modo", String(lastSummary?.strategy_resolution_mode || "-")],
-      ["Ultima nota", String(lastSummary?.strategy_last_note || "sin nota")],
-    ];
-    document.getElementById("riskBlocksCount").textContent = String(Number(lastSummary?.strategy_resolution_count_today || 0));
+    const items = Array.isArray(lastSummary?.strategy_recent_resolutions) ? lastSummary.strategy_recent_resolutions : [];
+    document.getElementById("riskBlocksCount").textContent = String(items.length);
+    if (!items.length) {
+      body.innerHTML = `<li class="mini-item"><strong>Sin cierres todavia</strong><span>cuando se resuelva una ventana aparecera aqui</span></li>`;
+      document.getElementById("riskBlocksMeta").textContent = "sin ventanas cerradas aun";
+      return;
+    }
     body.innerHTML = items
       .map(
-        ([label, value]) => `
+        (item) => `
       <li class="mini-item">
-        <strong>${escapeHtml(label)}</strong>
-        <span>${escapeHtml(value)}</span>
+        <strong>${escapeHtml(shortSlug(item.slug))}</strong>
+        <span>${escapeHtml(item.winning_outcome || "sin ganador")} | ${fmtUsdPlain(Number(item.notional || 0), 2)}</span>
+        <span class="${Number(item.pnl || 0) > 0 ? "pnl-pos" : Number(item.pnl || 0) < 0 ? "pnl-neg" : "pnl-flat"}">${fmtUsd(Number(item.pnl || 0), 2)}</span>
       </li>
     `
       )
       .join("");
-    document.getElementById("riskBlocksMeta").textContent = "cierres teoricos por resolucion";
+    document.getElementById("riskBlocksMeta").textContent = `hoy ${lastSummary?.strategy_resolution_count_today || 0} ventanas | ${fmtUsd(Number(lastSummary?.strategy_resolution_pnl_today || 0), 2)}`;
     return;
   }
 
@@ -453,7 +502,7 @@ function paintOperationPnl(items) {
 
   if (!latest.length) {
     body.innerHTML = `<li class="mini-item"><strong>Sin operaciones</strong><span>todavia no hay ejecuciones</span></li>`;
-    meta.textContent = "ultimas operaciones";
+    meta.textContent = "ultimos movimientos";
     return;
   }
 
@@ -465,8 +514,8 @@ function paintOperationPnl(items) {
       return `
         <li class="mini-item">
           <strong>${escapeHtml(tsToIso(item.ts))} | ${escapeHtml(item.action || "-")} ${escapeHtml(item.side || "-")}</strong>
-          <span>${escapeHtml(shortWallet(item.source_wallet || item.mode || "-"))}</span>
-          <span>metido ${fmtUsd(notional, 2)}</span>
+          <span>${escapeHtml(shortSlug(item.notes?.startsWith("vidarx_resolution:") ? item.notes.split(":")[1] : item.slug || item.source_wallet || item.mode || "-"))}</span>
+          <span>metido ${fmtUsdPlain(notional, 2)}</span>
           <span class="${klass}">resultado ${fmtUsd(delta, 4)}</span>
         </li>
       `;
@@ -475,7 +524,7 @@ function paintOperationPnl(items) {
 
   const sum = latest.reduce((acc, item) => acc + Number(item.pnl_delta || 0), 0);
   const invested = latest.reduce((acc, item) => acc + Math.abs(Number(item.notional || 0)), 0);
-  meta.textContent = `ultimas ${latest.length}: metido ${fmtUsd(invested, 2)} | resultado ${fmtUsd(sum, 4)}`;
+  meta.textContent = `ultimos ${latest.length}: metido ${fmtUsdPlain(invested, 2)} | resultado ${fmtUsd(sum, 4)}`;
 }
 
 function renderPositionRows(items, emptyLabel) {
@@ -530,16 +579,19 @@ function paintPositions(items) {
   const btcSummary = summarizeBucket(btcItems);
   const generalSummary = summarizeBucket(generalItems);
 
-  document.getElementById("btcBucketCount").textContent = `${btcItems.length} pos.`;
-  document.getElementById("btcBucketExposure").textContent = fmtUsdPlain(btcSummary.exposure, 2);
-  document.getElementById("btcBucketPnl").textContent = fmtUsd(btcSummary.unrealized, 2);
+  const currentExposure = Number(lastSummary?.strategy_current_market_total_exposure || btcSummary.exposure || 0);
+  const currentLivePnl = Number(lastSummary?.strategy_current_market_live_pnl || btcSummary.unrealized || 0);
+  document.getElementById("btcBucketCount").textContent = `${btcItems.length} ops.`;
+  document.getElementById("btcBucketExposure").textContent = fmtUsdPlain(currentExposure, 2);
+  document.getElementById("btcBucketPnl").textContent = fmtUsd(currentLivePnl, 2);
 
   if (isVidarxLab()) {
-    document.getElementById("generalBucketCount").textContent = `${Number(lastSummary?.strategy_resolution_count_today || 0)} cierres`;
-    document.getElementById("generalBucketExposure").textContent = fmtUsdPlain(
-      Number(lastSummary?.strategy_cycle_budget || 0),
-      2
+    const resolvedNotional = (Array.isArray(lastSummary?.strategy_recent_resolutions) ? lastSummary.strategy_recent_resolutions : []).reduce(
+      (acc, item) => acc + Number(item.notional || 0),
+      0
     );
+    document.getElementById("generalBucketCount").textContent = `${Number(lastSummary?.strategy_resolution_count_today || 0)} ventanas`;
+    document.getElementById("generalBucketExposure").textContent = fmtUsdPlain(resolvedNotional, 2);
     document.getElementById("generalBucketPnl").textContent = fmtUsd(
       Number(lastSummary?.strategy_resolution_pnl_today || 0),
       2

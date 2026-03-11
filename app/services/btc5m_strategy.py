@@ -25,9 +25,23 @@ _OPERATIVE_MAX_SECONDS_INTO_WINDOW = 270
 _VIDARX_MIN_SECONDS = 30
 _VIDARX_MAX_SECONDS = 245
 _VIDARX_RICH_TRIGGER_FLOOR = 0.58
-_VIDARX_CHEAP_ENTRY_CEILING = 0.42
 _VIDARX_RICH_ENTRY_CEILING = 0.86
 _VIDARX_MAX_SPREAD = 0.08
+_VIDARX_TILTED_RICH_MIN = 0.68
+_VIDARX_TILTED_RICH_MAX = 0.76
+_VIDARX_TILTED_CHEAP_MIN = 0.24
+_VIDARX_TILTED_CHEAP_MAX = 0.32
+_VIDARX_EXTREME_RICH_MIN = 0.77
+_VIDARX_EXTREME_RICH_MAX = 0.83
+_VIDARX_EXTREME_CHEAP_MIN = 0.17
+_VIDARX_EXTREME_CHEAP_MAX = 0.23
+_VIDARX_BALANCED_RICH_MIN = 0.52
+_VIDARX_BALANCED_RICH_MAX = 0.67
+_VIDARX_BALANCED_CHEAP_MIN = 0.33
+_VIDARX_BALANCED_CHEAP_MAX = 0.48
+_VIDARX_EARLY_MID_END = 110
+_VIDARX_MID_LATE_START = 150
+_VIDARX_BUCKET_TOLERANCE = 0.015
 
 
 @dataclass(frozen=True)
@@ -61,6 +75,12 @@ class StrategyPlan:
     window_seconds: int
     cycle_budget: float
     market_bias: str
+    timing_regime: str
+    price_mode: str
+    primary_ratio: float
+    primary_notional: float
+    secondary_notional: float
+    replenishment_count: int
 
 
 class BTC5mStrategyService:
@@ -257,7 +277,12 @@ class BTC5mStrategyService:
                 total_exposure=total_exposure,
                 live_total_capital=live_total_capital,
             )
-            self._record_strategy_snapshot(note=note, extra_state={"strategy_resolution_mode": "paper-settle-at-close"})
+            self._record_strategy_snapshot(
+                note=note,
+                extra_state=self._vidarx_state_defaults(
+                    strategy_resolution_mode="paper-settle-at-close",
+                ),
+            )
             return self._complete_cycle(
                 mode="paper",
                 stats=stats,
@@ -286,14 +311,9 @@ class BTC5mStrategyService:
             note = "no active btc5m market"
             self._record_strategy_snapshot(
                 note=note,
-                extra_state={
-                    "strategy_resolution_mode": "paper-settle-at-close",
-                    "strategy_market_bias": "flat",
-                    "strategy_plan_legs": "0",
-                    "strategy_window_seconds": "0",
-                    "strategy_cycle_budget": "0.000000",
-                    "strategy_current_market_exposure": "0.000000",
-                },
+                extra_state=self._vidarx_state_defaults(
+                    strategy_resolution_mode="paper-settle-at-close",
+                ),
             )
             return self._complete_cycle(
                 mode="paper",
@@ -339,6 +359,14 @@ class BTC5mStrategyService:
                 "strategy_cycle_budget": f"{plan.cycle_budget:.6f}",
                 "strategy_current_market_exposure": f"{self._get_condition_exposure(str(market.get('conditionId') or '')):.6f}",
                 "strategy_resolution_mode": "paper-settle-at-close",
+                "strategy_timing_regime": plan.timing_regime,
+                "strategy_price_mode": plan.price_mode,
+                "strategy_primary_ratio": f"{plan.primary_ratio:.6f}",
+                "strategy_primary_outcome": plan.primary_target.label,
+                "strategy_hedge_outcome": plan.secondary_target.label if plan.secondary_target else "",
+                "strategy_primary_exposure": f"{plan.primary_notional:.6f}",
+                "strategy_hedge_exposure": f"{plan.secondary_notional:.6f}",
+                "strategy_replenishment_count": str(plan.replenishment_count),
             },
         )
 
@@ -354,6 +382,11 @@ class BTC5mStrategyService:
 
             if result.status == "filled":
                 stats["filled"] += 1
+                self._increment_vidarx_bucket_count(
+                    slug=instruction.slug,
+                    asset=instruction.asset,
+                    price=instruction.price,
+                )
             elif result.status == "skipped":
                 stats["skipped"] += 1
                 note = result.message or note
@@ -372,6 +405,14 @@ class BTC5mStrategyService:
                 "strategy_cycle_budget": f"{plan.cycle_budget:.6f}",
                 "strategy_current_market_exposure": f"{self._get_condition_exposure(str(market.get('conditionId') or '')):.6f}",
                 "strategy_resolution_mode": "paper-settle-at-close",
+                "strategy_timing_regime": plan.timing_regime,
+                "strategy_price_mode": plan.price_mode,
+                "strategy_primary_ratio": f"{plan.primary_ratio:.6f}",
+                "strategy_primary_outcome": plan.primary_target.label,
+                "strategy_hedge_outcome": plan.secondary_target.label if plan.secondary_target else "",
+                "strategy_primary_exposure": f"{plan.primary_notional:.6f}",
+                "strategy_hedge_exposure": f"{plan.secondary_notional:.6f}",
+                "strategy_replenishment_count": str(plan.replenishment_count),
             },
         )
         total_exposure = self.db.get_total_exposure()
@@ -557,21 +598,36 @@ class BTC5mStrategyService:
         rich_spread = max(rich_side.best_ask - rich_side.best_bid, 0.0)
         cheap_spread = max(cheap_side.best_ask - cheap_side.best_bid, 0.0)
         seconds_into_window = self._seconds_into_window(market)
-        min_seconds = max(self.settings.config.strategy_min_seconds_into_window, _VIDARX_MIN_SECONDS)
-        max_seconds = min(self._effective_max_seconds_into_window(), _VIDARX_MAX_SECONDS)
-
-        if seconds_into_window < min_seconds:
+        price_mode, primary_ratio = self._classify_vidarx_market(rich_side=rich_side, cheap_side=cheap_side)
+        if not price_mode:
             self._record_strategy_snapshot(
                 market=market,
-                note=f"vidarx early: {seconds_into_window}s < {min_seconds}s",
-                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+                note=(
+                    f"vidarx fuera de rango: {rich_side.label} {rich_side.best_ask:.3f} / "
+                    f"{cheap_side.label} {cheap_side.best_ask:.3f}"
+                ),
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_trigger_outcome=rich_side.label,
+                    strategy_trigger_price_seen=f"{rich_side.best_ask:.6f}",
+                ),
             )
             return None
-        if seconds_into_window > max_seconds:
+
+        timing_regime, timing_note = self._select_vidarx_timing_regime(
+            seconds_into_window=seconds_into_window,
+            price_mode=price_mode,
+        )
+        if timing_regime is None:
             self._record_strategy_snapshot(
                 market=market,
-                note=f"vidarx late: {seconds_into_window}s > {max_seconds}s",
-                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+                note=timing_note,
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_price_mode=price_mode,
+                    strategy_trigger_outcome=rich_side.label,
+                    strategy_trigger_price_seen=f"{rich_side.best_ask:.6f}",
+                ),
             )
             return None
 
@@ -579,7 +635,12 @@ class BTC5mStrategyService:
             self._record_strategy_snapshot(
                 market=market,
                 note=f"vidarx no pressure: richest ask {rich_side.best_ask:.3f} < {_VIDARX_RICH_TRIGGER_FLOOR:.3f}",
-                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_price_mode=price_mode,
+                    strategy_trigger_outcome=rich_side.label,
+                    strategy_trigger_price_seen=f"{rich_side.best_ask:.6f}",
+                ),
             )
             return None
 
@@ -590,20 +651,27 @@ class BTC5mStrategyService:
                     f"vidarx spreads wide: {rich_side.label} {rich_spread:.3f} / "
                     f"{cheap_side.label} {cheap_spread:.3f}"
                 ),
-                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_price_mode=price_mode,
+                ),
             )
             return None
 
-        cheap_active = cheap_side.best_ask <= _VIDARX_CHEAP_ENTRY_CEILING
-        rich_active = rich_side.best_ask <= _VIDARX_RICH_ENTRY_CEILING and seconds_into_window >= 120
-        if not cheap_active and not rich_active:
+        primary_target = rich_side
+        hedge_target = cheap_side
+        primary_in_band = self._price_matches_vidarx_band(rich_side.best_ask, price_mode=price_mode, role="primary")
+        hedge_in_band = self._price_matches_vidarx_band(cheap_side.best_ask, price_mode=price_mode, role="hedge")
+        if not primary_in_band:
             self._record_strategy_snapshot(
                 market=market,
                 note=(
-                    f"vidarx bands inactive: cheap {cheap_side.label} ask={cheap_side.best_ask:.3f}, "
-                    f"rich {rich_side.label} ask={rich_side.best_ask:.3f}"
+                    f"vidarx precio fuerte fuera de banda: {rich_side.label} ask={rich_side.best_ask:.3f}"
                 ),
-                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_price_mode=price_mode,
+                ),
             )
             return None
 
@@ -611,13 +679,18 @@ class BTC5mStrategyService:
             cash_balance=cash_balance,
             effective_bankroll=effective_bankroll,
             current_total_exposure=current_total_exposure,
-            seconds_into_window=seconds_into_window,
+            timing_regime=timing_regime,
+            price_mode=price_mode,
         )
         if cycle_budget < self.settings.config.min_trade_amount:
             self._record_strategy_snapshot(
                 market=market,
                 note="vidarx cash below min_trade_amount",
-                extra_state={"strategy_window_seconds": str(seconds_into_window)},
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_price_mode=price_mode,
+                    strategy_timing_regime=timing_regime,
+                ),
             )
             return None
 
@@ -629,34 +702,62 @@ class BTC5mStrategyService:
             self._record_strategy_snapshot(
                 market=market,
                 note="vidarx market cap exhausted",
-                extra_state={
-                    "strategy_window_seconds": str(seconds_into_window),
-                    "strategy_current_market_exposure": f"{existing_market_notional:.6f}",
-                },
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                    strategy_price_mode=price_mode,
+                    strategy_timing_regime=timing_regime,
+                ),
             )
             return None
 
-        desired_both_sides = cheap_active and rich_active and cycle_budget >= self.settings.config.min_trade_amount * 2
-        if desired_both_sides:
-            cheap_budget = cycle_budget * 0.62
-            rich_budget = cycle_budget - cheap_budget
-        elif cheap_active:
-            cheap_budget = cycle_budget
-            rich_budget = 0.0
-        else:
-            cheap_budget = 0.0
-            rich_budget = cycle_budget
+        primary_budget = cycle_budget * primary_ratio
+        hedge_budget = cycle_budget - primary_budget
+        if not hedge_in_band:
+            primary_budget = cycle_budget
+            hedge_budget = 0.0
+        elif hedge_budget < self.settings.config.min_trade_amount:
+            primary_budget = cycle_budget
+            hedge_budget = 0.0
 
         instructions: list[CopyInstruction] = []
         projected_market_notional = existing_market_notional
         projected_total_exposure = current_total_exposure
         rejection_reasons: list[str] = []
+        primary_notional = 0.0
+        hedge_notional = 0.0
+        replenishment_count = 0
 
         for target, budget, label in (
-            (cheap_side, cheap_budget, "primary"),
-            (rich_side, rich_budget, "hedge"),
+            (primary_target, primary_budget, "primary"),
+            (hedge_target, hedge_budget, "hedge"),
         ):
-            for idx, tranche_notional in enumerate(self._build_vidarx_tranches(budget, seconds_into_window=seconds_into_window), start=1):
+            if budget < self.settings.config.min_trade_amount:
+                continue
+            bucket_price = self._vidarx_bucket_price(target.best_ask)
+            already_filled = self._get_vidarx_bucket_count(
+                slug=str(market.get("slug") or ""),
+                asset=target.asset_id,
+                price=bucket_price,
+            )
+            max_bucket_fills = self._vidarx_bucket_fill_cap(
+                price_mode=price_mode,
+                timing_regime=timing_regime,
+                role=label,
+            )
+            remaining_bucket_fills = max(max_bucket_fills - already_filled, 0)
+            if remaining_bucket_fills <= 0:
+                rejection_reasons.append(f"{label} bucket exhausted @{bucket_price:.2f}")
+                continue
+            for idx, tranche_notional in enumerate(
+                self._build_vidarx_tranches(
+                    budget,
+                    timing_regime=timing_regime,
+                    price_mode=price_mode,
+                    remaining_bucket_fills=remaining_bucket_fills,
+                ),
+                start=1,
+            ):
                 if tranche_notional < self.settings.config.min_trade_amount:
                     continue
                 instruction = self._build_vidarx_instruction(
@@ -687,33 +788,56 @@ class BTC5mStrategyService:
                 instructions.append(instruction)
                 projected_market_notional += instruction.notional
                 projected_total_exposure += instruction.notional
+                if label == "primary":
+                    primary_notional += instruction.notional
+                else:
+                    hedge_notional += instruction.notional
+                if already_filled + idx > 1:
+                    replenishment_count += 1
 
         if not instructions:
             note = rejection_reasons[-1] if rejection_reasons else "vidarx no viable tranche"
             self._record_strategy_snapshot(
                 market=market,
                 note=note,
-                extra_state={
-                    "strategy_window_seconds": str(seconds_into_window),
-                    "strategy_current_market_exposure": f"{existing_market_notional:.6f}",
-                },
+                extra_state=self._vidarx_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                    strategy_price_mode=price_mode,
+                    strategy_timing_regime=timing_regime,
+                    strategy_primary_ratio=f"{primary_ratio:.6f}",
+                    strategy_primary_outcome=primary_target.label,
+                    strategy_hedge_outcome=hedge_target.label,
+                ),
             )
             return None
 
-        market_bias = f"{cheap_side.label} primary / {rich_side.label} hedge" if len(instructions) > 1 else f"{instructions[0].outcome} single-leg"
+        actual_primary_ratio = primary_notional / max(primary_notional + hedge_notional, 1e-9)
+        market_bias = (
+            f"{primary_target.label} lidera {int(round(actual_primary_ratio * 100))}% / "
+            f"{hedge_target.label} cubre {int(round((1 - actual_primary_ratio) * 100))}%"
+            if hedge_notional > 0
+            else f"{primary_target.label} en solitario"
+        )
         note = (
-            f"vidarx_micro {market_bias} | window {seconds_into_window}s | "
-            f"cycle {cycle_budget:.2f} | legs {len(instructions)}"
+            f"{market_bias} | {timing_regime} | banda {price_mode} | "
+            f"mercado {seconds_into_window}s | compras {len(instructions)}"
         )
         return StrategyPlan(
             instructions=tuple(instructions),
             note=note,
-            primary_target=cheap_side if cheap_budget >= rich_budget else rich_side,
-            secondary_target=rich_side if len(instructions) > 1 else None,
+            primary_target=primary_target,
+            secondary_target=hedge_target if hedge_notional > 0 else None,
             trigger=rich_side,
             window_seconds=seconds_into_window,
             cycle_budget=cycle_budget,
             market_bias=market_bias,
+            timing_regime=timing_regime,
+            price_mode=price_mode,
+            primary_ratio=actual_primary_ratio,
+            primary_notional=primary_notional,
+            secondary_notional=hedge_notional,
+            replenishment_count=replenishment_count,
         )
 
     def _build_instruction(
@@ -799,7 +923,8 @@ class BTC5mStrategyService:
         cash_balance: float,
         effective_bankroll: float,
         current_total_exposure: float,
-        seconds_into_window: int,
+        timing_regime: str,
+        price_mode: str,
     ) -> float:
         if self.settings.config.strategy_fixed_trade_amount > 0:
             desired = self.settings.config.strategy_fixed_trade_amount
@@ -811,12 +936,17 @@ class BTC5mStrategyService:
         elif cash_balance >= self.settings.config.min_trade_amount:
             desired = max(desired, self.settings.config.min_trade_amount)
 
-        if seconds_into_window < 90:
-            desired *= 0.65
-        elif seconds_into_window < 150:
-            desired *= 0.9
-        elif seconds_into_window > 225:
-            desired *= 0.8
+        if timing_regime == "early-mid":
+            desired *= 0.85
+        else:
+            desired *= 1.0
+
+        if price_mode == "extreme":
+            desired *= 1.25
+        elif price_mode == "tilted":
+            desired *= 1.05
+        else:
+            desired *= 0.90
 
         budget_left = max(cash_balance, 0.0)
         desired = min(desired, budget_left)
@@ -1042,6 +1172,123 @@ class BTC5mStrategyService:
                 stats["failed"] += 1
                 self.logger.exception("btc5m autonomous exit failed asset=%s: %s", asset, error)
 
+    def _vidarx_state_defaults(self, **overrides: str) -> dict[str, str]:
+        state = {
+            "strategy_market_bias": "sin reparto",
+            "strategy_plan_legs": "0",
+            "strategy_window_seconds": "0",
+            "strategy_cycle_budget": "0.000000",
+            "strategy_current_market_exposure": "0.000000",
+            "strategy_resolution_mode": "paper-settle-at-close",
+            "strategy_timing_regime": "",
+            "strategy_price_mode": "",
+            "strategy_primary_ratio": "0.000000",
+            "strategy_primary_outcome": "",
+            "strategy_hedge_outcome": "",
+            "strategy_primary_exposure": "0.000000",
+            "strategy_hedge_exposure": "0.000000",
+            "strategy_replenishment_count": "0",
+            "strategy_target_outcome": "",
+            "strategy_target_price": "0.000000",
+            "strategy_trigger_outcome": "",
+            "strategy_trigger_price_seen": "0.000000",
+        }
+        state.update({key: value for key, value in overrides.items() if value is not None})
+        return state
+
+    def _classify_vidarx_market(self, *, rich_side: MarketOutcome, cheap_side: MarketOutcome) -> tuple[str | None, float]:
+        rich = rich_side.best_ask
+        cheap = cheap_side.best_ask
+        gap = rich - cheap
+
+        if self._band_contains(rich, _VIDARX_EXTREME_RICH_MIN, _VIDARX_EXTREME_RICH_MAX) and self._band_contains(
+            cheap, _VIDARX_EXTREME_CHEAP_MIN, _VIDARX_EXTREME_CHEAP_MAX
+        ):
+            return "extreme", 0.80
+
+        if self._band_contains(rich, _VIDARX_TILTED_RICH_MIN, _VIDARX_TILTED_RICH_MAX) and self._band_contains(
+            cheap, _VIDARX_TILTED_CHEAP_MIN, _VIDARX_TILTED_CHEAP_MAX
+        ):
+            return "tilted", 0.68
+
+        if self._band_contains(rich, _VIDARX_BALANCED_RICH_MIN, _VIDARX_BALANCED_RICH_MAX) and self._band_contains(
+            cheap, _VIDARX_BALANCED_CHEAP_MIN, _VIDARX_BALANCED_CHEAP_MAX
+        ):
+            return "balanced", 0.55
+
+        if rich >= 0.77 and cheap <= 0.23:
+            return "extreme", 0.80
+        if rich >= 0.66 and cheap <= 0.34 and gap >= 0.30:
+            return "tilted", 0.68
+        if rich >= 0.52 and cheap >= 0.33 and gap <= 0.24:
+            return "balanced", 0.55
+        return None, 0.0
+
+    def _select_vidarx_timing_regime(self, *, seconds_into_window: int, price_mode: str) -> tuple[str | None, str]:
+        if _VIDARX_MIN_SECONDS <= seconds_into_window <= _VIDARX_EARLY_MID_END:
+            return "early-mid", ""
+        if _VIDARX_MID_LATE_START <= seconds_into_window <= _VIDARX_MAX_SECONDS:
+            return "mid-late", ""
+        if seconds_into_window < _VIDARX_MIN_SECONDS:
+            return None, f"vidarx demasiado pronto: {seconds_into_window}s < {_VIDARX_MIN_SECONDS}s"
+        if seconds_into_window < _VIDARX_MID_LATE_START:
+            return None, (
+                f"vidarx esperando segunda oleada: {seconds_into_window}s fuera de "
+                f"30-110s y 150-245s ({price_mode})"
+            )
+        return None, f"vidarx tarde: {seconds_into_window}s > {_VIDARX_MAX_SECONDS}s"
+
+    def _price_matches_vidarx_band(self, price: float, *, price_mode: str, role: str) -> bool:
+        if price_mode == "extreme":
+            bounds = (
+                (_VIDARX_EXTREME_RICH_MIN, _VIDARX_EXTREME_RICH_MAX)
+                if role == "primary"
+                else (_VIDARX_EXTREME_CHEAP_MIN, _VIDARX_EXTREME_CHEAP_MAX)
+            )
+        elif price_mode == "tilted":
+            bounds = (
+                (_VIDARX_TILTED_RICH_MIN, _VIDARX_TILTED_RICH_MAX)
+                if role == "primary"
+                else (_VIDARX_TILTED_CHEAP_MIN, _VIDARX_TILTED_CHEAP_MAX)
+            )
+        else:
+            bounds = (
+                (_VIDARX_BALANCED_RICH_MIN, _VIDARX_BALANCED_RICH_MAX)
+                if role == "primary"
+                else (_VIDARX_BALANCED_CHEAP_MIN, _VIDARX_BALANCED_CHEAP_MAX)
+            )
+        return self._band_contains(price, bounds[0], bounds[1], tolerance=_VIDARX_BUCKET_TOLERANCE)
+
+    def _band_contains(self, value: float, low: float, high: float, *, tolerance: float = 0.0) -> bool:
+        return (low - tolerance) <= value <= (high + tolerance)
+
+    def _get_vidarx_bucket_count(self, *, slug: str, asset: str, price: float) -> int:
+        row = self.db.get_bot_state(self._vidarx_bucket_key(slug=slug, asset=asset, price=price))
+        if row is None:
+            return 0
+        try:
+            return int(row)
+        except ValueError:
+            return 0
+
+    def _increment_vidarx_bucket_count(self, *, slug: str, asset: str, price: float) -> None:
+        key = self._vidarx_bucket_key(slug=slug, asset=asset, price=price)
+        current = self._get_vidarx_bucket_count(slug=slug, asset=asset, price=price)
+        self.db.set_bot_state(key, str(current + 1))
+
+    def _vidarx_bucket_key(self, *, slug: str, asset: str, price: float) -> str:
+        return f"vidarx_bucket:{slug}:{asset}:{price:.2f}"
+
+    def _vidarx_bucket_price(self, price: float) -> float:
+        return _round_down(price, "0.01")
+
+    def _vidarx_bucket_fill_cap(self, *, price_mode: str, timing_regime: str, role: str) -> int:
+        if price_mode == "extreme":
+            return 4 if timing_regime == "mid-late" or role == "primary" else 3
+        if price_mode == "tilted":
+            return 3 if role == "primary" else 2
+        return 2
+
     def _remember_missing_midpoint(self, asset: str) -> None:
         state_key = self._missing_midpoint_state_key(asset)
         if self.db.get_bot_state(state_key) == "1":
@@ -1058,20 +1305,48 @@ class BTC5mStrategyService:
     def _missing_midpoint_state_key(self, asset: str) -> str:
         return f"btc5m_missing_midpoint:{asset}"
 
-    def _build_vidarx_tranches(self, budget: float, *, seconds_into_window: int) -> list[float]:
+    def _build_vidarx_tranches(
+        self,
+        budget: float,
+        *,
+        timing_regime: str,
+        price_mode: str,
+        remaining_bucket_fills: int,
+    ) -> list[float]:
         if budget < self.settings.config.min_trade_amount:
             return []
-        if budget < self.settings.config.min_trade_amount * 2:
+        if budget < self.settings.config.min_trade_amount * 2 or remaining_bucket_fills <= 1:
             return [_round_down(budget, "0.01")]
 
-        if seconds_into_window >= 150:
-            first = _round_down(budget * 0.58, "0.01")
+        if price_mode == "extreme":
+            weights = [0.34, 0.28, 0.22, 0.16] if timing_regime == "mid-late" else [0.42, 0.33, 0.25]
+        elif price_mode == "tilted":
+            weights = [0.42, 0.32, 0.26] if timing_regime == "mid-late" else [0.55, 0.45]
         else:
-            first = _round_down(budget * 0.65, "0.01")
-        second = _round_down(budget - first, "0.01")
-        if first < self.settings.config.min_trade_amount or second < self.settings.config.min_trade_amount:
+            weights = [0.56, 0.44]
+
+        weights = weights[:remaining_bucket_fills]
+        total_weight = sum(weights)
+        if total_weight <= 0:
             return [_round_down(budget, "0.01")]
-        return [first, second]
+
+        tranches: list[float] = []
+        allocated = 0.0
+        for idx, weight in enumerate(weights, start=1):
+            if idx == len(weights):
+                tranche = _round_down(max(budget - allocated, 0.0), "0.01")
+            else:
+                tranche = _round_down(budget * (weight / total_weight), "0.01")
+            if tranche >= self.settings.config.min_trade_amount:
+                tranches.append(tranche)
+                allocated += tranche
+        if not tranches:
+            return [_round_down(budget, "0.01")]
+        if len(tranches) == 1:
+            return tranches
+        if any(tranche < self.settings.config.min_trade_amount for tranche in tranches):
+            return [_round_down(budget, "0.01")]
+        return tranches
 
     def _build_vidarx_instruction(
         self,
