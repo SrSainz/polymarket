@@ -55,13 +55,18 @@ _VIDARX_ALLOWED_SETUPS = {
 }
 _ARB_PAIR_SUM_MAX = 0.995
 _ARB_CHEAP_SIDE_SUM_MAX = 1.030
-_ARB_FAIR_VALUE_EDGE_MIN = 0.018
+_ARB_FAIR_VALUE_EDGE_MIN = 0.012
 _ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.65
 _ARB_MAX_PAIR_LEVELS = 10
 _ARB_EARLY_MID_END = 150
 _ARB_MID_LATE_START = 151
 _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 290
+_ARB_MIN_NOTIONAL = 1.00
+_ARB_PAIR_BURST_BASE = (2.0, 3.0, 5.0, 8.0, 13.0)
+_ARB_PAIR_BURST_MID_LATE = (2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0)
+_ARB_SINGLE_BURST_BASE = (1.0, 1.5, 2.5, 4.0, 6.0)
+_ARB_SINGLE_BURST_MID_LATE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 13.0)
 _MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
@@ -995,7 +1000,7 @@ class BTC5mStrategyService:
             current_total_exposure=current_total_exposure,
             timing_regime=timing_regime,
         )
-        if cycle_budget < self.settings.config.min_trade_amount:
+        if cycle_budget < self._arb_min_notional():
             self._record_strategy_snapshot(
                 market=market,
                 note="arb_micro bankroll below minimum",
@@ -1011,6 +1016,7 @@ class BTC5mStrategyService:
                 up_outcome=up_outcome,
                 down_outcome=down_outcome,
                 budget=cycle_budget,
+                timing_regime=timing_regime,
             )
             if pair_levels:
                 instructions: list[CopyInstruction] = []
@@ -1075,11 +1081,13 @@ class BTC5mStrategyService:
         if cheap_side is not None:
             target, fair_value, relative_edge = cheap_side
             single_budget = _round_down(cycle_budget * _ARB_SINGLE_SIDE_BUDGET_FRACTION, "0.01")
-            single_budget = min(max(single_budget, self.settings.config.min_trade_amount), cash_balance)
+            single_budget = min(max(single_budget, self._arb_min_notional()), cash_balance)
             single_levels = self._build_arb_single_side_levels(
                 target=target,
                 budget=single_budget,
                 fair_value=fair_value,
+                timing_regime=timing_regime,
+                relative_edge=relative_edge,
             )
             if single_levels:
                 instructions = [
@@ -1180,7 +1188,7 @@ class BTC5mStrategyService:
         if current_total_exposure > 0:
             desired *= 0.75
 
-        min_pair_budget = self.settings.config.min_trade_amount * 2
+        min_pair_budget = self._arb_min_notional() * 2
         desired = max(desired, min_pair_budget)
         desired = min(desired, cash_balance)
         return _round_down(desired, "0.01")
@@ -1191,6 +1199,7 @@ class BTC5mStrategyService:
         up_outcome: MarketOutcome,
         down_outcome: MarketOutcome,
         budget: float,
+        timing_regime: str,
     ) -> list[ArbPairLevel]:
         up_levels = [[level.price, level.size] for level in up_outcome.ask_levels[:_ARB_MAX_PAIR_LEVELS]]
         down_levels = [[level.price, level.size] for level in down_outcome.ask_levels[:_ARB_MAX_PAIR_LEVELS]]
@@ -1198,11 +1207,12 @@ class BTC5mStrategyService:
         up_idx = 0
         down_idx = 0
         remaining_budget = budget
+        min_notional = self._arb_min_notional()
 
         while (
             up_idx < len(up_levels)
             and down_idx < len(down_levels)
-            and remaining_budget >= self.settings.config.min_trade_amount * 2
+            and remaining_budget >= min_notional * 2
             and len(pairs) < _ARB_MAX_PAIR_LEVELS
         ):
             up_price, up_size = float(up_levels[up_idx][0]), float(up_levels[up_idx][1])
@@ -1211,42 +1221,58 @@ class BTC5mStrategyService:
             if pair_sum >= _ARB_PAIR_SUM_MAX:
                 break
 
-            max_shares_budget = remaining_budget / max(pair_sum, 1e-9)
-            shares = _round_down(min(up_size, down_size, max_shares_budget), "0.0001")
-            if shares <= 0:
+            available_shares = min(up_size, down_size)
+            if available_shares <= 0:
                 if up_size <= down_size:
                     up_idx += 1
                 else:
                     down_idx += 1
                 continue
 
-            up_notional = shares * up_price
-            down_notional = shares * down_price
-            if up_notional < self.settings.config.min_trade_amount or down_notional < self.settings.config.min_trade_amount:
-                if up_notional < self.settings.config.min_trade_amount and down_notional < self.settings.config.min_trade_amount:
-                    if up_size <= down_size:
-                        up_idx += 1
-                    else:
-                        down_idx += 1
-                elif up_notional < self.settings.config.min_trade_amount:
+            edge_pct = max(1.0 - pair_sum, 0.0)
+            tranche_targets = self._arb_pair_tranche_targets(timing_regime=timing_regime, edge_pct=edge_pct)
+            level_consumed = False
+            for tranche_target in tranche_targets:
+                if remaining_budget < min_notional * 2:
+                    break
+                if len(pairs) >= _ARB_MAX_PAIR_LEVELS:
+                    break
+
+                tranche_budget = min(tranche_target, remaining_budget)
+                max_shares_budget = tranche_budget / max(pair_sum, 1e-9)
+                shares = _round_down(min(available_shares, max_shares_budget), "0.0001")
+                if shares <= 0:
+                    continue
+
+                up_notional = _round_down(shares * up_price, "0.01")
+                down_notional = _round_down(shares * down_price, "0.01")
+                if up_notional < min_notional or down_notional < min_notional:
+                    continue
+
+                total_notional = up_notional + down_notional
+                pairs.append(
+                    ArbPairLevel(
+                        up_price=up_price,
+                        down_price=down_price,
+                        shares=shares,
+                        pair_sum=pair_sum,
+                        total_notional=total_notional,
+                    )
+                )
+                remaining_budget -= total_notional
+                available_shares = max(available_shares - shares, 0.0)
+                up_levels[up_idx][1] = max(up_levels[up_idx][1] - shares, 0.0)
+                down_levels[down_idx][1] = max(down_levels[down_idx][1] - shares, 0.0)
+                level_consumed = True
+                if available_shares <= 1e-9:
+                    break
+
+            if not level_consumed:
+                if up_size <= down_size:
                     up_idx += 1
                 else:
                     down_idx += 1
                 continue
-
-            total_notional = up_notional + down_notional
-            pairs.append(
-                ArbPairLevel(
-                    up_price=up_price,
-                    down_price=down_price,
-                    shares=shares,
-                    pair_sum=pair_sum,
-                    total_notional=total_notional,
-                )
-            )
-            remaining_budget -= total_notional
-            up_levels[up_idx][1] = max(up_size - shares, 0.0)
-            down_levels[down_idx][1] = max(down_size - shares, 0.0)
 
             if up_levels[up_idx][1] <= 1e-9:
                 up_idx += 1
@@ -1281,13 +1307,17 @@ class BTC5mStrategyService:
         target: MarketOutcome,
         budget: float,
         fair_value: float,
+        timing_regime: str,
+        relative_edge: float,
     ) -> list[ArbSingleSideLevel]:
         remaining_budget = budget
         levels: list[ArbSingleSideLevel] = []
         max_price = fair_value - max(_ARB_FAIR_VALUE_EDGE_MIN / 2, 0.005)
+        min_notional = self._arb_min_notional()
+        tranche_targets = self._arb_single_tranche_targets(timing_regime=timing_regime, edge_pct=relative_edge)
 
         for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]:
-            if remaining_budget < self.settings.config.min_trade_amount:
+            if remaining_budget < min_notional:
                 break
             price = float(level.price)
             size = float(level.size)
@@ -1296,19 +1326,53 @@ class BTC5mStrategyService:
             if size <= 0:
                 continue
 
-            max_shares_budget = remaining_budget / max(price, 1e-9)
-            shares = _round_down(min(size, max_shares_budget), "0.0001")
-            if shares <= 0:
-                continue
+            available_shares = size
+            level_used = False
+            for tranche_target in tranche_targets:
+                if remaining_budget < min_notional:
+                    break
+                tranche_budget = min(tranche_target, remaining_budget)
+                max_shares_budget = tranche_budget / max(price, 1e-9)
+                shares = _round_down(min(available_shares, max_shares_budget), "0.0001")
+                if shares <= 0:
+                    continue
 
-            notional = _round_down(shares * price, "0.01")
-            if notional < self.settings.config.min_trade_amount:
-                continue
+                notional = _round_down(shares * price, "0.01")
+                if notional < min_notional:
+                    continue
 
-            levels.append(ArbSingleSideLevel(price=price, shares=shares, notional=notional))
-            remaining_budget -= notional
+                levels.append(ArbSingleSideLevel(price=price, shares=shares, notional=notional))
+                remaining_budget -= notional
+                available_shares = max(available_shares - shares, 0.0)
+                level_used = True
+                if available_shares <= 1e-9:
+                    break
+
+            if not level_used:
+                continue
 
         return levels
+
+    def _arb_min_notional(self) -> float:
+        return min(self.settings.config.min_trade_amount, _ARB_MIN_NOTIONAL)
+
+    def _arb_pair_tranche_targets(self, *, timing_regime: str, edge_pct: float) -> tuple[float, ...]:
+        base = _ARB_PAIR_BURST_MID_LATE if timing_regime == "mid-late" else _ARB_PAIR_BURST_BASE
+        scale = 1.0
+        if edge_pct >= 0.015:
+            scale = 1.25
+        elif edge_pct <= 0.007:
+            scale = 0.8
+        return tuple(_round_down(target * scale, "0.01") for target in base)
+
+    def _arb_single_tranche_targets(self, *, timing_regime: str, edge_pct: float) -> tuple[float, ...]:
+        base = _ARB_SINGLE_BURST_MID_LATE if timing_regime == "mid-late" else _ARB_SINGLE_BURST_BASE
+        scale = 1.0
+        if edge_pct >= 0.03:
+            scale = 1.35
+        elif edge_pct <= 0.015:
+            scale = 0.85
+        return tuple(_round_down(target * scale, "0.01") for target in base)
 
     def _build_arb_instruction(
         self,
@@ -1324,7 +1388,7 @@ class BTC5mStrategyService:
             return None
         notional = _round_down(shares * price, "0.01")
         size = _round_down(notional / price, "0.0001")
-        if notional < self.settings.config.min_trade_amount or size <= 0:
+        if notional < self._arb_min_notional() or size <= 0:
             return None
         return CopyInstruction(
             action=SignalAction.ADD if self.db.get_copy_position(target.asset_id) else SignalAction.OPEN,

@@ -1324,7 +1324,7 @@ def test_arb_micro_buys_both_sides_on_underround(tmp_path: Path) -> None:
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] >= 2
+    assert stats["filled"] >= 8
     positions = db.list_copy_positions()
     assert len(positions) == 2
     assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
@@ -1398,7 +1398,7 @@ def test_arb_micro_buys_single_cheap_side_from_bid_implied_fair_value(tmp_path: 
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] >= 1
+    assert stats["filled"] >= 4
     positions = db.list_copy_positions()
     assert len(positions) == 1
     assert str(positions[0]["outcome"]) == "Up"
@@ -1454,7 +1454,7 @@ def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Pat
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] >= 2
+    assert stats["filled"] >= 4
     positions = db.list_copy_positions()
     assert len(positions) == 2
     assert float(positions[0]["avg_price"]) >= 0.41 or float(positions[1]["avg_price"]) >= 0.56
