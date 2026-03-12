@@ -29,6 +29,11 @@ class _FakeGammaClient:
         return copy
 
 
+class _FailingGammaClient:
+    def get_market_by_slug(self, slug: str) -> dict | None:
+        raise ConnectionError(f"dns failed for {slug}")
+
+
 class _FakeCLOBClient:
     def __init__(self, books: dict[str, dict], balance: float = 50.0) -> None:
         self.books = books
@@ -1167,6 +1172,41 @@ def test_vidarx_micro_settles_closed_market_in_paper(tmp_path: Path) -> None:
     executions = db.get_recent_executions(limit=5)
     assert any(str(row["notes"]).startswith("vidarx_resolution:") for row in executions)
     assert db.get_cumulative_pnl() == 6.0
+    db.close()
+
+
+def test_vidarx_micro_settlement_network_error_does_not_crash(tmp_path: Path, caplog) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.upsert_copy_position(
+        asset="asset-up",
+        condition_id="cond-old",
+        size=5.0,
+        avg_price=0.8,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Old",
+        slug="btc-updown-5m-old",
+        outcome="Up",
+        category="crypto",
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FailingGammaClient(),
+        _FakeCLOBClient(books={}, balance=25.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=25.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    caplog.set_level(logging.WARNING)
+    service._settle_resolved_paper_positions({"pending": 0, "filled": 0, "blocked": 0, "failed": 0, "skipped": 0, "opportunities": 0})
+
+    assert db.get_copy_position("asset-up") is not None
+    assert "market lookup failed" in caplog.text
     db.close()
 
 

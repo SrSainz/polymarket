@@ -1685,7 +1685,11 @@ class BTC5mStrategyService:
             size = float(row["size"] or 0.0)
             if size <= 0 or "btc-updown-5m-" not in slug:
                 continue
-            market = self.gamma_client.get_market_by_slug(slug)
+            try:
+                market = self.gamma_client.get_market_by_slug(slug)
+            except Exception as error:  # noqa: BLE001
+                self.logger.warning("paper settle skipped slug=%s: market lookup failed: %s", slug, error)
+                continue
             if not market or not bool(market.get("closed")):
                 continue
             settlement_price = self._resolved_price_for_asset(market, asset)
