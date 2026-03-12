@@ -38,7 +38,7 @@ class BotConfig(BaseModel):
     require_recent_trade_for_position: bool = False
     position_recent_trade_lookback_hours: int = 72
     position_recent_trades_limit: int = 300
-    polling_interval_seconds: int = 1
+    polling_interval_seconds: float = 0.25
     market_feed_enabled: bool = True
     market_feed_stale_seconds: float = 2.5
     execution_mode: Literal["paper", "live"] = "paper"
@@ -202,8 +202,8 @@ class BotConfig(BaseModel):
             raise ValueError("position_recent_trade_lookback_hours must be >= 1")
         if self.position_recent_trades_limit < 1:
             raise ValueError("position_recent_trades_limit must be >= 1")
-        if self.polling_interval_seconds < 1:
-            raise ValueError("polling_interval_seconds must be >= 1")
+        if self.polling_interval_seconds < 0.2:
+            raise ValueError("polling_interval_seconds must be >= 0.2")
         if self.market_feed_stale_seconds <= 0:
             raise ValueError("market_feed_stale_seconds must be > 0")
         if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:

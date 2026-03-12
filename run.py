@@ -79,10 +79,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _loop_strategy(strategy_service: BTC5mStrategyService, *, mode: str, sleep_seconds: int) -> int:
+def _wait_for_next_cycle(strategy_service: BTC5mStrategyService, *, mode: str, sleep_seconds: float) -> None:
+    feed = getattr(strategy_service.clob_client, "market_feed", None)
+    entry_mode = str(strategy_service.settings.config.strategy_entry_mode or "")
+    if (
+        mode == "paper"
+        and entry_mode == "arb_micro"
+        and feed is not None
+        and getattr(strategy_service.settings.config, "market_feed_enabled", False)
+    ):
+        feed.wait_for_update(timeout_seconds=sleep_seconds)
+        return
+    time.sleep(sleep_seconds)
+
+
+def _loop_strategy(strategy_service: BTC5mStrategyService, *, mode: str, sleep_seconds: float) -> int:
     while True:
         run_strategy_once(strategy_service, mode)
-        time.sleep(sleep_seconds)
+        _wait_for_next_cycle(strategy_service, mode=mode, sleep_seconds=sleep_seconds)
 
 
 def main() -> int:

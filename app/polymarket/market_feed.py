@@ -46,6 +46,7 @@ class MarketFeed:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._connected_event = threading.Event()
+        self._update_event = threading.Event()
         self._ws_app = None
         self._warned_unavailable = False
 
@@ -82,6 +83,7 @@ class MarketFeed:
 
     def close(self) -> None:
         self._stop_event.set()
+        self._update_event.set()
         if self._ws_app is not None:
             try:
                 self._ws_app.close()
@@ -138,6 +140,13 @@ class MarketFeed:
             tracked_assets=tracked_assets,
             age_ms=age_ms,
         )
+
+    def wait_for_update(self, timeout_seconds: float) -> bool:
+        timeout = max(float(timeout_seconds), 0.0)
+        signaled = self._update_event.wait(timeout)
+        if signaled:
+            self._update_event.clear()
+        return signaled
 
     def _ws_supported(self) -> bool:
         if not self.enabled:
@@ -249,6 +258,7 @@ class MarketFeed:
         with self._lock:
             self._books[asset_id] = book
             self._updated_at[asset_id] = time.time()
+        self._update_event.set()
 
     def _apply_price_change_payload(self, payload: dict[str, Any]) -> None:
         asset_id = _payload_asset_id(payload)
@@ -259,6 +269,7 @@ class MarketFeed:
             updated = _apply_price_changes(current, payload)
             self._books[asset_id] = updated
             self._updated_at[asset_id] = time.time()
+        self._update_event.set()
 
     def _apply_best_bid_ask_payload(self, payload: dict[str, Any]) -> None:
         asset_id = _payload_asset_id(payload)
@@ -269,6 +280,7 @@ class MarketFeed:
             updated = _apply_best_bid_ask(current, payload)
             self._books[asset_id] = updated
             self._updated_at[asset_id] = time.time()
+        self._update_event.set()
 
 
 def _payload_asset_id(payload: dict[str, Any]) -> str:
