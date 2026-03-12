@@ -1,6 +1,8 @@
 polling_interval_seconds: 0.25
 market_feed_enabled: true
 market_feed_stale_seconds: 2.5
+spot_feed_enabled: true
+spot_feed_stale_seconds: 1.5
 execution_mode: "paper"
 dry_run: true
 

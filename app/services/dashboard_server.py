@@ -238,6 +238,15 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_pair_sum = _bot_state_float(conn, "strategy_pair_sum")
         strategy_edge_pct = _bot_state_float(conn, "strategy_edge_pct")
         strategy_fair_value = _bot_state_float(conn, "strategy_fair_value")
+        strategy_spot_price = _bot_state_float(conn, "strategy_spot_price")
+        strategy_spot_anchor = _bot_state_float(conn, "strategy_spot_anchor")
+        strategy_spot_delta_bps = _bot_state_float(conn, "strategy_spot_delta_bps")
+        strategy_spot_fair_up = _bot_state_float(conn, "strategy_spot_fair_up")
+        strategy_spot_fair_down = _bot_state_float(conn, "strategy_spot_fair_down")
+        strategy_spot_source = _bot_state_text(conn, "strategy_spot_source")
+        strategy_spot_age_ms = _bot_state_int(conn, "strategy_spot_age_ms")
+        strategy_spot_binance = _bot_state_float(conn, "strategy_spot_binance")
+        strategy_spot_chainlink = _bot_state_float(conn, "strategy_spot_chainlink")
         strategy_last_note = _bot_state_text(conn, "strategy_last_note")
         strategy_last_updated_at = _bot_state_int(conn, "strategy_last_updated_at")
         strategy_market_bias = _bot_state_text(conn, "strategy_market_bias")
@@ -405,6 +414,15 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_pair_sum": round(strategy_pair_sum, 4),
         "strategy_edge_pct": round(strategy_edge_pct, 6),
         "strategy_fair_value": round(strategy_fair_value, 4),
+        "strategy_spot_price": round(strategy_spot_price, 4),
+        "strategy_spot_anchor": round(strategy_spot_anchor, 4),
+        "strategy_spot_delta_bps": round(strategy_spot_delta_bps, 2),
+        "strategy_spot_fair_up": round(strategy_spot_fair_up, 4),
+        "strategy_spot_fair_down": round(strategy_spot_fair_down, 4),
+        "strategy_spot_source": strategy_spot_source,
+        "strategy_spot_age_ms": int(strategy_spot_age_ms),
+        "strategy_spot_binance": round(strategy_spot_binance, 4),
+        "strategy_spot_chainlink": round(strategy_spot_chainlink, 4),
         "strategy_last_note": strategy_last_note,
         "strategy_last_updated_at": int(strategy_last_updated_at),
         "strategy_market_bias": strategy_market_bias,

@@ -13,6 +13,7 @@ from app.logger import setup_logger
 from app.polymarket.clob_client import CLOBClient
 from app.polymarket.gamma_client import GammaClient
 from app.polymarket.market_feed import MarketFeed
+from app.polymarket.spot_feed import SpotFeed
 from app.services.btc5m_strategy import BTC5mStrategyService
 from app.services.dashboard_server import run_dashboard_server
 from app.services.report import ReportService
@@ -35,6 +36,13 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyS
         enabled=settings.config.market_feed_enabled,
         stale_after_seconds=settings.config.market_feed_stale_seconds,
     )
+    spot_feed = SpotFeed(
+        settings.env.spot_ws_host,
+        logger,
+        enabled=settings.config.spot_feed_enabled,
+        stale_after_seconds=settings.config.spot_feed_stale_seconds,
+    )
+    spot_feed.start()
     clob_client = CLOBClient(settings.env.clob_host, settings.env, market_feed=market_feed)
 
     paper_broker = PaperBroker(db)
@@ -54,6 +62,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyS
         trade_notifier,
         settings,
         logger,
+        spot_feed=spot_feed,
     )
     report_service = ReportService(db, settings.paths.reports_dir)
     return settings, db, strategy_service, report_service
@@ -81,14 +90,25 @@ def parse_args() -> argparse.Namespace:
 
 def _wait_for_next_cycle(strategy_service: BTC5mStrategyService, *, mode: str, sleep_seconds: float) -> None:
     feed = getattr(strategy_service.clob_client, "market_feed", None)
+    spot_feed = getattr(strategy_service, "spot_feed", None)
     entry_mode = str(strategy_service.settings.config.strategy_entry_mode or "")
     if (
         mode == "paper"
         and entry_mode == "arb_micro"
-        and feed is not None
-        and getattr(strategy_service.settings.config, "market_feed_enabled", False)
+        and (feed is not None or spot_feed is not None)
     ):
-        feed.wait_for_update(timeout_seconds=sleep_seconds)
+        deadline = time.monotonic() + sleep_seconds
+        while time.monotonic() < deadline:
+            remaining = max(deadline - time.monotonic(), 0.0)
+            slice_seconds = min(0.05, remaining)
+            if feed is not None and getattr(strategy_service.settings.config, "market_feed_enabled", False):
+                if feed.wait_for_update(timeout_seconds=slice_seconds):
+                    return
+            elif slice_seconds > 0:
+                time.sleep(slice_seconds)
+            if spot_feed is not None and getattr(strategy_service.settings.config, "spot_feed_enabled", False):
+                if spot_feed.wait_for_update(timeout_seconds=0):
+                    return
         return
     time.sleep(sleep_seconds)
 
@@ -153,6 +173,11 @@ def main() -> int:
     finally:
         try:
             strategy_service.clob_client.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if getattr(strategy_service, "spot_feed", None) is not None:
+                strategy_service.spot_feed.close()
         except Exception:  # noqa: BLE001
             pass
         db.close()

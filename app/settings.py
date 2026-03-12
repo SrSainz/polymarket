@@ -41,6 +41,8 @@ class BotConfig(BaseModel):
     polling_interval_seconds: float = 0.25
     market_feed_enabled: bool = True
     market_feed_stale_seconds: float = 2.5
+    spot_feed_enabled: bool = True
+    spot_feed_stale_seconds: float = 1.5
     execution_mode: Literal["paper", "live"] = "paper"
     dry_run: bool = True
     strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "btc5m_orderbook"
@@ -206,6 +208,8 @@ class BotConfig(BaseModel):
             raise ValueError("polling_interval_seconds must be >= 0.2")
         if self.market_feed_stale_seconds <= 0:
             raise ValueError("market_feed_stale_seconds must be > 0")
+        if self.spot_feed_stale_seconds <= 0:
+            raise ValueError("spot_feed_stale_seconds must be > 0")
         if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
         if self.btc5m_reserved_notional < 0:
@@ -259,6 +263,7 @@ class EnvSettings(BaseModel):
     gamma_api_host: str = "https://gamma-api.polymarket.com"
     clob_host: str = "https://clob.polymarket.com"
     clob_ws_host: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    spot_ws_host: str = "wss://stream.binance.com:9443/ws/btcusdt@trade"
 
     polymarket_private_key: str = ""
     polymarket_chain_id: int = 137
@@ -285,6 +290,7 @@ class EnvSettings(BaseModel):
             gamma_api_host=os.getenv("POLYMARKET_GAMMA_API_HOST", "https://gamma-api.polymarket.com"),
             clob_host=os.getenv("POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
             clob_ws_host=os.getenv("POLYMARKET_CLOB_WS_HOST", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
+            spot_ws_host=os.getenv("POLYMARKET_SPOT_WS_HOST", "wss://stream.binance.com:9443/ws/btcusdt@trade"),
             polymarket_private_key=os.getenv("POLYMARKET_PRIVATE_KEY", ""),
             polymarket_chain_id=int(os.getenv("POLYMARKET_CHAIN_ID", "137")),
             polymarket_funder=os.getenv("POLYMARKET_FUNDER", ""),

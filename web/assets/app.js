@@ -31,6 +31,17 @@ function fmtUsdPlain(value, digits = 2) {
   return `$${asNumber.toFixed(digits)}`;
 }
 
+function fmtBtcPrice(value) {
+  const asNumber = Number(value);
+  if (Number.isNaN(asNumber) || asNumber <= 0) return "-";
+  return asNumber.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 function fmtPct(value, digits = 0) {
   const asNumber = Number(value);
   if (Number.isNaN(asNumber)) return "-";
@@ -167,6 +178,32 @@ function currentEdgeInfo(summary) {
     edgePct: storedEdge ? storedEdge * 100 : Math.max((1 - pairSum) * 100, 0),
     fairValue: fairValue || null,
     label: priceMode === "cheap-side" ? "lado barato" : "underround",
+  };
+}
+
+function currentSpotInfo(summary) {
+  const current = Number(summary?.strategy_spot_price || 0);
+  const anchor = Number(summary?.strategy_spot_anchor || 0);
+  const deltaBps = Number(summary?.strategy_spot_delta_bps || 0);
+  const fairUp = Number(summary?.strategy_spot_fair_up || 0);
+  const fairDown = Number(summary?.strategy_spot_fair_down || 0);
+  const ageMs = Number(summary?.strategy_spot_age_ms || 0);
+  const source = String(summary?.strategy_spot_source || "").trim();
+  const binance = Number(summary?.strategy_spot_binance || 0);
+  const chainlink = Number(summary?.strategy_spot_chainlink || 0);
+  const deltaUsd = current > 0 && anchor > 0 ? current - anchor : 0;
+  return {
+    available: current > 0 && anchor > 0,
+    current,
+    anchor,
+    deltaBps,
+    deltaUsd,
+    fairUp,
+    fairDown,
+    ageMs,
+    source: source || "-",
+    binance,
+    chainlink,
   };
 }
 
@@ -347,6 +384,7 @@ function paintSummary(summary) {
   const strategyFeedTrackedAssets = Number(summary.strategy_feed_tracked_assets || 0);
   const feedInfo = feedModeInfo(summary);
   const edgeInfo = currentEdgeInfo(summary);
+  const spotInfo = currentSpotInfo(summary);
   const strategySpeedLabel = feedInfo.summaryLabel;
   const currentMarketLivePnl = Number(summary.strategy_current_market_live_pnl || 0);
   const currentMarketExposure = Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0);
@@ -376,8 +414,8 @@ function paintSummary(summary) {
   heroFeedSource.className = feedInfo.className;
   document.getElementById("heroFeedMeta").textContent =
     edgeInfo.pairSum !== null
-      ? `${edgeInfo.label} | pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""} | ${feedInfo.meta}`
-      : `${feedInfo.meta} | ${strategyNoteText}`;
+      ? `${edgeInfo.label} | pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.available ? ` | BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ${feedInfo.meta}`
+      : `${spotInfo.available ? `BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps) | ` : ""}${feedInfo.meta} | ${strategyNoteText}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
 
@@ -395,8 +433,8 @@ function paintSummary(summary) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
     ? currentMarketExposure > 0
-      ? `Ventana actual en ${tradingModeLabel(summary)}. En esta ventana hay ${fmtUsdPlain(currentMarketExposure, 2)} metidos y va ${fmtUsd(currentMarketLivePnl, 2)}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}, datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
-      : `Ventana actual en ${tradingModeLabel(summary)} sin posicion abierta. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ultima lectura de ventana: ${strategyNoteText}. Datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      ? `Ventana actual en ${tradingModeLabel(summary)}. En esta ventana hay ${fmtUsdPlain(currentMarketExposure, 2)} metidos y va ${fmtUsd(currentMarketLivePnl, 2)}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}, datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}${spotInfo.available ? `. BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps), fair Up ${fmtPct(spotInfo.fairUp * 100, 1)} / Down ${fmtPct(spotInfo.fairDown * 100, 1)}` : ""}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      : `Ventana actual en ${tradingModeLabel(summary)} sin posicion abierta. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ultima lectura de ventana: ${strategyNoteText}. Datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}${spotInfo.available ? `. BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps)` : ""}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
   paintLabOverview(summary);
@@ -410,6 +448,7 @@ function paintLabOverview(summary) {
   const exposurePct = cycleBudget > 0 ? Math.min((deployed / cycleBudget) * 100, 100) : 0;
   const feedInfo = feedModeInfo(summary);
   const edgeInfo = currentEdgeInfo(summary);
+  const spotInfo = currentSpotInfo(summary);
 
   document.getElementById("labModeValue").textContent = isVidarxLab(summary)
     ? `${timingLabel(summary)} / ${String(summary.strategy_price_mode || "sin banda").replaceAll("-", " ")}`
@@ -417,6 +456,12 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowValue").textContent =
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labFeedValue").textContent = feedInfo.label;
+  document.getElementById("labSpotCurrent").textContent = spotInfo.available ? fmtBtcPrice(spotInfo.current) : "-";
+  document.getElementById("labSpotAnchor").textContent = spotInfo.available ? fmtBtcPrice(spotInfo.anchor) : "-";
+  document.getElementById("labSpotDelta").textContent =
+    spotInfo.available ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaBps, 1)}bps` : "-";
+  document.getElementById("labSpotFair").textContent =
+    spotInfo.available ? `Up ${fmtPct(spotInfo.fairUp * 100, 1)} / Down ${fmtPct(spotInfo.fairDown * 100, 1)}` : "-";
   document.getElementById("labEdgeValue").textContent =
     edgeInfo.edgePct !== null
       ? `${edgeInfo.label} | ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}`
@@ -424,7 +469,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | ${edgeInfo.label} ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | ${edgeInfo.label} ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${spotInfo.available ? `${spotInfo.source} ${spotInfo.ageMs}ms | beat ${fmtBtcPrice(spotInfo.anchor)}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
