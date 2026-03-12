@@ -1346,6 +1346,54 @@ def test_arb_micro_buys_both_sides_on_underround(tmp_path: Path) -> None:
     db.close()
 
 
+def test_arb_micro_does_not_buy_pair_above_one_without_edge(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - No Edge Pair",
+        "slug": "btc-updown-5m-no-edge-pair",
+        "conditionId": "cond-arb-no-edge",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.44"}],
+                "asks": [{"price": "0.45", "size": "200"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.55"}],
+                "asks": [{"price": "0.56", "size": "200"}],
+            },
+        },
+        balance=1000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-no-edge"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] == 0
+    assert db.list_copy_positions() == []
+    assert "no edge" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
 def test_arb_micro_refuses_live_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -1417,6 +1465,63 @@ def test_arb_micro_buys_single_cheap_side_from_bid_implied_fair_value(tmp_path: 
     assert str(positions[0]["outcome"]) == "Up"
     assert db.get_bot_state("strategy_price_mode") == "cheap-side"
     assert "cheap Up" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_caps_market_exposure_and_cools_down_same_window(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=50)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Market Cap",
+        "slug": "btc-updown-5m-cap",
+        "conditionId": "cond-arb-cap",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "300"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.55", "size": "300"}],
+            },
+        },
+        balance=1000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.10),
+        logger=logging.getLogger("test-btc5m-arb-cap"),
+    )
+
+    first = service.run(mode="paper")
+    first_exposure = db.get_total_exposure()
+    first_note = str(db.get_bot_state("strategy_last_note") or "")
+
+    second = service.run(mode="paper")
+    second_exposure = db.get_total_exposure()
+    second_note = str(db.get_bot_state("strategy_last_note") or "")
+
+    assert first["filled"] > 0
+    assert first_exposure <= 50.0
+    assert second["filled"] == 0
+    assert second_exposure <= 50.0
+    assert "underround" in first_note
+    assert "cooldown" in second_note or "market cap exhausted" in second_note
     db.close()
 
 

@@ -55,8 +55,8 @@ _VIDARX_ALLOWED_SETUPS = {
     ("tilted", "early-mid"),
     ("tilted", "mid-late"),
 }
-_ARB_PAIR_SUM_MAX = 1.005
-_ARB_CHEAP_SIDE_SUM_MAX = 1.060
+_ARB_PAIR_SUM_MAX = 0.995
+_ARB_CHEAP_SIDE_SUM_MAX = 1.020
 _ARB_FAIR_VALUE_EDGE_MIN = 0.006
 _ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.65
 _ARB_PAIR_OVERLAY_FRACTION = 0.40
@@ -73,6 +73,10 @@ _ARB_SINGLE_BURST_MID_LATE = (0.7, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0, 27.
 _ARB_SPOT_EDGE_MIN = 0.008
 _ARB_SPOT_ANCHOR_GRACE_SECONDS = 20
 _ARB_SPOT_ANCHOR_CAPTURE_WINDOW_SECONDS = 2.0
+_ARB_MAX_MARKET_EXPOSURE_FRACTION = 0.05
+_ARB_MAX_TOTAL_EXPOSURE_FRACTION = 0.20
+_ARB_BURST_COOLDOWN_SECONDS = 4.0
+_ARB_MAX_FILLS_PER_WINDOW = 12
 _MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
@@ -430,6 +434,29 @@ class BTC5mStrategyService:
             self._record_strategy_snapshot(
                 note=note,
                 extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        current_condition_id = str(market.get("conditionId") or "")
+        open_condition_ids = self._get_open_btc5m_condition_ids()
+        if current_condition_id not in open_condition_ids and len(open_condition_ids) >= self.settings.config.strategy_max_open_positions:
+            note = "arb_micro open market limit reached"
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                market=market,
+                note=note,
+                extra_state=self._arb_state_defaults(
+                    strategy_current_market_exposure=f"{self._get_condition_exposure(current_condition_id):.6f}",
+                    strategy_window_seconds=str(self._seconds_into_window(market)),
+                ),
             )
             return self._complete_cycle(
                 mode="paper",
@@ -1048,6 +1075,73 @@ class BTC5mStrategyService:
             return None
 
         spot_context = self._arb_spot_context(market=market, seconds_into_window=seconds_into_window)
+        slug = str(market.get("slug") or "")
+        condition_id = str(market.get("conditionId") or "")
+        existing_market_notional = self._get_condition_exposure(condition_id)
+        window_state = self.db.get_strategy_window(slug)
+        market_cap = self._arb_market_exposure_cap(effective_bankroll)
+        total_cap = self._arb_total_exposure_cap(effective_bankroll)
+
+        if existing_market_notional >= market_cap:
+            self._record_strategy_snapshot(
+                market=market,
+                note=(
+                    f"arb_micro market cap exhausted: {existing_market_notional:.2f} >= "
+                    f"{market_cap:.2f}"
+                ),
+                extra_state=self._arb_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                ),
+            )
+            return None
+
+        if current_total_exposure >= total_cap:
+            self._record_strategy_snapshot(
+                market=market,
+                note=(
+                    f"arb_micro total cap exhausted: {current_total_exposure:.2f} >= "
+                    f"{total_cap:.2f}"
+                ),
+                extra_state=self._arb_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                ),
+            )
+            return None
+
+        if window_state is not None:
+            last_trade_at = int(window_state["last_trade_at"] or 0)
+            if last_trade_at > 0:
+                seconds_since_last_trade = max(time.time() - last_trade_at, 0.0)
+                if seconds_since_last_trade < _ARB_BURST_COOLDOWN_SECONDS:
+                    self._record_strategy_snapshot(
+                        market=market,
+                        note=(
+                            f"arb_micro cooldown: {seconds_since_last_trade:.1f}s < "
+                            f"{_ARB_BURST_COOLDOWN_SECONDS:.1f}s"
+                        ),
+                        extra_state=self._arb_state_defaults(
+                            strategy_window_seconds=str(seconds_into_window),
+                            strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                        ),
+                    )
+                    return None
+            filled_orders = int(window_state["filled_orders"] or 0)
+            if filled_orders >= _ARB_MAX_FILLS_PER_WINDOW:
+                self._record_strategy_snapshot(
+                    market=market,
+                    note=(
+                        f"arb_micro max fills window reached: {filled_orders} >= "
+                        f"{_ARB_MAX_FILLS_PER_WINDOW}"
+                    ),
+                    extra_state=self._arb_state_defaults(
+                        strategy_window_seconds=str(seconds_into_window),
+                        strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                    ),
+                )
+                return None
+
         up_outcome, down_outcome = priced_outcomes[0], priced_outcomes[1]
         if up_outcome.best_ask > down_outcome.best_ask:
             primary_target, secondary_target = down_outcome, up_outcome
@@ -1062,13 +1156,20 @@ class BTC5mStrategyService:
             current_total_exposure=current_total_exposure,
             timing_regime=timing_regime,
         )
+        cycle_budget = min(
+            cycle_budget,
+            max(market_cap - existing_market_notional, 0.0),
+            max(total_cap - current_total_exposure, 0.0),
+            cash_balance,
+        )
         if cycle_budget < self._arb_min_notional():
             self._record_strategy_snapshot(
                 market=market,
-                note="arb_micro bankroll below minimum",
+                note="arb_micro budget below minimum after caps",
                 extra_state=self._arb_state_defaults(
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_timing_regime=timing_regime,
+                    strategy_current_market_exposure=f"{existing_market_notional:.6f}",
                 ),
             )
             return None
@@ -1516,6 +1617,12 @@ class BTC5mStrategyService:
 
     def _arb_min_notional(self) -> float:
         return min(self.settings.config.min_trade_amount, _ARB_MIN_NOTIONAL)
+
+    def _arb_market_exposure_cap(self, effective_bankroll: float) -> float:
+        return max(self._arb_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
+
+    def _arb_total_exposure_cap(self, effective_bankroll: float) -> float:
+        return max(self._arb_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
 
     def _arb_pair_tranche_targets(self, *, timing_regime: str, edge_pct: float) -> tuple[float, ...]:
         base = _ARB_PAIR_BURST_MID_LATE if timing_regime == "mid-late" else _ARB_PAIR_BURST_BASE
@@ -2268,6 +2375,18 @@ class BTC5mStrategyService:
                 continue
             total += 1
         return total
+
+    def _get_open_btc5m_condition_ids(self) -> set[str]:
+        condition_ids: set[str] = set()
+        for row in self.db.list_copy_positions():
+            if "btc-updown-5m-" not in str(row["slug"] or ""):
+                continue
+            if float(row["size"] or 0.0) <= 0:
+                continue
+            condition_id = str(row["condition_id"] or "")
+            if condition_id:
+                condition_ids.add(condition_id)
+        return condition_ids
 
     def _get_condition_exposure(self, condition_id: str) -> float:
         exposure = 0.0

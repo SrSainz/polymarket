@@ -565,6 +565,12 @@ class Database:
             "SELECT * FROM copy_positions ORDER BY updated_at DESC"
         ).fetchall()
 
+    def get_strategy_window(self, slug: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM strategy_windows WHERE slug = ?",
+            (slug,),
+        ).fetchone()
+
     def upsert_copy_position(
         self,
         *,
