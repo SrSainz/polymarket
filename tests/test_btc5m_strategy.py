@@ -1552,7 +1552,7 @@ def test_arb_micro_respects_remaining_fill_capacity_in_same_window(tmp_path: Pat
     )
     db.record_strategy_window_fills(
         slug=market["slug"],
-        fill_count=10,
+        fill_count=22,
         added_notional=0.0,
         replenishment_count=0,
         notes="seed fills",
@@ -1589,7 +1589,7 @@ def test_arb_micro_respects_remaining_fill_capacity_in_same_window(tmp_path: Pat
     assert stats["filled"] <= 2
     row = db.get_strategy_window(market["slug"])
     assert row is not None
-    assert int(row["filled_orders"] or 0) <= 12
+    assert int(row["filled_orders"] or 0) <= 24
     db.close()
 
 
