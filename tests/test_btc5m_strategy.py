@@ -489,6 +489,54 @@ def test_vidarx_micro_builds_dual_leg_plan_in_paper(tmp_path: Path) -> None:
     db.close()
 
 
+def test_vidarx_micro_allows_tilted_early_mid_setup(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=70)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Tilted Early",
+        "slug": "btc-updown-5m-tilted-early",
+        "conditionId": "cond-tilted-early",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.72"}],
+                "asks": [{"price": "0.74", "size": "1000"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.26"}],
+                "asks": [{"price": "0.28", "size": "1000"}],
+            },
+        },
+        balance=40.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=40.0, max_position_per_market=10.0),
+        logger=logging.getLogger("test-btc5m-vidarx"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] >= 2
+    assert db.get_bot_state("strategy_price_mode") == "tilted"
+    assert db.get_bot_state("strategy_timing_regime") == "early-mid"
+    db.close()
+
+
 def test_vidarx_micro_blocks_extreme_bias_setup(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

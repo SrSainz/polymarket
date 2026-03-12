@@ -48,7 +48,10 @@ _VIDARX_TILTED_CYCLE_FRACTION = 0.035
 _VIDARX_EXTREME_CYCLE_FRACTION = 0.05
 _VIDARX_SETUP_DISABLE_MIN_WINDOWS = 4
 _VIDARX_SETUP_DISABLE_MAX_WIN_RATE = 0.50
-_VIDARX_ALLOWED_SETUPS = {("tilted", "mid-late")}
+_VIDARX_ALLOWED_SETUPS = {
+    ("tilted", "early-mid"),
+    ("tilted", "mid-late"),
+}
 
 
 @dataclass(frozen=True)
