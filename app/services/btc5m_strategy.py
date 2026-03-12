@@ -56,18 +56,19 @@ _VIDARX_ALLOWED_SETUPS = {
     ("tilted", "mid-late"),
 }
 _ARB_PAIR_SUM_MAX = 0.985
-_ARB_CHEAP_SIDE_SUM_MAX = 1.020
-_ARB_FAIR_VALUE_EDGE_MIN = 0.006
-_ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.65
+_ARB_CHEAP_SIDE_SUM_MAX = 1.040
+_ARB_FAIR_VALUE_EDGE_MIN = 0.025
+_ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.12
 _ARB_PAIR_OVERLAY_FRACTION = 0.0
 _ARB_MAX_PAIR_LEVELS = 20
 _ARB_EARLY_MID_END = 150
 _ARB_MID_LATE_START = 151
-_ARB_ENABLE_CHEAP_SIDE = False
+_ARB_ENABLE_CHEAP_SIDE = True
 _ARB_ENABLE_PAIR_OVERLAY = False
 _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 290
 _ARB_MIN_NOTIONAL = 1.00
+_ARB_CHEAP_SIDE_MIN_DELTA_BPS = 8.0
 _ARB_PAIR_BURST_BASE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0)
 _ARB_PAIR_BURST_MID_LATE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0, 27.0, 40.0)
 _ARB_SINGLE_BURST_BASE = (0.7, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0)
@@ -1575,6 +1576,10 @@ class BTC5mStrategyService:
         spot_context: ArbSpotContext | None = None,
     ) -> tuple[MarketOutcome, float, float, str] | None:
         if pair_sum > _ARB_CHEAP_SIDE_SUM_MAX:
+            return None
+        if spot_context is None:
+            return None
+        if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
             return None
 
         fair_up_book = max(1.0 - down_outcome.best_bid, 0.0)

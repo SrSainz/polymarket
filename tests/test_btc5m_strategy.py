@@ -1647,7 +1647,7 @@ def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Pat
     db.close()
 
 
-def test_arb_micro_uses_spot_context_without_opening_single_side_trade(tmp_path: Path) -> None:
+def test_arb_micro_uses_spot_context_to_open_single_side_trade(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     slug = "btc-updown-5m-spot-cheap"
@@ -1705,13 +1705,15 @@ def test_arb_micro_uses_spot_context_without_opening_single_side_trade(tmp_path:
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] == 0
-    assert db.list_copy_positions() == []
-    assert db.get_bot_state("strategy_price_mode") == "underround"
+    assert stats["filled"] > 0
+    positions = db.list_copy_positions()
+    assert len(positions) == 1
+    assert str(positions[0]["outcome"]) == "Up"
+    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
     assert db.get_bot_state("strategy_spot_source") == "binance-direct"
     assert float(db.get_bot_state("strategy_spot_anchor") or 0.0) == 70000.0
     assert float(db.get_bot_state("strategy_spot_fair_up") or 0.0) > 0.45
-    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
+    assert "cheap Up" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
