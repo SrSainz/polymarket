@@ -258,6 +258,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_timing_regime = _bot_state_text(conn, "strategy_timing_regime")
         strategy_price_mode = _bot_state_text(conn, "strategy_price_mode")
         strategy_primary_ratio = _bot_state_float(conn, "strategy_primary_ratio")
+        strategy_desired_up_ratio = _bot_state_float(conn, "strategy_desired_up_ratio")
+        strategy_desired_down_ratio = _bot_state_float(conn, "strategy_desired_down_ratio")
+        strategy_current_up_ratio = _bot_state_float(conn, "strategy_current_up_ratio")
+        strategy_bracket_phase = _bot_state_text(conn, "strategy_bracket_phase")
         strategy_primary_outcome = _bot_state_text(conn, "strategy_primary_outcome")
         strategy_hedge_outcome = _bot_state_text(conn, "strategy_hedge_outcome")
         strategy_primary_exposure = _bot_state_float(conn, "strategy_primary_exposure")
@@ -434,6 +438,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_timing_regime": strategy_timing_regime,
         "strategy_price_mode": strategy_price_mode,
         "strategy_primary_ratio": round(strategy_primary_ratio, 4),
+        "strategy_desired_up_ratio": round(strategy_desired_up_ratio, 4),
+        "strategy_desired_down_ratio": round(strategy_desired_down_ratio, 4),
+        "strategy_current_up_ratio": round(strategy_current_up_ratio, 4),
+        "strategy_bracket_phase": strategy_bracket_phase,
         "strategy_primary_outcome": strategy_primary_outcome,
         "strategy_hedge_outcome": strategy_hedge_outcome,
         "strategy_primary_exposure": round(strategy_primary_exposure, 4),

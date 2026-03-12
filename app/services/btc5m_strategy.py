@@ -69,6 +69,8 @@ _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 290
 _ARB_MIN_NOTIONAL = 1.00
 _ARB_CHEAP_SIDE_MIN_DELTA_BPS = 8.0
+_ARB_REBALANCE_RATIO_TRIGGER = 0.06
+_ARB_REBALANCE_BUDGET_FRACTION = 0.35
 _ARB_PAIR_BURST_BASE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0)
 _ARB_PAIR_BURST_MID_LATE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0, 27.0, 40.0)
 _ARB_SINGLE_BURST_BASE = (0.7, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0)
@@ -80,6 +82,9 @@ _ARB_MAX_MARKET_EXPOSURE_FRACTION = 0.05
 _ARB_MAX_TOTAL_EXPOSURE_FRACTION = 0.20
 _ARB_BURST_COOLDOWN_SECONDS = 4.0
 _ARB_MAX_FILLS_PER_WINDOW = 12
+_ARB_CHEAP_SIDE_BASE_PAIR_MAX = 1.010
+_ARB_CHEAP_SIDE_MID_PAIR_MAX = 1.020
+_ARB_CHEAP_SIDE_HIGH_PAIR_MAX = 1.030
 _MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
@@ -140,6 +145,9 @@ class StrategyPlan:
     spot_age_ms: int = 0
     spot_binance_price: float = 0.0
     spot_chainlink_price: float = 0.0
+    desired_up_ratio: float = 0.5
+    current_up_ratio: float = 0.5
+    bracket_phase: str = ""
 
 
 @dataclass(frozen=True)
@@ -610,6 +618,10 @@ class BTC5mStrategyService:
                 "strategy_spot_age_ms": str(plan.spot_age_ms),
                 "strategy_spot_binance": f"{plan.spot_binance_price:.6f}",
                 "strategy_spot_chainlink": f"{plan.spot_chainlink_price:.6f}",
+                "strategy_desired_up_ratio": f"{plan.desired_up_ratio:.6f}",
+                "strategy_desired_down_ratio": f"{max(1.0 - plan.desired_up_ratio, 0.0):.6f}",
+                "strategy_current_up_ratio": f"{plan.current_up_ratio:.6f}",
+                "strategy_bracket_phase": plan.bracket_phase or "observando",
             },
         )
         return self._complete_cycle(
@@ -1089,6 +1101,11 @@ class BTC5mStrategyService:
         slug = str(market.get("slug") or "")
         condition_id = str(market.get("conditionId") or "")
         existing_market_notional = self._get_condition_exposure(condition_id)
+        current_up_notional, current_down_notional = self._get_condition_outcome_exposures(condition_id)
+        current_up_ratio = self._arb_current_up_ratio(
+            up_exposure=current_up_notional,
+            down_exposure=current_down_notional,
+        )
         window_state = self.db.get_strategy_window(slug)
         market_cap = self._arb_market_exposure_cap(effective_bankroll)
         total_cap = self._arb_total_exposure_cap(effective_bankroll)
@@ -1171,6 +1188,18 @@ class BTC5mStrategyService:
             primary_target, secondary_target = up_outcome, down_outcome
 
         pair_sum = up_outcome.best_ask + down_outcome.best_ask
+        desired_up_ratio, fair_up, fair_down, edge_up, edge_down = self._arb_desired_up_ratio(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            timing_regime=timing_regime,
+            spot_context=spot_context,
+        )
+        desired_down_ratio = max(1.0 - desired_up_ratio, 0.0)
+        bracket_phase = self._arb_bracket_phase(
+            existing_market_notional=existing_market_notional,
+            current_up_ratio=current_up_ratio,
+            desired_up_ratio=desired_up_ratio,
+        )
 
         cycle_budget = self._target_arb_cycle_budget(
             cash_balance=cash_balance,
@@ -1199,21 +1228,20 @@ class BTC5mStrategyService:
             return None
 
         if pair_sum < _ARB_PAIR_SUM_MAX:
+            overlay_reserve_fraction = 0.0
+            if abs(desired_up_ratio - 0.5) >= _ARB_REBALANCE_RATIO_TRIGGER:
+                overlay_reserve_fraction = _ARB_REBALANCE_BUDGET_FRACTION
+            pair_core_budget = cycle_budget * (1.0 - overlay_reserve_fraction)
             pair_levels = self._build_arb_pair_levels(
                 up_outcome=up_outcome,
                 down_outcome=down_outcome,
-                budget=cycle_budget,
+                budget=pair_core_budget,
                 timing_regime=timing_regime,
             )
             if pair_levels:
                 instructions: list[CopyInstruction] = []
                 up_notional = 0.0
                 down_notional = 0.0
-                overlay_target = self._arb_spot_overlay_target(
-                    up_outcome=up_outcome,
-                    down_outcome=down_outcome,
-                    spot_context=spot_context,
-                )
                 for idx, level in enumerate(pair_levels, start=1):
                     if len(instructions) + 2 > remaining_instruction_capacity:
                         break
@@ -1239,19 +1267,43 @@ class BTC5mStrategyService:
                     up_notional += up_instruction.notional
                     down_notional += down_instruction.notional
 
-                if instructions and overlay_target is not None and _ARB_ENABLE_PAIR_OVERLAY:
+                projected_up_notional = current_up_notional + up_notional
+                projected_down_notional = current_down_notional + down_notional
+                projected_up_ratio = self._arb_current_up_ratio(
+                    up_exposure=projected_up_notional,
+                    down_exposure=projected_down_notional,
+                )
+                ratio_gap = desired_up_ratio - projected_up_ratio
+
+                overlay_target: MarketOutcome | None = None
+                overlay_fair = 0.0
+                overlay_edge = 0.0
+                if ratio_gap >= _ARB_REBALANCE_RATIO_TRIGGER and edge_up >= _ARB_FAIR_VALUE_EDGE_MIN * 0.8:
+                    overlay_target = up_outcome
+                    overlay_fair = fair_up
+                    overlay_edge = max(edge_up, 0.0)
+                elif ratio_gap <= -_ARB_REBALANCE_RATIO_TRIGGER and down_edge >= _ARB_FAIR_VALUE_EDGE_MIN * 0.8:
+                    overlay_target = down_outcome
+                    overlay_fair = fair_down
+                    overlay_edge = max(edge_down, 0.0)
+
+                if instructions and overlay_target is not None:
+                    projected_total = projected_up_notional + projected_down_notional
+                    if overlay_target.asset_id == up_outcome.asset_id:
+                        needed_notional = max((desired_up_ratio * projected_total) - projected_up_notional, 0.0)
+                    else:
+                        needed_notional = max((desired_down_ratio * projected_total) - projected_down_notional, 0.0)
                     remaining_plan_budget = max(cycle_budget - (up_notional + down_notional), 0.0)
                     overlay_budget = _round_down(
                         min(
-                            cycle_budget * _ARB_PAIR_OVERLAY_FRACTION,
+                            cycle_budget * _ARB_REBALANCE_BUDGET_FRACTION,
+                            needed_notional,
                             remaining_plan_budget,
-                            cash_balance - (up_notional + down_notional),
+                            max(cash_balance - (up_notional + down_notional), 0.0),
                         ),
                         "0.01",
                     )
                     if overlay_budget >= self._arb_min_notional():
-                        overlay_fair = spot_context.fair_up if overlay_target.asset_id == up_outcome.asset_id else spot_context.fair_down
-                        overlay_edge = max(overlay_fair - overlay_target.best_ask, 0.0)
                         overlay_levels = self._build_arb_single_side_levels(
                             target=overlay_target,
                             budget=overlay_budget,
@@ -1291,12 +1343,17 @@ class BTC5mStrategyService:
                     primary_notional = up_notional if primary_target.asset_id == up_outcome.asset_id else down_notional
                     secondary_notional = down_notional if primary_target.asset_id == up_outcome.asset_id else up_notional
                     primary_ratio = primary_notional / total_pair_notional if total_pair_notional > 0 else 0.5
-                    bias_note = ""
+                    current_ratio_after = self._arb_current_up_ratio(
+                        up_exposure=current_up_notional + up_notional,
+                        down_exposure=current_down_notional + down_notional,
+                    )
+                    bias_note = (
+                        f" | objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)}"
+                        f" | actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))}"
+                        f" | fase {bracket_phase}"
+                    )
                     if spot_context is not None:
-                        bias_note = (
-                            f" | spot {primary_target.label} {primary_ratio * 100:.0f}% "
-                            f"delta {spot_context.delta_bps:+.1f}bps"
-                        )
+                        bias_note += f" | delta {spot_context.delta_bps:+.1f}bps"
                     note = (
                         f"underround {pair_levels[0].pair_sum:.3f} | edge {captured_edge_pct * 100:.2f}% | "
                         f"{timing_regime} | niveles {len(pair_levels)} | patas {len(instructions)}{bias_note}"
@@ -1332,6 +1389,9 @@ class BTC5mStrategyService:
                         spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
                         spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
                         spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
+                        desired_up_ratio=desired_up_ratio,
+                        current_up_ratio=current_ratio_after,
+                        bracket_phase=bracket_phase,
                     )
 
         cheap_side = None
@@ -1341,10 +1401,16 @@ class BTC5mStrategyService:
                 down_outcome=down_outcome,
                 pair_sum=pair_sum,
                 spot_context=spot_context,
+                desired_up_ratio=desired_up_ratio,
+                current_up_ratio=current_up_ratio,
             )
         if cheap_side is not None:
             target, fair_value, relative_edge, edge_source = cheap_side
-            single_budget = _round_down(cycle_budget * _ARB_SINGLE_SIDE_BUDGET_FRACTION, "0.01")
+            ratio_gap_abs = abs(desired_up_ratio - current_up_ratio)
+            single_budget_fraction = _ARB_SINGLE_SIDE_BUDGET_FRACTION
+            if existing_market_notional > 0:
+                single_budget_fraction *= 1.0 + min(ratio_gap_abs * 3.0, 0.75)
+            single_budget = _round_down(cycle_budget * single_budget_fraction, "0.01")
             single_budget = min(max(single_budget, self._arb_min_notional()), cash_balance)
             single_levels = self._build_arb_single_side_levels(
                 target=target,
@@ -1371,10 +1437,17 @@ class BTC5mStrategyService:
                 ]
                 if instructions:
                     primary_notional = sum(item.notional for item in instructions)
+                    projected_up_notional = current_up_notional + (primary_notional if target.asset_id == up_outcome.asset_id else 0.0)
+                    projected_down_notional = current_down_notional + (primary_notional if target.asset_id == down_outcome.asset_id else 0.0)
+                    current_ratio_after = self._arb_current_up_ratio(
+                        up_exposure=projected_up_notional,
+                        down_exposure=projected_down_notional,
+                    )
                     note = (
                         f"cheap {target.label} ask {target.best_ask:.3f} < fair {fair_value:.3f} | "
                         f"edge {relative_edge * 100:.2f}% | {edge_source} | {timing_regime} | niveles {len(single_levels)} | "
-                        f"compras {len(instructions)}"
+                        f"compras {len(instructions)} | objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
+                        f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | fase {bracket_phase}"
                     )
                     return StrategyPlan(
                         instructions=tuple(instructions),
@@ -1404,20 +1477,17 @@ class BTC5mStrategyService:
                         spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
                         spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
                         spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
+                        desired_up_ratio=desired_up_ratio,
+                        current_up_ratio=current_ratio_after,
+                        bracket_phase=bracket_phase,
                     )
-
-        fair_up = max(1.0 - down_outcome.best_bid, 0.0)
-        fair_down = max(1.0 - up_outcome.best_bid, 0.0)
-        if spot_context is not None:
-            fair_up = max(fair_up, spot_context.fair_up)
-            fair_down = max(fair_down, spot_context.fair_down)
-        edge_up = fair_up - up_outcome.best_ask
-        edge_down = fair_down - down_outcome.best_ask
         self._record_strategy_snapshot(
             market=market,
             note=(
                 f"arb_micro no locked edge: pair sum {pair_sum:.3f} | "
-                f"Up edge {edge_up * 100:.2f}% | Down edge {edge_down * 100:.2f}%"
+                f"Up edge {edge_up * 100:.2f}% | Down edge {edge_down * 100:.2f}% | "
+                f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
+                f"actual {self._arb_ratio_label(up_ratio=current_up_ratio, down_ratio=max(1.0 - current_up_ratio, 0.0))} | fase {bracket_phase}"
             ),
             extra_state=self._arb_state_defaults(
                 market=market,
@@ -1437,6 +1507,10 @@ class BTC5mStrategyService:
                 strategy_spot_age_ms=str(spot_context.age_ms if spot_context is not None else 0),
                 strategy_spot_binance=f"{(spot_context.binance_price or 0.0):.6f}" if spot_context is not None else "0.000000",
                 strategy_spot_chainlink=f"{(spot_context.chainlink_price or 0.0):.6f}" if spot_context is not None else "0.000000",
+                strategy_desired_up_ratio=f"{desired_up_ratio:.6f}",
+                strategy_desired_down_ratio=f"{desired_down_ratio:.6f}",
+                strategy_current_up_ratio=f"{current_up_ratio:.6f}",
+                strategy_bracket_phase=bracket_phase,
             ),
         )
         return None
@@ -1574,12 +1648,10 @@ class BTC5mStrategyService:
         down_outcome: MarketOutcome,
         pair_sum: float,
         spot_context: ArbSpotContext | None = None,
+        desired_up_ratio: float = 0.5,
+        current_up_ratio: float = 0.5,
     ) -> tuple[MarketOutcome, float, float, str] | None:
-        if pair_sum > _ARB_CHEAP_SIDE_SUM_MAX:
-            return None
         if spot_context is None:
-            return None
-        if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
             return None
 
         fair_up_book = max(1.0 - down_outcome.best_bid, 0.0)
@@ -1597,6 +1669,21 @@ class BTC5mStrategyService:
                 edge_source_down = "spot"
         up_edge = fair_up - up_outcome.best_ask
         down_edge = fair_down - down_outcome.best_ask
+        max_edge = max(up_edge, down_edge, 0.0)
+        cheap_side_pair_max = _ARB_CHEAP_SIDE_BASE_PAIR_MAX
+        if max_edge >= 0.10 or abs(spot_context.delta_bps) >= 12:
+            cheap_side_pair_max = _ARB_CHEAP_SIDE_MID_PAIR_MAX
+        if max_edge >= 0.14 and abs(spot_context.delta_bps) >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
+            cheap_side_pair_max = _ARB_CHEAP_SIDE_HIGH_PAIR_MAX
+        if pair_sum > min(cheap_side_pair_max, _ARB_CHEAP_SIDE_SUM_MAX):
+            return None
+        if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS and max_edge < 0.10:
+            return None
+
+        if desired_up_ratio > current_up_ratio + _ARB_REBALANCE_RATIO_TRIGGER and up_edge >= _ARB_FAIR_VALUE_EDGE_MIN * 0.8:
+            return up_outcome, fair_up, up_edge, edge_source_up
+        if desired_up_ratio < current_up_ratio - _ARB_REBALANCE_RATIO_TRIGGER and down_edge >= _ARB_FAIR_VALUE_EDGE_MIN * 0.8:
+            return down_outcome, fair_down, down_edge, edge_source_down
 
         if up_edge >= down_edge and up_edge >= _ARB_FAIR_VALUE_EDGE_MIN:
             return up_outcome, fair_up, up_edge, edge_source_up
@@ -1664,6 +1751,78 @@ class BTC5mStrategyService:
 
     def _arb_total_exposure_cap(self, effective_bankroll: float) -> float:
         return max(self._arb_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
+
+    def _get_condition_outcome_exposures(self, condition_id: str) -> tuple[float, float]:
+        up_exposure = 0.0
+        down_exposure = 0.0
+        for row in self.db.list_copy_positions():
+            if str(row["condition_id"] or "") != condition_id:
+                continue
+            size = float(row["size"] or 0.0)
+            avg_price = float(row["avg_price"] or 0.0)
+            if size <= 0 or avg_price <= 0:
+                continue
+            exposure = abs(size * avg_price)
+            outcome = str(row["outcome"] or "").strip().lower()
+            if outcome == "up":
+                up_exposure += exposure
+            elif outcome == "down":
+                down_exposure += exposure
+        return up_exposure, down_exposure
+
+    def _arb_current_up_ratio(self, *, up_exposure: float, down_exposure: float) -> float:
+        total = up_exposure + down_exposure
+        if total <= 0:
+            return 0.5
+        return up_exposure / total
+
+    def _arb_ratio_bounds(self, *, timing_regime: str) -> tuple[float, float]:
+        if timing_regime == "mid-late":
+            return 0.30, 0.70
+        return 0.38, 0.62
+
+    def _arb_desired_up_ratio(
+        self,
+        *,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        timing_regime: str,
+        spot_context: ArbSpotContext | None,
+    ) -> tuple[float, float, float, float, float]:
+        fair_up = max(1.0 - down_outcome.best_bid, 0.0)
+        fair_down = max(1.0 - up_outcome.best_bid, 0.0)
+        if spot_context is not None:
+            fair_up = max(fair_up, spot_context.fair_up)
+            fair_down = max(fair_down, spot_context.fair_down)
+
+        total_fair = max(fair_up + fair_down, 1e-9)
+        base_ratio = fair_up / total_fair
+        up_edge = fair_up - up_outcome.best_ask
+        down_edge = fair_down - down_outcome.best_ask
+        edge_bias = max(min((up_edge - down_edge) * 1.75, 0.16), -0.16)
+        ratio = base_ratio + edge_bias
+        if spot_context is not None:
+            spot_bias = max(min(spot_context.delta_bps / 400.0, 0.12), -0.12)
+            ratio += spot_bias * (0.45 if timing_regime == "mid-late" else 0.30)
+        min_ratio, max_ratio = self._arb_ratio_bounds(timing_regime=timing_regime)
+        ratio = min(max(ratio, min_ratio), max_ratio)
+        return ratio, fair_up, fair_down, up_edge, down_edge
+
+    def _arb_bracket_phase(
+        self,
+        *,
+        existing_market_notional: float,
+        current_up_ratio: float,
+        desired_up_ratio: float,
+    ) -> str:
+        if existing_market_notional <= 0:
+            return "abrir"
+        if abs(desired_up_ratio - current_up_ratio) >= _ARB_REBALANCE_RATIO_TRIGGER:
+            return "redistribuir"
+        return "acompanar"
+
+    def _arb_ratio_label(self, *, up_ratio: float, down_ratio: float) -> str:
+        return f"Sube {up_ratio * 100:.0f}% / Baja {down_ratio * 100:.0f}%"
 
     def _arb_pair_tranche_targets(self, *, timing_regime: str, edge_pct: float) -> tuple[float, ...]:
         base = _ARB_PAIR_BURST_MID_LATE if timing_regime == "mid-late" else _ARB_PAIR_BURST_BASE
@@ -2724,6 +2883,10 @@ class BTC5mStrategyService:
             "strategy_pair_sum": "0.000000",
             "strategy_edge_pct": "0.000000",
             "strategy_fair_value": "0.000000",
+            "strategy_desired_up_ratio": "0.500000",
+            "strategy_desired_down_ratio": "0.500000",
+            "strategy_current_up_ratio": "0.500000",
+            "strategy_bracket_phase": "observando",
         }
         state.update(self._arb_live_spot_state(market=market, seconds_into_window=seconds_into_window))
         state.update({key: value for key, value in overrides.items() if value is not None})

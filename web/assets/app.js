@@ -128,6 +128,33 @@ function ratioLabel(summary) {
   return summary?.strategy_market_bias || "-";
 }
 
+function desiredRatioLabel(summary) {
+  const upRatio = Number(summary?.strategy_desired_up_ratio ?? 0.5);
+  const downRatio = Number(summary?.strategy_desired_down_ratio ?? Math.max(1 - upRatio, 0));
+  if (Number.isNaN(upRatio) || Number.isNaN(downRatio)) return "-";
+  return `${friendlyOutcomeName("up")} ${fmtPct(upRatio * 100, 0)} / ${friendlyOutcomeName("down")} ${fmtPct(downRatio * 100, 0)}`;
+}
+
+function actualRatioLabel(summary) {
+  const breakdown = currentBreakdown(summary);
+  if (breakdown.length >= 2) {
+    const [first, second] = breakdown;
+    return `${friendlyOutcomeName(first.outcome)} ${fmtPct(first.share_pct, 0)} / ${friendlyOutcomeName(second.outcome)} ${fmtPct(second.share_pct, 0)}`;
+  }
+  const upRatio = Number(summary?.strategy_current_up_ratio ?? summary?.strategy_primary_ratio ?? 0.5);
+  if (Number.isNaN(upRatio)) return "-";
+  return `${friendlyOutcomeName("up")} ${fmtPct(upRatio * 100, 0)} / ${friendlyOutcomeName("down")} ${fmtPct(Math.max((1 - upRatio) * 100, 0), 0)}`;
+}
+
+function bracketPhaseLabel(summary) {
+  const raw = String(summary?.strategy_bracket_phase || "").trim().toLowerCase();
+  if (raw === "abrir") return "Abriendo bracket";
+  if (raw === "redistribuir") return "Recalibrando reparto";
+  if (raw === "acompanar") return "Acompañando sesgo";
+  if (raw === "observando") return "Observando";
+  return raw || "Observando";
+}
+
 function timingLabel(summary) {
   const regime = String(summary?.strategy_timing_regime || "").trim();
   if (!regime) return "-";
@@ -246,8 +273,11 @@ function simplifiedStrategyReason(summary) {
       : "Ya hay un bracket abierto y no abrimos otro hasta que cierre.";
   }
   if (noteLower.includes("no locked edge")) {
+    const strongestEdge = Math.max(Number(summary?.strategy_edge_pct || 0) * 100, 0);
     return pairSum > 0
-      ? `No hay margen bloqueado suficiente ahora mismo. La suma de las dos patas va por ${fmt(pairSum, 3)}.`
+      ? strongestEdge >= 8
+        ? `La ventaja direccional existe, pero el precio conjunto sigue caro. La suma va por ${fmt(pairSum, 3)} y el bot espera mejor entrada.`
+        : `No hay margen bloqueado suficiente ahora mismo. La suma de las dos patas va por ${fmt(pairSum, 3)}.`
       : "No hay margen bloqueado suficiente ahora mismo.";
   }
   if (noteLower.includes("incomplete book")) {
@@ -535,6 +565,9 @@ function paintSummary(summary, items = lastPositions) {
   const strategyWindowSeconds = Number(summary.strategy_window_seconds || 0);
   const strategyPlanLegs = Number(summary.strategy_plan_legs || 0);
   const strategyBias = ratioLabel(summary);
+  const desiredRatio = desiredRatioLabel(summary);
+  const actualRatio = actualRatioLabel(summary);
+  const bracketPhase = bracketPhaseLabel(summary);
   const strategyCycleBudget = Number(summary.strategy_cycle_budget || 0);
   const strategyDataSource = String(summary.strategy_data_source || "rest-fallback");
   const strategyFeedConnected = Boolean(summary.strategy_feed_connected);
@@ -556,13 +589,13 @@ function paintSummary(summary, items = lastPositions) {
     : strategyNote || strategyTitle;
   document.getElementById("strategyHeroTitle").textContent = strategyTitle;
   document.getElementById("heroTargetOutcome").textContent = isVidarxLab(summary)
-    ? currentWindowDirection(summary)
+    ? `${currentWindowDirection(summary)} | objetivo ${desiredRatio}`
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)}`
     : "-";
   document.getElementById("heroTriggerSeen").textContent = isVidarxLab(summary)
     ? strategyWindowSeconds > 0
-      ? `${timing} | ${strategyWindowSeconds}s | ${strategyPlanLegs} compras`
+      ? `${timing} | ${strategyWindowSeconds}s | ${strategyPlanLegs} compras | ${bracketPhase}`
       : "-"
     : triggerOutcome
     ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}`
@@ -591,8 +624,8 @@ function paintSummary(summary, items = lastPositions) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
     ? currentMarketExposure > 0
-      ? `${windowState.label}. ${windowState.detail} En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
-      : `${windowState.label}. ${windowState.detail} El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, actual ${actualRatio}, fase ${bracketPhase.toLowerCase()}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      : `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, fase ${bracketPhase.toLowerCase()}. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
   paintLabOverview(summary);
@@ -627,7 +660,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | ${edgeInfo.label} ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` | beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `ventana ${windowSeconds}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | compras ${summary.strategy_plan_legs || 0} | ${edgeInfo.label} ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` | beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
@@ -640,7 +673,10 @@ function paintSelectedWallets(items) {
     const currentLivePnl = Number(lastSummary?.strategy_current_market_live_pnl || 0);
     const planRows = [
       ["Estado", state.label],
-      ["Reparto", currentWindowDirection(lastSummary)],
+      ["Objetivo", desiredRatioLabel(lastSummary)],
+      ["Actual", actualRatioLabel(lastSummary)],
+      ["Fase", bracketPhaseLabel(lastSummary)],
+      ["Reparto actual", currentWindowDirection(lastSummary)],
       ["Dinero metido", fmtUsdPlain(currentExposure, 2)],
       ["PnL de esta ventana", fmtUsd(currentLivePnl, 2)],
       ...breakdown.map((item) => [
