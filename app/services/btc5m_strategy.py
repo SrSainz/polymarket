@@ -63,7 +63,7 @@ _ARB_PAIR_OVERLAY_FRACTION = 0.0
 _ARB_MAX_PAIR_LEVELS = 20
 _ARB_EARLY_MID_END = 150
 _ARB_MID_LATE_START = 151
-_ARB_ENABLE_CHEAP_SIDE = True
+_ARB_ENABLE_CHEAP_SIDE = False
 _ARB_ENABLE_PAIR_OVERLAY = False
 _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 290
@@ -1229,7 +1229,7 @@ class BTC5mStrategyService:
 
         if pair_sum < _ARB_PAIR_SUM_MAX:
             overlay_reserve_fraction = 0.0
-            if abs(desired_up_ratio - 0.5) >= _ARB_REBALANCE_RATIO_TRIGGER:
+            if _ARB_ENABLE_PAIR_OVERLAY and abs(desired_up_ratio - 0.5) >= _ARB_REBALANCE_RATIO_TRIGGER:
                 overlay_reserve_fraction = _ARB_REBALANCE_BUDGET_FRACTION
             pair_core_budget = cycle_budget * (1.0 - overlay_reserve_fraction)
             pair_levels = self._build_arb_pair_levels(
@@ -1278,16 +1278,24 @@ class BTC5mStrategyService:
                 overlay_target: MarketOutcome | None = None
                 overlay_fair = 0.0
                 overlay_edge = 0.0
-                if ratio_gap >= _ARB_REBALANCE_RATIO_TRIGGER and edge_up >= _ARB_FAIR_VALUE_EDGE_MIN * 0.8:
+                if (
+                    _ARB_ENABLE_PAIR_OVERLAY
+                    and ratio_gap >= _ARB_REBALANCE_RATIO_TRIGGER
+                    and edge_up >= _ARB_FAIR_VALUE_EDGE_MIN * 0.8
+                ):
                     overlay_target = up_outcome
                     overlay_fair = fair_up
                     overlay_edge = max(edge_up, 0.0)
-                elif ratio_gap <= -_ARB_REBALANCE_RATIO_TRIGGER and down_edge >= _ARB_FAIR_VALUE_EDGE_MIN * 0.8:
+                elif (
+                    _ARB_ENABLE_PAIR_OVERLAY
+                    and ratio_gap <= -_ARB_REBALANCE_RATIO_TRIGGER
+                    and edge_down >= _ARB_FAIR_VALUE_EDGE_MIN * 0.8
+                ):
                     overlay_target = down_outcome
                     overlay_fair = fair_down
                     overlay_edge = max(edge_down, 0.0)
 
-                if instructions and overlay_target is not None:
+                if _ARB_ENABLE_PAIR_OVERLAY and instructions and overlay_target is not None:
                     projected_total = projected_up_notional + projected_down_notional
                     if overlay_target.asset_id == up_outcome.asset_id:
                         needed_notional = max((desired_up_ratio * projected_total) - projected_up_notional, 0.0)

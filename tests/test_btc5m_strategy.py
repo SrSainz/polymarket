@@ -1647,7 +1647,7 @@ def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Pat
     db.close()
 
 
-def test_arb_micro_uses_spot_context_to_open_single_side_trade(tmp_path: Path) -> None:
+def test_arb_micro_uses_spot_context_but_skips_single_side_trade_without_locked_edge(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     slug = "btc-updown-5m-spot-cheap"
@@ -1705,19 +1705,17 @@ def test_arb_micro_uses_spot_context_to_open_single_side_trade(tmp_path: Path) -
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] > 0
-    positions = db.list_copy_positions()
-    assert len(positions) == 1
-    assert str(positions[0]["outcome"]) == "Up"
-    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
+    assert stats["filled"] == 0
+    assert db.list_copy_positions() == []
+    assert db.get_bot_state("strategy_price_mode") == "underround"
     assert db.get_bot_state("strategy_spot_source") == "binance-direct"
     assert float(db.get_bot_state("strategy_spot_anchor") or 0.0) == 70000.0
     assert float(db.get_bot_state("strategy_spot_fair_up") or 0.0) > 0.45
-    assert "cheap Up" in str(db.get_bot_state("strategy_last_note") or "")
+    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
-def test_arb_micro_allows_cheap_side_with_strong_edge_even_if_spot_delta_is_small(tmp_path: Path) -> None:
+def test_arb_micro_keeps_skipping_single_side_even_with_strong_edge(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     slug = "btc-updown-5m-small-delta"
@@ -1775,12 +1773,76 @@ def test_arb_micro_allows_cheap_side_with_strong_edge_even_if_spot_delta_is_smal
 
     stats = service.run(mode="paper")
 
+    assert stats["filled"] == 0
+    assert db.list_copy_positions() == []
+    assert db.get_bot_state("strategy_price_mode") == "underround"
+    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_does_not_overlay_pair_when_overlay_flag_is_disabled(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-overlay-off"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Overlay Disabled",
+        "slug": slug,
+        "conditionId": "cond-arb-overlay-off",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "70000.00000000")
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.29"}],
+                "asks": [{"price": "0.30", "size": "400"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.63"}],
+                "asks": [{"price": "0.64", "size": "400"}],
+            },
+        },
+        balance=1000.0,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70120.0,
+            lead_price=70120.0,
+            binance_price=70120.0,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=6,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-overlay-off"),
+        spot_feed=spot_feed,
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
     assert stats["filled"] > 0
     positions = db.list_copy_positions()
-    assert len(positions) == 1
-    assert str(positions[0]["outcome"]) == "Down"
-    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
-    assert "cheap Down" in str(db.get_bot_state("strategy_last_note") or "")
+    assert len(positions) == 2
+    assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
+    assert "cheap" not in str(db.get_bot_state("strategy_last_note") or "").lower()
     db.close()
 
 

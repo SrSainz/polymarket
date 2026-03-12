@@ -320,19 +320,22 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
                 "title": str(row["title"] or row["slug"] or row["asset"]),
                 "condition_id": str(row["condition_id"] or ""),
                 "total_exposure": 0.0,
+                "total_shares": 0.0,
                 "unrealized_pnl": 0.0,
                 "outcomes": {},
             },
         )
         line_exposure = abs(size * avg_price)
         group["total_exposure"] += line_exposure
+        group["total_shares"] += abs(size)
         group["unrealized_pnl"] += line_unrealized
         outcome_key = str(row["outcome"] or "-")
         outcome_group = group["outcomes"].setdefault(
             outcome_key,
-            {"outcome": outcome_key, "exposure": 0.0, "unrealized_pnl": 0.0},
+            {"outcome": outcome_key, "exposure": 0.0, "shares": 0.0, "unrealized_pnl": 0.0},
         )
         outcome_group["exposure"] += line_exposure
+        outcome_group["shares"] += abs(size)
         outcome_group["unrealized_pnl"] += line_unrealized
 
     pnl_total = realized_pnl + unrealized_pnl
@@ -353,15 +356,22 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
     primary_exposure_actual = 0.0
     hedge_exposure_actual = 0.0
     current_market_total_exposure = strategy_current_market_exposure
+    current_market_total_shares = 0.0
     if current_market_group is not None:
         current_market_live_pnl = float(current_market_group["unrealized_pnl"])
         current_market_total_exposure = float(current_market_group["total_exposure"])
+        current_market_total_shares = float(current_market_group["total_shares"])
         for outcome_row in sorted(
             current_market_group["outcomes"].values(),
             key=lambda item: float(item["exposure"]),
             reverse=True,
         ):
-            share_pct = (
+            payout_share_pct = (
+                (float(outcome_row["shares"]) / current_market_total_shares) * 100
+                if current_market_total_shares > 0
+                else 0.0
+            )
+            money_share_pct = (
                 (float(outcome_row["exposure"]) / current_market_total_exposure) * 100
                 if current_market_total_exposure > 0
                 else 0.0
@@ -370,8 +380,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
                 {
                     "outcome": outcome_row["outcome"],
                     "exposure": round(float(outcome_row["exposure"]), 4),
+                    "shares": round(float(outcome_row["shares"]), 4),
                     "unrealized_pnl": round(float(outcome_row["unrealized_pnl"]), 4),
-                    "share_pct": round(share_pct, 2),
+                    "share_pct": round(payout_share_pct, 2),
+                    "money_share_pct": round(money_share_pct, 2),
                 }
             )
         primary_exposure_actual = float(
@@ -453,6 +465,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_feed_tracked_assets": int(strategy_feed_tracked_assets),
         "strategy_current_market_live_pnl": round(current_market_live_pnl, 4),
         "strategy_current_market_total_exposure": round(current_market_total_exposure, 4),
+        "strategy_current_market_total_shares": round(current_market_total_shares, 4),
         "strategy_current_market_primary_exposure": round(primary_exposure_actual, 4),
         "strategy_current_market_hedge_exposure": round(hedge_exposure_actual, 4),
         "strategy_current_market_breakdown": current_market_breakdown,

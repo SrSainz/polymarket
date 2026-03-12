@@ -254,7 +254,9 @@ function latestStrategyExecution() {
 function currentWindowDirection(summary) {
   const breakdown = currentBreakdown(summary);
   if (!breakdown.length) return "Sin posicion abierta";
-  return breakdown.map((item) => `${friendlyOutcomeName(item.outcome)} ${fmtPct(item.share_pct, 0)}`).join(" / ");
+  return breakdown
+    .map((item) => `${friendlyOutcomeName(item.outcome)} ${fmtPct(item.share_pct, 0)} por acciones`)
+    .join(" / ");
 }
 
 function simplifiedStrategyReason(summary) {
@@ -276,7 +278,7 @@ function simplifiedStrategyReason(summary) {
     const strongestEdge = Math.max(Number(summary?.strategy_edge_pct || 0) * 100, 0);
     return pairSum > 0
       ? strongestEdge >= 8
-        ? `La ventaja direccional existe, pero el precio conjunto sigue caro. La suma va por ${fmt(pairSum, 3)} y el bot espera mejor entrada.`
+        ? `Se ve ventaja relativa en un lado, pero este modo solo entra cuando puede cerrar el bracket con dos patas equilibradas. La suma va por ${fmt(pairSum, 3)}.`
         : `No hay margen bloqueado suficiente ahora mismo. La suma de las dos patas va por ${fmt(pairSum, 3)}.`
       : "No hay margen bloqueado suficiente ahora mismo.";
   }
@@ -624,7 +626,7 @@ function paintSummary(summary, items = lastPositions) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
     ? currentMarketExposure > 0
-      ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, actual ${actualRatio}, fase ${bracketPhase.toLowerCase()}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, equilibrio por acciones ${actualRatio}, fase ${bracketPhase.toLowerCase()}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones totales. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
       : `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, fase ${bracketPhase.toLowerCase()}. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
@@ -678,10 +680,11 @@ function paintSelectedWallets(items) {
       ["Fase", bracketPhaseLabel(lastSummary)],
       ["Reparto actual", currentWindowDirection(lastSummary)],
       ["Dinero metido", fmtUsdPlain(currentExposure, 2)],
+      ["Acciones totales", fmt(Number(lastSummary?.strategy_current_market_total_shares || 0), 2)],
       ["PnL de esta ventana", fmtUsd(currentLivePnl, 2)],
       ...breakdown.map((item) => [
         friendlyOutcomeName(item.outcome),
-        `${fmtPct(item.share_pct, 0)} del dinero | ${fmtUsdPlain(Number(item.exposure || 0), 2)} | vivo ${fmtUsd(Number(item.unrealized_pnl || 0), 2)}`,
+        `${fmt(Number(item.shares || 0), 2)} acc. | ${fmtPct(item.share_pct, 0)} por acciones | ${fmtPct(Number(item.money_share_pct || 0), 0)} del dinero | ${fmtUsdPlain(Number(item.exposure || 0), 2)} | vivo ${fmtUsd(Number(item.unrealized_pnl || 0), 2)}`,
       ]),
     ];
     document.getElementById("selectedWalletsCount").textContent = String(planRows.length);
