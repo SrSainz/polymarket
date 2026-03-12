@@ -12,6 +12,7 @@ let watchedWallet = DEFAULT_WALLET;
 let apiBase = "";
 let lastSummary = null;
 let lastPositions = [];
+let lastExecutions = [];
 
 const fmt = (value, digits = 4) => {
   const asNumber = Number(value);
@@ -103,19 +104,26 @@ function currentBreakdown(summary) {
   return Array.isArray(summary?.strategy_current_market_breakdown) ? summary.strategy_current_market_breakdown : [];
 }
 
+function friendlyOutcomeName(raw) {
+  const value = String(raw || "").trim().toLowerCase();
+  if (value === "up") return "Sube";
+  if (value === "down") return "Baja";
+  return String(raw || "-");
+}
+
 function ratioLabel(summary) {
   const breakdown = currentBreakdown(summary);
   if (breakdown.length >= 2) {
     const [first, second] = breakdown;
-    return `${first.outcome} ${fmtPct(first.share_pct, 0)} / ${second.outcome} ${fmtPct(second.share_pct, 0)}`;
+    return `${friendlyOutcomeName(first.outcome)} ${fmtPct(first.share_pct, 0)} / ${friendlyOutcomeName(second.outcome)} ${fmtPct(second.share_pct, 0)}`;
   }
   if (summary?.strategy_primary_outcome) {
     const primaryPct = Number(summary.strategy_primary_ratio || 0) * 100;
     const hedgePct = Math.max(100 - primaryPct, 0);
     if (summary.strategy_hedge_outcome) {
-      return `${summary.strategy_primary_outcome} ${fmtPct(primaryPct, 0)} / ${summary.strategy_hedge_outcome} ${fmtPct(hedgePct, 0)}`;
+      return `${friendlyOutcomeName(summary.strategy_primary_outcome)} ${fmtPct(primaryPct, 0)} / ${friendlyOutcomeName(summary.strategy_hedge_outcome)} ${fmtPct(hedgePct, 0)}`;
     }
-    return `${summary.strategy_primary_outcome} ${fmtPct(primaryPct, 0)}`;
+    return `${friendlyOutcomeName(summary.strategy_primary_outcome)} ${fmtPct(primaryPct, 0)}`;
   }
   return summary?.strategy_market_bias || "-";
 }
@@ -178,7 +186,7 @@ function currentEdgeInfo(summary) {
     pairSum: pairSum || null,
     edgePct: storedEdge ? storedEdge * 100 : Math.max((1 - pairSum) * 100, 0),
     fairValue: fairValue || null,
-    label: priceMode === "cheap-side" ? "lado barato" : "underround",
+    label: priceMode === "cheap-side" ? "lado barato" : "arbitraje cerrado",
   };
 }
 
@@ -208,6 +216,91 @@ function currentSpotInfo(summary) {
     binance,
     chainlink,
   };
+}
+
+function latestStrategyExecution() {
+  return (Array.isArray(lastExecutions) ? lastExecutions : []).find((item) =>
+    String(item?.source_wallet || "").toLowerCase().includes("strategy")
+  );
+}
+
+function currentWindowDirection(summary) {
+  const breakdown = currentBreakdown(summary);
+  if (!breakdown.length) return "Sin posicion abierta";
+  return breakdown.map((item) => `${friendlyOutcomeName(item.outcome)} ${fmtPct(item.share_pct, 0)}`).join(" / ");
+}
+
+function simplifiedStrategyReason(summary) {
+  const note = String(summary?.strategy_last_note || "").trim();
+  const noteLower = note.toLowerCase();
+  const pairSum = Number(summary?.strategy_pair_sum || 0);
+  const openExposure = Number(summary?.strategy_current_market_total_exposure || 0);
+
+  if (!note) return "Esperando a que aparezca un arbitraje con margen real.";
+  if (noteLower.includes("drawdown stop")) {
+    return "El simulador se ha parado porque supero la perdida maxima permitida.";
+  }
+  if (noteLower.includes("open market limit reached")) {
+    return openExposure > 0
+      ? `Ya hay un bracket abierto con ${fmtUsdPlain(openExposure, 2)} metidos y esperamos a que cierre.`
+      : "Ya hay un bracket abierto y no abrimos otro hasta que cierre.";
+  }
+  if (noteLower.includes("no locked edge")) {
+    return pairSum > 0
+      ? `No hay margen bloqueado suficiente ahora mismo. La suma de las dos patas va por ${fmt(pairSum, 3)}.`
+      : "No hay margen bloqueado suficiente ahora mismo.";
+  }
+  if (noteLower.includes("incomplete book")) {
+    return "Una de las dos patas tiene poca liquidez visible y el bot prefiere esperar.";
+  }
+  if (noteLower.includes("market cap exhausted")) {
+    return "Ya hay bastante dinero metido en este bracket y no compensa seguir cargando.";
+  }
+  if (noteLower.includes("max fills")) {
+    return "Ya se alcanzo el maximo de compras permitido para este bracket.";
+  }
+  if (noteLower.includes("cooldown")) {
+    return "Acabamos de comprar en este bracket y esperamos unos segundos antes de repetir.";
+  }
+  if (noteLower.includes("no active btc5m market")) {
+    return "Todavia no hay un bracket BTC 5m listo para operar.";
+  }
+  return note;
+}
+
+function friendlyWindowState(summary) {
+  const openExposure = Number(summary?.strategy_current_market_total_exposure || 0);
+  const currentLivePnl = Number(summary?.strategy_current_market_live_pnl || 0);
+  const lastExecution = latestStrategyExecution();
+  const lastAction = String(lastExecution?.action || "").toLowerCase();
+  const lastExecutionAgeSeconds = lastExecution ? Math.max((Date.now() / 1000) - Number(lastExecution.ts || 0), 0) : Infinity;
+  const note = String(summary?.strategy_last_note || "").toLowerCase();
+
+  if (note.includes("drawdown stop")) {
+    return { label: "Parado por perdida maxima", detail: simplifiedStrategyReason(summary) };
+  }
+  if (note.includes("open market limit reached")) {
+    return { label: "Bloqueado por bracket abierto", detail: simplifiedStrategyReason(summary) };
+  }
+  if (openExposure > 0) {
+    if (lastAction === "close" && lastExecutionAgeSeconds <= 90) {
+      return {
+        label: "Cerrando",
+        detail: `La ventana anterior se esta liquidando. Quedan ${fmtUsdPlain(openExposure, 2)} abiertos y va ${fmtUsd(currentLivePnl, 2)} en vivo.`,
+      };
+    }
+    return {
+      label: "Comprando",
+      detail: `Dentro de esta ventana el bot va ${currentWindowDirection(summary)}. Lleva ${fmtUsdPlain(openExposure, 2)} metidos y ${fmtUsd(currentLivePnl, 2)} en vivo.`,
+    };
+  }
+  if (lastAction === "close" && lastExecutionAgeSeconds <= 90) {
+    return {
+      label: "Cerrando",
+      detail: `Acaba de cerrar la ventana anterior con ${fmtUsd(Number(lastExecution?.pnl_delta || 0), 2)} de resultado.`,
+    };
+  }
+  return { label: "Esperando arbitraje", detail: simplifiedStrategyReason(summary) };
 }
 
 function shortSlug(slug) {
@@ -376,6 +469,7 @@ function saveApiBase(value) {
 function paintSummary(summary, items = lastPositions) {
   lastSummary = summary;
   const buckets = splitPositionBuckets(summary, items);
+  const windowState = friendlyWindowState(summary);
   const currentWindowExposure = Number(summary.strategy_current_market_total_exposure ?? buckets.currentSummary.exposure ?? 0);
   const totalExposure = Number(summary.exposure ?? buckets.totalExposure ?? 0);
   const totalExposureMark = Number(summary.exposure_mark ?? totalExposure);
@@ -429,7 +523,9 @@ function paintSummary(summary, items = lastPositions) {
     livePnlNode.classList.remove("pnl-pos", "pnl-neg", "pnl-flat");
     livePnlNode.classList.add(livePnlToday > 0 ? "pnl-pos" : livePnlToday < 0 ? "pnl-neg" : "pnl-flat");
   }
-  document.getElementById("strategyModeCard").textContent = strategyLabel(summary);
+  document.getElementById("strategyModeCard").textContent = isVidarxLab(summary)
+    ? windowState.label
+    : strategyLabel(summary);
   const strategyTitle = String(summary.strategy_market_title || summary.strategy_market_slug || "sin setup");
   const strategyOutcome = String(summary.strategy_target_outcome || "");
   const strategyPrice = Number(summary.strategy_target_price || 0);
@@ -454,13 +550,13 @@ function paintSummary(summary, items = lastPositions) {
   const timing = timingLabel(summary);
   const strategyNoteText = strategyNote || "sin trigger";
   document.getElementById("strategyCardMeta").textContent = isVidarxLab(summary)
-    ? `${strategyBias || "sin reparto"} | plan ${fmtUsdPlain(strategyCycleBudget, 2)} | ${strategySpeedLabel} | ${strategyNote || strategyTitle}`
+    ? windowState.detail
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
     : strategyNote || strategyTitle;
   document.getElementById("strategyHeroTitle").textContent = strategyTitle;
   document.getElementById("heroTargetOutcome").textContent = isVidarxLab(summary)
-    ? strategyBias || "-"
+    ? currentWindowDirection(summary)
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)}`
     : "-";
@@ -477,7 +573,7 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("heroFeedMeta").textContent =
     edgeInfo.pairSum !== null
       ? `${edgeInfo.label} | pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.hasCurrent ? ` | BTC ${fmtBtcPrice(spotInfo.current)}` : ""}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ${feedInfo.meta}`
-      : `${spotInfo.hasCurrent ? `BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ` : ""}${feedInfo.meta} | ${strategyNoteText}`;
+      : `${spotInfo.hasCurrent ? `BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ` : ""}${feedInfo.meta} | ${windowState.label.toLowerCase()}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
 
@@ -495,8 +591,8 @@ function paintSummary(summary, items = lastPositions) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
     ? currentMarketExposure > 0
-      ? `Ventana actual en ${tradingModeLabel(summary)}. En esta ventana hay ${fmtUsdPlain(currentMarketExposure, 2)} metidos y va ${fmtUsd(currentMarketLivePnl, 2)}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}, datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}${spotInfo.available ? `. BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps), fair Up ${fmtPct(spotInfo.fairUp * 100, 1)} / Down ${fmtPct(spotInfo.fairDown * 100, 1)}` : ""}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
-      : `Ventana actual en ${tradingModeLabel(summary)} sin posicion abierta. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ultima lectura de ventana: ${strategyNoteText}. Datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}${spotInfo.hasCurrent ? `. BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""}` : ""}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      ? `${windowState.label}. ${windowState.detail} En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      : `${windowState.label}. ${windowState.detail} El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
   paintLabOverview(summary);
@@ -523,7 +619,7 @@ function paintLabOverview(summary) {
   document.getElementById("labSpotDelta").textContent =
     spotInfo.available ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaBps, 1)}bps` : spotInfo.hasCurrent ? "esperando ancla" : "-";
   document.getElementById("labSpotFair").textContent =
-    spotInfo.available ? `Up ${fmtPct(spotInfo.fairUp * 100, 1)} / Down ${fmtPct(spotInfo.fairDown * 100, 1)}` : spotInfo.hasCurrent ? "esperando ancla" : "-";
+    spotInfo.available ? `Sube ${fmtPct(spotInfo.fairUp * 100, 1)} / Baja ${fmtPct(spotInfo.fairDown * 100, 1)}` : spotInfo.hasCurrent ? "esperando ancla" : "-";
   document.getElementById("labEdgeValue").textContent =
     edgeInfo.edgePct !== null
       ? `${edgeInfo.label} | ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}`
@@ -538,17 +634,19 @@ function paintLabOverview(summary) {
 function paintSelectedWallets(items) {
   const body = document.getElementById("selectedWalletsList");
   if (isVidarxLab()) {
-    const primaryExposure =
-      Number(lastSummary?.strategy_current_market_primary_exposure || lastSummary?.strategy_primary_exposure || 0);
-    const hedgeExposure =
-      Number(lastSummary?.strategy_current_market_hedge_exposure || lastSummary?.strategy_hedge_exposure || 0);
+    const breakdown = currentBreakdown(lastSummary);
+    const state = friendlyWindowState(lastSummary);
+    const currentExposure = Number(lastSummary?.strategy_current_market_total_exposure || 0);
+    const currentLivePnl = Number(lastSummary?.strategy_current_market_live_pnl || 0);
     const planRows = [
-      ["Mercado", String(lastSummary?.strategy_market_title || lastSummary?.strategy_market_slug || "-")],
-      ["Lado principal", `${String(lastSummary?.strategy_primary_outcome || "-")} | ${fmtUsdPlain(primaryExposure, 2)}`],
-      ["Cobertura", `${String(lastSummary?.strategy_hedge_outcome || "-")} | ${fmtUsdPlain(hedgeExposure, 2)}`],
-      ["Reparto", ratioLabel(lastSummary)],
-      ["Compras previstas", String(lastSummary?.strategy_plan_legs || 0)],
-      ["Reposiciones", String(lastSummary?.strategy_replenishment_count || 0)],
+      ["Estado", state.label],
+      ["Reparto", currentWindowDirection(lastSummary)],
+      ["Dinero metido", fmtUsdPlain(currentExposure, 2)],
+      ["PnL de esta ventana", fmtUsd(currentLivePnl, 2)],
+      ...breakdown.map((item) => [
+        friendlyOutcomeName(item.outcome),
+        `${fmtPct(item.share_pct, 0)} del dinero | ${fmtUsdPlain(Number(item.exposure || 0), 2)} | vivo ${fmtUsd(Number(item.unrealized_pnl || 0), 2)}`,
+      ]),
     ];
     document.getElementById("selectedWalletsCount").textContent = String(planRows.length);
     body.innerHTML = planRows
@@ -561,8 +659,7 @@ function paintSelectedWallets(items) {
     `
       )
       .join("");
-    document.getElementById("selectedWalletsMeta").textContent =
-      `momento ${timingLabel(lastSummary)} | plan ${fmtUsdPlain(Number(lastSummary?.strategy_cycle_budget || 0), 2)}`;
+    document.getElementById("selectedWalletsMeta").textContent = state.detail;
     return;
   }
 
@@ -758,7 +855,7 @@ function renderPositionRows(items, emptyLabel) {
       return `
       <tr>
         <td data-label="Mercado">${escapeHtml(item.title || item.slug || item.asset)}</td>
-        <td data-label="Outcome">${escapeHtml(item.outcome || "-")}</td>
+        <td data-label="Outcome">${escapeHtml(friendlyOutcomeName(item.outcome || "-"))}</td>
         <td data-label="Monto">${fmtUsdPlain(notional, 2)}</td>
         <td data-label="Avg">${fmt(item.avg_price)}</td>
         <td data-label="Mark">${fmt(item.mark_price)}</td>
@@ -815,6 +912,7 @@ function paintPositions(items) {
 }
 
 function paintExecutions(items) {
+  lastExecutions = Array.isArray(items) ? items : [];
   const body = document.getElementById("executionsBody");
   if (!items.length) {
     body.innerHTML = `<tr><td colspan="8">No hay ejecuciones.</td></tr>`;
@@ -873,9 +971,9 @@ async function refreshAll() {
         getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
       ]);
 
+      paintExecutions(executions.items || []);
       paintSummary(summary, positions.items || []);
       paintPositions(positions.items || []);
-      paintExecutions(executions.items || []);
       paintSignals([]);
       paintSelectedWallets([]);
       paintRiskBlocks({});
@@ -930,9 +1028,9 @@ async function refreshAll() {
       pending_signals: "-",
     };
 
+    paintExecutions(executions);
     paintSummary(summary, positions);
     paintPositions(positions);
-    paintExecutions(executions);
     paintSignals([]);
     paintSelectedWallets([]);
     paintRiskBlocks({ items: [], hours: 24, blocked_total: 0 });

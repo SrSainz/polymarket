@@ -207,6 +207,8 @@ class BTC5mStrategyService:
         self.risk = RiskManager(settings.config)
         self._cached_market: dict | None = None
         self._cached_market_expires_at = 0.0
+        self._last_cycle_log_signature = ""
+        self._last_cycle_log_at = 0.0
 
     def run(self, mode: str = "paper") -> dict[str, int]:
         if self.settings.config.strategy_entry_mode == "arb_micro":
@@ -2495,6 +2497,30 @@ class BTC5mStrategyService:
     ) -> None:
         available_to_trade = self._available_to_trade(cash_balance=cash_balance, allowance=allowance)
         feed_status = self._market_feed_status()
+        signature = "|".join(
+            [
+                mode,
+                note,
+                str(stats["pending"]),
+                str(stats["filled"]),
+                str(stats["blocked"]),
+                str(stats["skipped"]),
+                str(stats["failed"]),
+                str(stats["opportunities"]),
+                str(feed_status["mode"]),
+                str(feed_status["connected"]),
+                str(feed_status["tracked_assets"]),
+                f"{cash_balance:.2f}",
+                f"{available_to_trade:.2f}",
+                f"{total_exposure:.2f}",
+                f"{live_total_capital:.2f}",
+            ]
+        )
+        now = time.monotonic()
+        if signature == self._last_cycle_log_signature and (now - self._last_cycle_log_at) < 5.0:
+            return
+        self._last_cycle_log_signature = signature
+        self._last_cycle_log_at = now
         self.logger.info(
             "strategy => mode=%s pending=%s filled=%s blocked=%s skipped=%s failed=%s opportunities=%s note=%s "
             "data_source=%s feed_connected=%s feed_age_ms=%s tracked_assets=%s "
