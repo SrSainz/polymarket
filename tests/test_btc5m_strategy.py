@@ -441,7 +441,7 @@ def test_vidarx_micro_builds_dual_leg_plan_in_paper(tmp_path: Path) -> None:
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat().replace("+00:00", "Z")
     market = {
-        "question": "Bitcoin Up or Down - Test",
+        "question": "Bitcoin Up or Down - Tilted",
         "slug": "btc-updown-5m-test",
         "conditionId": "cond-vidarx",
         "closed": False,
@@ -453,12 +453,12 @@ def test_vidarx_micro_builds_dual_leg_plan_in_paper(tmp_path: Path) -> None:
     clob = _FakeCLOBClient(
         books={
             "asset-up": {
-                "bids": [{"price": "0.58"}],
-                "asks": [{"price": "0.60", "size": "1000"}],
+                "bids": [{"price": "0.72"}],
+                "asks": [{"price": "0.74", "size": "1000"}],
             },
             "asset-down": {
-                "bids": [{"price": "0.38"}],
-                "asks": [{"price": "0.40", "size": "1000"}],
+                "bids": [{"price": "0.26"}],
+                "asks": [{"price": "0.28", "size": "1000"}],
             },
         },
         balance=30.0,
@@ -484,10 +484,12 @@ def test_vidarx_micro_builds_dual_leg_plan_in_paper(tmp_path: Path) -> None:
     assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
     assert db.get_bot_state("strategy_plan_legs") == "2"
     assert "lidera" in str(db.get_bot_state("strategy_market_bias") or "")
+    assert db.get_bot_state("strategy_price_mode") == "tilted"
+    assert db.get_bot_state("strategy_timing_regime") == "mid-late"
     db.close()
 
 
-def test_vidarx_micro_uses_extreme_80_20_bias(tmp_path: Path) -> None:
+def test_vidarx_micro_blocks_extreme_bias_setup(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=170)).isoformat().replace("+00:00", "Z")
@@ -534,14 +536,13 @@ def test_vidarx_micro_uses_extreme_80_20_bias(tmp_path: Path) -> None:
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] >= 2
-    assert float(db.get_bot_state("strategy_primary_ratio") or "0") >= 0.79
-    assert db.get_bot_state("strategy_price_mode") == "extreme"
-    assert db.get_bot_state("strategy_primary_outcome") == "Up"
+    assert stats["filled"] == 0
+    assert stats["skipped"] == 1
+    assert "setup desactivado: extreme/mid-late" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
-def test_vidarx_micro_uses_balanced_55_45_bias(tmp_path: Path) -> None:
+def test_vidarx_micro_blocks_balanced_setup(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=75)).isoformat().replace("+00:00", "Z")
@@ -583,9 +584,9 @@ def test_vidarx_micro_uses_balanced_55_45_bias(tmp_path: Path) -> None:
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] >= 2
-    assert 0.54 <= float(db.get_bot_state("strategy_primary_ratio") or "0") <= 0.56
-    assert db.get_bot_state("strategy_price_mode") == "balanced"
+    assert stats["filled"] == 0
+    assert stats["skipped"] == 1
+    assert "setup desactivado: balanced/early-mid" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -606,19 +607,19 @@ def test_vidarx_micro_uses_real_price_ladder_levels(tmp_path: Path) -> None:
     clob = _FakeCLOBClient(
         books={
             "asset-up": {
-                "bids": [{"price": "0.79"}],
+                "bids": [{"price": "0.70"}],
                 "asks": [
-                    {"price": "0.77", "size": "20"},
-                    {"price": "0.79", "size": "20"},
-                    {"price": "0.81", "size": "20"},
+                    {"price": "0.68", "size": "20"},
+                    {"price": "0.70", "size": "20"},
+                    {"price": "0.72", "size": "20"},
                 ],
             },
             "asset-down": {
-                "bids": [{"price": "0.17"}],
+                "bids": [{"price": "0.26"}],
                 "asks": [
-                    {"price": "0.17", "size": "20"},
-                    {"price": "0.19", "size": "20"},
-                    {"price": "0.21", "size": "20"},
+                    {"price": "0.28", "size": "20"},
+                    {"price": "0.30", "size": "20"},
+                    {"price": "0.32", "size": "20"},
                 ],
             },
         },
@@ -644,8 +645,8 @@ def test_vidarx_micro_uses_real_price_ladder_levels(tmp_path: Path) -> None:
         for row in db.get_recent_executions(limit=10)
         if str(row["asset"]) == "asset-up"
     }
-    assert stats["filled"] >= 4
-    assert prices >= {0.77, 0.79}
+    assert stats["filled"] >= 3
+    assert prices >= {0.68, 0.70}
     db.close()
 
 
@@ -666,12 +667,12 @@ def test_vidarx_micro_does_not_reenter_same_market_after_initial_wave(tmp_path: 
     clob = _FakeCLOBClient(
         books={
             "asset-up": {
-                "bids": [{"price": "0.79"}],
-                "asks": [{"price": "0.81", "size": "1000"}],
+                "bids": [{"price": "0.72"}],
+                "asks": [{"price": "0.74", "size": "1000"}],
             },
             "asset-down": {
-                "bids": [{"price": "0.17"}],
-                "asks": [{"price": "0.19", "size": "1000"}],
+                "bids": [{"price": "0.26"}],
+                "asks": [{"price": "0.28", "size": "1000"}],
             },
         },
         balance=100.0,
@@ -722,12 +723,12 @@ def test_vidarx_micro_initial_ladder_does_not_count_as_replenishment(tmp_path: P
     clob = _FakeCLOBClient(
         books={
             "asset-up": {
-                "bids": [{"price": "0.79"}],
-                "asks": [{"price": "0.81", "size": "1000"}],
+                "bids": [{"price": "0.72"}],
+                "asks": [{"price": "0.74", "size": "1000"}],
             },
             "asset-down": {
-                "bids": [{"price": "0.17"}],
-                "asks": [{"price": "0.19", "size": "1000"}],
+                "bids": [{"price": "0.26"}],
+                "asks": [{"price": "0.28", "size": "1000"}],
             },
         },
         balance=100.0,
@@ -1119,7 +1120,7 @@ def test_vidarx_micro_blocks_setup_with_negative_history(tmp_path: Path) -> None
 
     assert stats["filled"] == 0
     assert stats["skipped"] == 1
-    assert "setup bloqueado por historial" in str(db.get_bot_state("strategy_last_note") or "")
+    assert "setup desactivado: balanced/early-mid" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 

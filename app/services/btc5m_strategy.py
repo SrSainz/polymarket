@@ -48,6 +48,7 @@ _VIDARX_TILTED_CYCLE_FRACTION = 0.035
 _VIDARX_EXTREME_CYCLE_FRACTION = 0.05
 _VIDARX_SETUP_DISABLE_MIN_WINDOWS = 4
 _VIDARX_SETUP_DISABLE_MAX_WIN_RATE = 0.50
+_VIDARX_ALLOWED_SETUPS = {("tilted", "mid-late")}
 
 
 @dataclass(frozen=True)
@@ -1095,6 +1096,8 @@ class BTC5mStrategyService:
         return fraction
 
     def _vidarx_setup_allowed(self, *, price_mode: str, timing_regime: str) -> tuple[bool, str]:
+        if (price_mode, timing_regime) not in _VIDARX_ALLOWED_SETUPS:
+            return False, f"setup desactivado: {price_mode}/{timing_regime} fuera del perfil ganador"
         stats = self.db.get_strategy_setup_stats(price_mode=price_mode, timing_regime=timing_regime)
         windows = int(stats["windows"])
         win_rate = float(stats["win_rate"])
