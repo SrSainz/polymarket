@@ -1354,3 +1354,108 @@ def test_arb_micro_refuses_live_mode(tmp_path: Path) -> None:
     assert stats["blocked"] == 1
     assert "paper-only" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
+
+
+def test_arb_micro_buys_single_cheap_side_from_bid_implied_fair_value(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Cheap Side",
+        "slug": "btc-updown-5m-cheap",
+        "conditionId": "cond-arb-cheap",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.25"}],
+                "asks": [{"price": "0.26", "size": "150"}, {"price": "0.27", "size": "150"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.71"}],
+                "asks": [{"price": "0.75", "size": "150"}, {"price": "0.76", "size": "150"}],
+            },
+        },
+        balance=1000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-cheap"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] >= 1
+    positions = db.list_copy_positions()
+    assert len(positions) == 1
+    assert str(positions[0]["outcome"]) == "Up"
+    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
+    assert "cheap Up" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Tiny Top Level",
+        "slug": "btc-updown-5m-tiny-top",
+        "conditionId": "cond-arb-tiny",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "2"}, {"price": "0.41", "size": "100"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.55", "size": "2"}, {"price": "0.56", "size": "100"}],
+            },
+        },
+        balance=1000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=1000.0,
+            strategy_trade_allocation_pct=0.05,
+            min_trade_amount=5.0,
+        ),
+        logger=logging.getLogger("test-btc5m-arb-tiny"),
+    )
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] >= 2
+    positions = db.list_copy_positions()
+    assert len(positions) == 2
+    assert float(positions[0]["avg_price"]) >= 0.41 or float(positions[1]["avg_price"]) >= 0.56
+    db.close()

@@ -235,6 +235,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_target_price = _bot_state_float(conn, "strategy_target_price")
         strategy_trigger_outcome = _bot_state_text(conn, "strategy_trigger_outcome")
         strategy_trigger_price_seen = _bot_state_float(conn, "strategy_trigger_price_seen")
+        strategy_pair_sum = _bot_state_float(conn, "strategy_pair_sum")
+        strategy_edge_pct = _bot_state_float(conn, "strategy_edge_pct")
+        strategy_fair_value = _bot_state_float(conn, "strategy_fair_value")
         strategy_last_note = _bot_state_text(conn, "strategy_last_note")
         strategy_last_updated_at = _bot_state_int(conn, "strategy_last_updated_at")
         strategy_market_bias = _bot_state_text(conn, "strategy_market_bias")
@@ -399,6 +402,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_target_price": round(strategy_target_price, 4),
         "strategy_trigger_outcome": strategy_trigger_outcome,
         "strategy_trigger_price_seen": round(strategy_trigger_price_seen, 4),
+        "strategy_pair_sum": round(strategy_pair_sum, 4),
+        "strategy_edge_pct": round(strategy_edge_pct, 6),
+        "strategy_fair_value": round(strategy_fair_value, 4),
         "strategy_last_note": strategy_last_note,
         "strategy_last_updated_at": int(strategy_last_updated_at),
         "strategy_market_bias": strategy_market_bias,

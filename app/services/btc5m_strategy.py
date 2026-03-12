@@ -53,12 +53,15 @@ _VIDARX_ALLOWED_SETUPS = {
     ("tilted", "early-mid"),
     ("tilted", "mid-late"),
 }
-_ARB_PAIR_SUM_MAX = 0.985
-_ARB_MAX_PAIR_LEVELS = 6
-_ARB_EARLY_MID_END = 125
-_ARB_MID_LATE_START = 140
-_ARB_MIN_SECONDS = 20
-_ARB_MAX_SECONDS = 260
+_ARB_PAIR_SUM_MAX = 0.995
+_ARB_CHEAP_SIDE_SUM_MAX = 1.030
+_ARB_FAIR_VALUE_EDGE_MIN = 0.018
+_ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.65
+_ARB_MAX_PAIR_LEVELS = 10
+_ARB_EARLY_MID_END = 150
+_ARB_MID_LATE_START = 151
+_ARB_MIN_SECONDS = 10
+_ARB_MAX_SECONDS = 290
 _MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
@@ -106,6 +109,10 @@ class StrategyPlan:
     primary_notional: float
     secondary_notional: float
     replenishment_count: int
+    trigger_value: float
+    pair_sum: float
+    edge_pct: float
+    fair_value: float
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,13 @@ class ArbPairLevel:
     shares: float
     pair_sum: float
     total_notional: float
+
+
+@dataclass(frozen=True)
+class ArbSingleSideLevel:
+    price: float
+    shares: float
+    notional: float
 
 
 class BTC5mStrategyService:
@@ -417,8 +431,8 @@ class BTC5mStrategyService:
             extra_state={
                 "strategy_target_outcome": plan.primary_target.label,
                 "strategy_target_price": f"{plan.primary_target.best_ask:.6f}",
-                "strategy_trigger_outcome": "pair_sum",
-                "strategy_trigger_price_seen": f"{plan.trigger.best_ask + (plan.secondary_target.best_ask if plan.secondary_target else 0.0):.6f}",
+                "strategy_trigger_outcome": "pair_sum" if plan.price_mode == "underround" else f"cheap:{plan.primary_target.label}",
+                "strategy_trigger_price_seen": f"{plan.trigger_value:.6f}",
                 "strategy_market_bias": plan.market_bias,
                 "strategy_plan_legs": str(len(plan.instructions)),
                 "strategy_window_seconds": str(plan.window_seconds),
@@ -433,6 +447,9 @@ class BTC5mStrategyService:
                 "strategy_primary_exposure": f"{plan.primary_notional:.6f}",
                 "strategy_hedge_exposure": f"{plan.secondary_notional:.6f}",
                 "strategy_replenishment_count": str(plan.replenishment_count),
+                "strategy_pair_sum": f"{plan.pair_sum:.6f}",
+                "strategy_edge_pct": f"{plan.edge_pct:.6f}",
+                "strategy_fair_value": f"{plan.fair_value:.6f}",
             },
         )
         self.db.upsert_strategy_window(
@@ -971,17 +988,6 @@ class BTC5mStrategyService:
             primary_target, secondary_target = up_outcome, down_outcome
 
         pair_sum = up_outcome.best_ask + down_outcome.best_ask
-        if pair_sum >= _ARB_PAIR_SUM_MAX:
-            self._record_strategy_snapshot(
-                market=market,
-                note=f"arb_micro no underround: pair ask sum {pair_sum:.3f} >= {_ARB_PAIR_SUM_MAX:.3f}",
-                extra_state=self._arb_state_defaults(
-                    strategy_window_seconds=str(seconds_into_window),
-                    strategy_timing_regime=timing_regime,
-                    strategy_trigger_price_seen=f"{pair_sum:.6f}",
-                ),
-            )
-            return None
 
         cycle_budget = self._target_arb_cycle_budget(
             cash_balance=cash_balance,
@@ -989,10 +995,10 @@ class BTC5mStrategyService:
             current_total_exposure=current_total_exposure,
             timing_regime=timing_regime,
         )
-        if cycle_budget < self.settings.config.min_trade_amount * 2:
+        if cycle_budget < self.settings.config.min_trade_amount:
             self._record_strategy_snapshot(
                 market=market,
-                note="arb_micro bankroll below dual-leg minimum",
+                note="arb_micro bankroll below minimum",
                 extra_state=self._arb_state_defaults(
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_timing_regime=timing_regime,
@@ -1000,85 +1006,145 @@ class BTC5mStrategyService:
             )
             return None
 
-        pair_levels = self._build_arb_pair_levels(
-            up_outcome=up_outcome,
-            down_outcome=down_outcome,
-            budget=cycle_budget,
-        )
-        if not pair_levels:
-            self._record_strategy_snapshot(
-                market=market,
-                note="arb_micro no sweepable underround levels",
-                extra_state=self._arb_state_defaults(
-                    strategy_window_seconds=str(seconds_into_window),
-                    strategy_timing_regime=timing_regime,
-                ),
+        if pair_sum < _ARB_PAIR_SUM_MAX:
+            pair_levels = self._build_arb_pair_levels(
+                up_outcome=up_outcome,
+                down_outcome=down_outcome,
+                budget=cycle_budget,
             )
-            return None
+            if pair_levels:
+                instructions: list[CopyInstruction] = []
+                primary_notional = 0.0
+                secondary_notional = 0.0
+                for idx, level in enumerate(pair_levels, start=1):
+                    up_instruction = self._build_arb_instruction(
+                        market=market,
+                        target=up_outcome,
+                        shares=level.shares,
+                        price=level.up_price,
+                        pair_sum=level.pair_sum,
+                        tranche_index=idx,
+                    )
+                    down_instruction = self._build_arb_instruction(
+                        market=market,
+                        target=down_outcome,
+                        shares=level.shares,
+                        price=level.down_price,
+                        pair_sum=level.pair_sum,
+                        tranche_index=idx,
+                    )
+                    if up_instruction is None or down_instruction is None:
+                        continue
+                    instructions.extend([up_instruction, down_instruction])
+                    if primary_target.asset_id == up_outcome.asset_id:
+                        primary_notional += up_instruction.notional
+                        secondary_notional += down_instruction.notional
+                    else:
+                        primary_notional += down_instruction.notional
+                        secondary_notional += up_instruction.notional
 
-        instructions: list[CopyInstruction] = []
-        primary_notional = 0.0
-        secondary_notional = 0.0
-        for idx, level in enumerate(pair_levels, start=1):
-            up_instruction = self._build_arb_instruction(
-                market=market,
-                target=up_outcome,
-                shares=level.shares,
-                price=level.up_price,
-                pair_sum=level.pair_sum,
-                tranche_index=idx,
-            )
-            down_instruction = self._build_arb_instruction(
-                market=market,
-                target=down_outcome,
-                shares=level.shares,
-                price=level.down_price,
-                pair_sum=level.pair_sum,
-                tranche_index=idx,
-            )
-            if up_instruction is None or down_instruction is None:
-                continue
-            instructions.extend([up_instruction, down_instruction])
-            if primary_target.asset_id == up_outcome.asset_id:
-                primary_notional += up_instruction.notional
-                secondary_notional += down_instruction.notional
-            else:
-                primary_notional += down_instruction.notional
-                secondary_notional += up_instruction.notional
+                if instructions:
+                    total_pair_notional = primary_notional + secondary_notional
+                    captured_edge_pct = max(1.0 - pair_levels[0].pair_sum, 0.0)
+                    note = (
+                        f"underround {pair_levels[0].pair_sum:.3f} | edge {captured_edge_pct * 100:.2f}% | "
+                        f"{timing_regime} | niveles {len(pair_levels)} | patas {len(instructions)}"
+                    )
+                    return StrategyPlan(
+                        instructions=tuple(instructions),
+                        note=note,
+                        primary_target=primary_target,
+                        secondary_target=secondary_target,
+                        trigger=primary_target,
+                        window_seconds=seconds_into_window,
+                        cycle_budget=round(total_pair_notional, 6),
+                        market_bias="Arbitraje doble pata 50 / 50",
+                        timing_regime=timing_regime,
+                        price_mode="underround",
+                        primary_ratio=0.5,
+                        primary_notional=primary_notional,
+                        secondary_notional=secondary_notional,
+                        replenishment_count=0,
+                        trigger_value=pair_levels[0].pair_sum,
+                        pair_sum=pair_levels[0].pair_sum,
+                        edge_pct=captured_edge_pct,
+                        fair_value=0.0,
+                    )
 
-        if not instructions:
-            self._record_strategy_snapshot(
-                market=market,
-                note="arb_micro no viable paired instructions",
-                extra_state=self._arb_state_defaults(
-                    strategy_window_seconds=str(seconds_into_window),
-                    strategy_timing_regime=timing_regime,
-                ),
+        cheap_side = self._select_cheap_side_target(up_outcome=up_outcome, down_outcome=down_outcome, pair_sum=pair_sum)
+        if cheap_side is not None:
+            target, fair_value, relative_edge = cheap_side
+            single_budget = _round_down(cycle_budget * _ARB_SINGLE_SIDE_BUDGET_FRACTION, "0.01")
+            single_budget = min(max(single_budget, self.settings.config.min_trade_amount), cash_balance)
+            single_levels = self._build_arb_single_side_levels(
+                target=target,
+                budget=single_budget,
+                fair_value=fair_value,
             )
-            return None
+            if single_levels:
+                instructions = [
+                    instruction
+                    for idx, level in enumerate(single_levels, start=1)
+                    if (
+                        instruction := self._build_arb_instruction(
+                            market=market,
+                            target=target,
+                            shares=level.shares,
+                            price=level.price,
+                            pair_sum=pair_sum,
+                            tranche_index=idx,
+                        )
+                    )
+                    is not None
+                ]
+                if instructions:
+                    primary_notional = sum(item.notional for item in instructions)
+                    note = (
+                        f"cheap {target.label} ask {target.best_ask:.3f} < fair {fair_value:.3f} | "
+                        f"edge {relative_edge * 100:.2f}% | {timing_regime} | niveles {len(single_levels)} | "
+                        f"compras {len(instructions)}"
+                    )
+                    return StrategyPlan(
+                        instructions=tuple(instructions),
+                        note=note,
+                        primary_target=target,
+                        secondary_target=None,
+                        trigger=target,
+                        window_seconds=seconds_into_window,
+                        cycle_budget=round(primary_notional, 6),
+                        market_bias=f"Valor relativo {target.label}",
+                        timing_regime=timing_regime,
+                        price_mode="cheap-side",
+                        primary_ratio=1.0,
+                        primary_notional=primary_notional,
+                        secondary_notional=0.0,
+                        replenishment_count=0,
+                        trigger_value=target.best_ask,
+                        pair_sum=pair_sum,
+                        edge_pct=relative_edge,
+                        fair_value=fair_value,
+                    )
 
-        total_pair_notional = primary_notional + secondary_notional
-        captured_edge_pct = max(1.0 - (pair_levels[0].pair_sum), 0.0)
-        note = (
-            f"underround {pair_levels[0].pair_sum:.3f} | edge {captured_edge_pct * 100:.2f}% | "
-            f"{timing_regime} | niveles {len(pair_levels)} | patas {len(instructions)}"
+        fair_up = max(1.0 - down_outcome.best_bid, 0.0)
+        fair_down = max(1.0 - up_outcome.best_bid, 0.0)
+        edge_up = fair_up - up_outcome.best_ask
+        edge_down = fair_down - down_outcome.best_ask
+        self._record_strategy_snapshot(
+            market=market,
+            note=(
+                f"arb_micro no edge: pair sum {pair_sum:.3f} | "
+                f"Up edge {edge_up * 100:.2f}% | Down edge {edge_down * 100:.2f}%"
+            ),
+            extra_state=self._arb_state_defaults(
+                strategy_window_seconds=str(seconds_into_window),
+                strategy_timing_regime=timing_regime,
+                strategy_trigger_price_seen=f"{pair_sum:.6f}",
+                strategy_pair_sum=f"{pair_sum:.6f}",
+                strategy_edge_pct=f"{max(edge_up, edge_down, 0.0):.6f}",
+                strategy_fair_value=f"{max(fair_up, fair_down, 0.0):.6f}",
+            ),
         )
-        return StrategyPlan(
-            instructions=tuple(instructions),
-            note=note,
-            primary_target=primary_target,
-            secondary_target=secondary_target,
-            trigger=primary_target,
-            window_seconds=seconds_into_window,
-            cycle_budget=round(total_pair_notional, 6),
-            market_bias="Arbitraje doble pata 50 / 50",
-            timing_regime=timing_regime,
-            price_mode="underround",
-            primary_ratio=0.5,
-            primary_notional=primary_notional,
-            secondary_notional=secondary_notional,
-            replenishment_count=0,
-        )
+        return None
 
     def _select_arb_timing_regime(self, *, seconds_into_window: int) -> tuple[str | None, str]:
         if _ARB_MIN_SECONDS <= seconds_into_window <= _ARB_EARLY_MID_END:
@@ -1148,12 +1214,25 @@ class BTC5mStrategyService:
             max_shares_budget = remaining_budget / max(pair_sum, 1e-9)
             shares = _round_down(min(up_size, down_size, max_shares_budget), "0.0001")
             if shares <= 0:
-                break
+                if up_size <= down_size:
+                    up_idx += 1
+                else:
+                    down_idx += 1
+                continue
 
             up_notional = shares * up_price
             down_notional = shares * down_price
             if up_notional < self.settings.config.min_trade_amount or down_notional < self.settings.config.min_trade_amount:
-                break
+                if up_notional < self.settings.config.min_trade_amount and down_notional < self.settings.config.min_trade_amount:
+                    if up_size <= down_size:
+                        up_idx += 1
+                    else:
+                        down_idx += 1
+                elif up_notional < self.settings.config.min_trade_amount:
+                    up_idx += 1
+                else:
+                    down_idx += 1
+                continue
 
             total_notional = up_notional + down_notional
             pairs.append(
@@ -1174,6 +1253,62 @@ class BTC5mStrategyService:
             if down_levels[down_idx][1] <= 1e-9:
                 down_idx += 1
         return pairs
+
+    def _select_cheap_side_target(
+        self,
+        *,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        pair_sum: float,
+    ) -> tuple[MarketOutcome, float, float] | None:
+        if pair_sum > _ARB_CHEAP_SIDE_SUM_MAX:
+            return None
+
+        fair_up = max(1.0 - down_outcome.best_bid, 0.0)
+        fair_down = max(1.0 - up_outcome.best_bid, 0.0)
+        up_edge = fair_up - up_outcome.best_ask
+        down_edge = fair_down - down_outcome.best_ask
+
+        if up_edge >= down_edge and up_edge >= _ARB_FAIR_VALUE_EDGE_MIN:
+            return up_outcome, fair_up, up_edge
+        if down_edge > up_edge and down_edge >= _ARB_FAIR_VALUE_EDGE_MIN:
+            return down_outcome, fair_down, down_edge
+        return None
+
+    def _build_arb_single_side_levels(
+        self,
+        *,
+        target: MarketOutcome,
+        budget: float,
+        fair_value: float,
+    ) -> list[ArbSingleSideLevel]:
+        remaining_budget = budget
+        levels: list[ArbSingleSideLevel] = []
+        max_price = fair_value - max(_ARB_FAIR_VALUE_EDGE_MIN / 2, 0.005)
+
+        for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]:
+            if remaining_budget < self.settings.config.min_trade_amount:
+                break
+            price = float(level.price)
+            size = float(level.size)
+            if price > max_price:
+                break
+            if size <= 0:
+                continue
+
+            max_shares_budget = remaining_budget / max(price, 1e-9)
+            shares = _round_down(min(size, max_shares_budget), "0.0001")
+            if shares <= 0:
+                continue
+
+            notional = _round_down(shares * price, "0.01")
+            if notional < self.settings.config.min_trade_amount:
+                continue
+
+            levels.append(ArbSingleSideLevel(price=price, shares=shares, notional=notional))
+            remaining_budget -= notional
+
+        return levels
 
     def _build_arb_instruction(
         self,
@@ -1514,6 +1649,10 @@ class BTC5mStrategyService:
             primary_notional=primary_notional,
             secondary_notional=hedge_notional,
             replenishment_count=replenishment_count,
+            trigger_value=rich_side.best_ask,
+            pair_sum=primary_target.best_ask + (hedge_target.best_ask if hedge_notional > 0 else 0.0),
+            edge_pct=0.0,
+            fair_value=0.0,
         )
 
     def _vidarx_timing_label(self, timing_regime: str) -> str:
@@ -1999,6 +2138,9 @@ class BTC5mStrategyService:
             "strategy_target_price": "0.000000",
             "strategy_trigger_outcome": "pair_sum",
             "strategy_trigger_price_seen": "0.000000",
+            "strategy_pair_sum": "0.000000",
+            "strategy_edge_pct": "0.000000",
+            "strategy_fair_value": "0.000000",
         }
         state.update({key: value for key, value in overrides.items() if value is not None})
         return state

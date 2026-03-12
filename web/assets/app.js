@@ -151,15 +151,22 @@ function feedModeInfo(summary) {
 
 function currentEdgeInfo(summary) {
   if (String(summary?.strategy_entry_mode || "") !== "arb_micro") {
-    return { pairSum: null, edgePct: null };
+    return { pairSum: null, edgePct: null, fairValue: null, label: "sin edge" };
   }
-  const pairSum = Number(summary?.strategy_trigger_price_seen || 0);
-  if (!pairSum || Number.isNaN(pairSum)) {
-    return { pairSum: null, edgePct: null };
+  const storedPairSum = Number(summary?.strategy_pair_sum || 0);
+  const triggerValue = Number(summary?.strategy_trigger_price_seen || 0);
+  const pairSum = storedPairSum || triggerValue;
+  const fairValue = Number(summary?.strategy_fair_value || 0);
+  const storedEdge = Number(summary?.strategy_edge_pct || 0);
+  if ((!pairSum || Number.isNaN(pairSum)) && (!storedEdge || Number.isNaN(storedEdge))) {
+    return { pairSum: null, edgePct: null, fairValue: null, label: "sin edge" };
   }
+  const priceMode = String(summary?.strategy_price_mode || "");
   return {
-    pairSum,
-    edgePct: Math.max((1 - pairSum) * 100, 0),
+    pairSum: pairSum || null,
+    edgePct: storedEdge ? storedEdge * 100 : Math.max((1 - pairSum) * 100, 0),
+    fairValue: fairValue || null,
+    label: priceMode === "cheap-side" ? "lado barato" : "underround",
   };
 }
 
@@ -369,7 +376,7 @@ function paintSummary(summary) {
   heroFeedSource.className = feedInfo.className;
   document.getElementById("heroFeedMeta").textContent =
     edgeInfo.pairSum !== null
-      ? `pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}% | ${feedInfo.meta}`
+      ? `${edgeInfo.label} | pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""} | ${feedInfo.meta}`
       : `${feedInfo.meta} | ${strategyNoteText}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
@@ -411,11 +418,13 @@ function paintLabOverview(summary) {
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labFeedValue").textContent = feedInfo.label;
   document.getElementById("labEdgeValue").textContent =
-    edgeInfo.edgePct !== null ? `${fmt(edgeInfo.edgePct, 2)}%` : "-";
+    edgeInfo.edgePct !== null
+      ? `${edgeInfo.label} | ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}`
+      : "-";
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | edge ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | ${edgeInfo.label} ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
