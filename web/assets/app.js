@@ -11,6 +11,7 @@ let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
 let apiBase = "";
 let lastSummary = null;
+let lastPositions = [];
 
 const fmt = (value, digits = 4) => {
   const asNumber = Number(value);
@@ -194,6 +195,8 @@ function currentSpotInfo(summary) {
   const deltaUsd = current > 0 && anchor > 0 ? current - anchor : 0;
   return {
     available: current > 0 && anchor > 0,
+    hasCurrent: current > 0,
+    hasAnchor: anchor > 0,
     current,
     anchor,
     deltaBps,
@@ -265,6 +268,47 @@ function isBtc5mMarket(item) {
   return hasBtc && hasFiveMinuteWindow && hasDirection;
 }
 
+function summarizeBucket(bucketItems) {
+  const items = Array.isArray(bucketItems) ? bucketItems : [];
+  return {
+    count: items.length,
+    exposure: items.reduce((acc, item) => acc + Math.abs(Number(item.size || 0) * Number(item.avg_price || 0)), 0),
+    unrealized: items.reduce((acc, item) => acc + Number(item.unrealized_pnl || 0), 0),
+  };
+}
+
+function splitPositionBuckets(summary, items) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const totalSummary = summarizeBucket(safeItems);
+  if (!isVidarxLab(summary)) {
+    return {
+      currentItems: safeItems,
+      archivedItems: [],
+      currentSummary: totalSummary,
+      archivedSummary: summarizeBucket([]),
+      totalCount: safeItems.length,
+      totalExposure: totalSummary.exposure,
+    };
+  }
+
+  const activeVidarxSlug = String(summary?.strategy_market_slug || "");
+  const currentItems = safeItems.filter(
+    (item) => isBtc5mMarket(item) && (!activeVidarxSlug || String(item.slug || "") === activeVidarxSlug)
+  );
+  const archivedItems = safeItems.filter(
+    (item) => !isBtc5mMarket(item) || (activeVidarxSlug && String(item.slug || "") !== activeVidarxSlug)
+  );
+
+  return {
+    currentItems,
+    archivedItems,
+    currentSummary: summarizeBucket(currentItems),
+    archivedSummary: summarizeBucket(archivedItems),
+    totalCount: safeItems.length,
+    totalExposure: totalSummary.exposure,
+  };
+}
+
 async function getJson(url) {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -329,11 +373,29 @@ function saveApiBase(value) {
   }
 }
 
-function paintSummary(summary) {
+function paintSummary(summary, items = lastPositions) {
   lastSummary = summary;
-  document.getElementById("openPositions").textContent = String(summary.open_positions ?? 0);
-  document.getElementById("exposure").textContent = fmtUsdPlain(Number(summary.exposure ?? 0), 2);
-  document.getElementById("exposureMark").textContent = `valor ahora ${fmtUsdPlain(Number(summary.exposure_mark ?? summary.exposure ?? 0), 2)}`;
+  const buckets = splitPositionBuckets(summary, items);
+  const currentWindowExposure = Number(summary.strategy_current_market_total_exposure ?? buckets.currentSummary.exposure ?? 0);
+  const totalExposure = Number(summary.exposure ?? buckets.totalExposure ?? 0);
+  const totalExposureMark = Number(summary.exposure_mark ?? totalExposure);
+  document.getElementById("openPositionsLabel").textContent = isVidarxLab(summary)
+    ? "Patas abiertas en esta ventana"
+    : "Patas abiertas ahora";
+  document.getElementById("openPositions").textContent = String(buckets.currentSummary.count);
+  document.getElementById("openPositionsMeta").textContent = isVidarxLab(summary)
+    ? `totales simulador ${summary.open_positions ?? buckets.totalCount ?? 0}`
+    : "operaciones vivas ahora mismo";
+  document.getElementById("exposureLabel").textContent = isVidarxLab(summary)
+    ? "Dinero metido en esta ventana"
+    : "Dinero metido total";
+  document.getElementById("exposure").textContent = fmtUsdPlain(
+    isVidarxLab(summary) ? currentWindowExposure : totalExposure,
+    2
+  );
+  document.getElementById("exposureMark").textContent = isVidarxLab(summary)
+    ? `total simulador ${fmtUsdPlain(totalExposure, 2)} | valor vivo ${fmtUsdPlain(totalExposureMark, 2)}`
+    : `valor ahora ${fmtUsdPlain(totalExposureMark, 2)}`;
 
   const pnlTotal = Number(summary.pnl_total ?? summary.cumulative_pnl ?? 0);
   const realized = Number(summary.realized_pnl ?? summary.cumulative_pnl ?? 0);
@@ -386,8 +448,8 @@ function paintSummary(summary) {
   const edgeInfo = currentEdgeInfo(summary);
   const spotInfo = currentSpotInfo(summary);
   const strategySpeedLabel = feedInfo.summaryLabel;
-  const currentMarketLivePnl = Number(summary.strategy_current_market_live_pnl || 0);
-  const currentMarketExposure = Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0);
+  const currentMarketLivePnl = Number(summary.strategy_current_market_live_pnl || buckets.currentSummary.unrealized || 0);
+  const currentMarketExposure = Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || buckets.currentSummary.exposure || 0);
   const replenishmentCount = Number(summary.strategy_replenishment_count || 0);
   const timing = timingLabel(summary);
   const strategyNoteText = strategyNote || "sin trigger";
@@ -414,8 +476,8 @@ function paintSummary(summary) {
   heroFeedSource.className = feedInfo.className;
   document.getElementById("heroFeedMeta").textContent =
     edgeInfo.pairSum !== null
-      ? `${edgeInfo.label} | pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.available ? ` | BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ${feedInfo.meta}`
-      : `${spotInfo.available ? `BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps) | ` : ""}${feedInfo.meta} | ${strategyNoteText}`;
+      ? `${edgeInfo.label} | pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.hasCurrent ? ` | BTC ${fmtBtcPrice(spotInfo.current)}` : ""}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ${feedInfo.meta}`
+      : `${spotInfo.hasCurrent ? `BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ` : ""}${feedInfo.meta} | ${strategyNoteText}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
 
@@ -434,7 +496,7 @@ function paintSummary(summary) {
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
     ? currentMarketExposure > 0
       ? `Ventana actual en ${tradingModeLabel(summary)}. En esta ventana hay ${fmtUsdPlain(currentMarketExposure, 2)} metidos y va ${fmtUsd(currentMarketLivePnl, 2)}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}, datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}${spotInfo.available ? `. BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps), fair Up ${fmtPct(spotInfo.fairUp * 100, 1)} / Down ${fmtPct(spotInfo.fairDown * 100, 1)}` : ""}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
-      : `Ventana actual en ${tradingModeLabel(summary)} sin posicion abierta. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ultima lectura de ventana: ${strategyNoteText}. Datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}${spotInfo.available ? `. BTC ${fmtBtcPrice(spotInfo.current)} vs beat ${fmtBtcPrice(spotInfo.anchor)} (${fmt(spotInfo.deltaBps, 1)}bps)` : ""}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      : `Ventana actual en ${tradingModeLabel(summary)} sin posicion abierta. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ultima lectura de ventana: ${strategyNoteText}. Datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}${spotInfo.hasCurrent ? `. BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""}` : ""}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
   paintLabOverview(summary);
@@ -456,12 +518,12 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowValue").textContent =
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labFeedValue").textContent = feedInfo.label;
-  document.getElementById("labSpotCurrent").textContent = spotInfo.available ? fmtBtcPrice(spotInfo.current) : "-";
-  document.getElementById("labSpotAnchor").textContent = spotInfo.available ? fmtBtcPrice(spotInfo.anchor) : "-";
+  document.getElementById("labSpotCurrent").textContent = spotInfo.hasCurrent ? fmtBtcPrice(spotInfo.current) : "-";
+  document.getElementById("labSpotAnchor").textContent = spotInfo.hasAnchor ? fmtBtcPrice(spotInfo.anchor) : "-";
   document.getElementById("labSpotDelta").textContent =
-    spotInfo.available ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaBps, 1)}bps` : "-";
+    spotInfo.available ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaBps, 1)}bps` : spotInfo.hasCurrent ? "esperando ancla" : "-";
   document.getElementById("labSpotFair").textContent =
-    spotInfo.available ? `Up ${fmtPct(spotInfo.fairUp * 100, 1)} / Down ${fmtPct(spotInfo.fairDown * 100, 1)}` : "-";
+    spotInfo.available ? `Up ${fmtPct(spotInfo.fairUp * 100, 1)} / Down ${fmtPct(spotInfo.fairDown * 100, 1)}` : spotInfo.hasCurrent ? "esperando ancla" : "-";
   document.getElementById("labEdgeValue").textContent =
     edgeInfo.edgePct !== null
       ? `${edgeInfo.label} | ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}`
@@ -469,7 +531,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | ${edgeInfo.label} ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${spotInfo.available ? `${spotInfo.source} ${spotInfo.ageMs}ms | beat ${fmtBtcPrice(spotInfo.anchor)}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | ${edgeInfo.label} ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` | beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
@@ -709,15 +771,10 @@ function renderPositionRows(items, emptyLabel) {
 }
 
 function paintPositions(items) {
-  const activeVidarxSlug = isVidarxLab() ? String(lastSummary?.strategy_market_slug || "") : "";
-  const currentBtcItems = items.filter(
-    (item) => isBtc5mMarket(item) && (!activeVidarxSlug || String(item.slug || "") === activeVidarxSlug)
-  );
-  const archivedBtcItems = items.filter(
-    (item) => isBtc5mMarket(item) && activeVidarxSlug && String(item.slug || "") !== activeVidarxSlug
-  );
-  const btcItems = currentBtcItems;
-  const generalItems = items.filter((item) => !isBtc5mMarket(item)).concat(archivedBtcItems);
+  lastPositions = Array.isArray(items) ? items : [];
+  const buckets = splitPositionBuckets(lastSummary, lastPositions);
+  const btcItems = buckets.currentItems;
+  const generalItems = buckets.archivedItems;
 
   document.getElementById("positionsBtcCount").textContent = String(btcItems.length);
   document.getElementById("positionsGeneralCount").textContent = String(generalItems.length);
@@ -730,17 +787,8 @@ function paintPositions(items) {
     "No hay posiciones general abiertas."
   );
 
-  const summarizeBucket = (bucketItems) => {
-    const exposure = bucketItems.reduce(
-      (acc, item) => acc + Math.abs(Number(item.size || 0) * Number(item.avg_price || 0)),
-      0
-    );
-    const unrealized = bucketItems.reduce((acc, item) => acc + Number(item.unrealized_pnl || 0), 0);
-    return { exposure, unrealized };
-  };
-
-  const btcSummary = summarizeBucket(btcItems);
-  const generalSummary = summarizeBucket(generalItems);
+  const btcSummary = buckets.currentSummary;
+  const generalSummary = buckets.archivedSummary;
 
   const currentExposure = Number(lastSummary?.strategy_current_market_total_exposure || btcSummary.exposure || 0);
   const currentLivePnl = Number(lastSummary?.strategy_current_market_live_pnl || btcSummary.unrealized || 0);
@@ -825,7 +873,7 @@ async function refreshAll() {
         getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
       ]);
 
-      paintSummary(summary);
+      paintSummary(summary, positions.items || []);
       paintPositions(positions.items || []);
       paintExecutions(executions.items || []);
       paintSignals([]);
@@ -882,7 +930,7 @@ async function refreshAll() {
       pending_signals: "-",
     };
 
-    paintSummary(summary);
+    paintSummary(summary, positions);
     paintPositions(positions);
     paintExecutions(executions);
     paintSignals([]);

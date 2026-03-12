@@ -55,14 +55,16 @@ _VIDARX_ALLOWED_SETUPS = {
     ("tilted", "early-mid"),
     ("tilted", "mid-late"),
 }
-_ARB_PAIR_SUM_MAX = 0.995
+_ARB_PAIR_SUM_MAX = 0.985
 _ARB_CHEAP_SIDE_SUM_MAX = 1.020
 _ARB_FAIR_VALUE_EDGE_MIN = 0.006
 _ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.65
-_ARB_PAIR_OVERLAY_FRACTION = 0.40
+_ARB_PAIR_OVERLAY_FRACTION = 0.0
 _ARB_MAX_PAIR_LEVELS = 20
 _ARB_EARLY_MID_END = 150
 _ARB_MID_LATE_START = 151
+_ARB_ENABLE_CHEAP_SIDE = False
+_ARB_ENABLE_PAIR_OVERLAY = False
 _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 290
 _ARB_MIN_NOTIONAL = 1.00
@@ -454,6 +456,8 @@ class BTC5mStrategyService:
                 market=market,
                 note=note,
                 extra_state=self._arb_state_defaults(
+                    market=market,
+                    seconds_into_window=self._seconds_into_window(market),
                     strategy_current_market_exposure=f"{self._get_condition_exposure(current_condition_id):.6f}",
                     strategy_window_seconds=str(self._seconds_into_window(market)),
                 ),
@@ -1070,7 +1074,11 @@ class BTC5mStrategyService:
             self._record_strategy_snapshot(
                 market=market,
                 note=timing_note,
-                extra_state=self._arb_state_defaults(strategy_window_seconds=str(seconds_into_window)),
+                extra_state=self._arb_state_defaults(
+                    market=market,
+                    seconds_into_window=seconds_into_window,
+                    strategy_window_seconds=str(seconds_into_window),
+                ),
             )
             return None
 
@@ -1090,6 +1098,8 @@ class BTC5mStrategyService:
                     f"{market_cap:.2f}"
                 ),
                 extra_state=self._arb_state_defaults(
+                    market=market,
+                    seconds_into_window=seconds_into_window,
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_current_market_exposure=f"{existing_market_notional:.6f}",
                 ),
@@ -1104,6 +1114,8 @@ class BTC5mStrategyService:
                     f"{total_cap:.2f}"
                 ),
                 extra_state=self._arb_state_defaults(
+                    market=market,
+                    seconds_into_window=seconds_into_window,
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_current_market_exposure=f"{existing_market_notional:.6f}",
                 ),
@@ -1124,6 +1136,8 @@ class BTC5mStrategyService:
                             f"{_ARB_BURST_COOLDOWN_SECONDS:.1f}s"
                         ),
                         extra_state=self._arb_state_defaults(
+                            market=market,
+                            seconds_into_window=seconds_into_window,
                             strategy_window_seconds=str(seconds_into_window),
                             strategy_current_market_exposure=f"{existing_market_notional:.6f}",
                         ),
@@ -1133,14 +1147,16 @@ class BTC5mStrategyService:
             if filled_orders >= _ARB_MAX_FILLS_PER_WINDOW:
                 self._record_strategy_snapshot(
                     market=market,
-                    note=(
-                        f"arb_micro max fills window reached: {filled_orders} >= "
-                        f"{_ARB_MAX_FILLS_PER_WINDOW}"
-                    ),
-                    extra_state=self._arb_state_defaults(
-                        strategy_window_seconds=str(seconds_into_window),
-                        strategy_current_market_exposure=f"{existing_market_notional:.6f}",
-                    ),
+                        note=(
+                            f"arb_micro max fills window reached: {filled_orders} >= "
+                            f"{_ARB_MAX_FILLS_PER_WINDOW}"
+                        ),
+                        extra_state=self._arb_state_defaults(
+                            market=market,
+                            seconds_into_window=seconds_into_window,
+                            strategy_window_seconds=str(seconds_into_window),
+                            strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                        ),
                 )
                 return None
             remaining_instruction_capacity = max(_ARB_MAX_FILLS_PER_WINDOW - filled_orders, 0)
@@ -1170,6 +1186,8 @@ class BTC5mStrategyService:
                 market=market,
                 note="arb_micro budget below minimum after caps",
                 extra_state=self._arb_state_defaults(
+                    market=market,
+                    seconds_into_window=seconds_into_window,
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_timing_regime=timing_regime,
                     strategy_current_market_exposure=f"{existing_market_notional:.6f}",
@@ -1218,7 +1236,7 @@ class BTC5mStrategyService:
                     up_notional += up_instruction.notional
                     down_notional += down_instruction.notional
 
-                if instructions and overlay_target is not None:
+                if instructions and overlay_target is not None and _ARB_ENABLE_PAIR_OVERLAY:
                     remaining_plan_budget = max(cycle_budget - (up_notional + down_notional), 0.0)
                     overlay_budget = _round_down(
                         min(
@@ -1313,12 +1331,14 @@ class BTC5mStrategyService:
                         spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
                     )
 
-        cheap_side = self._select_cheap_side_target(
-            up_outcome=up_outcome,
-            down_outcome=down_outcome,
-            pair_sum=pair_sum,
-            spot_context=spot_context,
-        )
+        cheap_side = None
+        if _ARB_ENABLE_CHEAP_SIDE:
+            cheap_side = self._select_cheap_side_target(
+                up_outcome=up_outcome,
+                down_outcome=down_outcome,
+                pair_sum=pair_sum,
+                spot_context=spot_context,
+            )
         if cheap_side is not None:
             target, fair_value, relative_edge, edge_source = cheap_side
             single_budget = _round_down(cycle_budget * _ARB_SINGLE_SIDE_BUDGET_FRACTION, "0.01")
@@ -1393,10 +1413,12 @@ class BTC5mStrategyService:
         self._record_strategy_snapshot(
             market=market,
             note=(
-                f"arb_micro no edge: pair sum {pair_sum:.3f} | "
+                f"arb_micro no locked edge: pair sum {pair_sum:.3f} | "
                 f"Up edge {edge_up * 100:.2f}% | Down edge {edge_down * 100:.2f}%"
             ),
             extra_state=self._arb_state_defaults(
+                market=market,
+                seconds_into_window=seconds_into_window,
                 strategy_window_seconds=str(seconds_into_window),
                 strategy_timing_regime=timing_regime,
                 strategy_trigger_price_seen=f"{pair_sum:.6f}",
@@ -2578,7 +2600,77 @@ class BTC5mStrategyService:
         state.update({key: value for key, value in overrides.items() if value is not None})
         return state
 
-    def _arb_state_defaults(self, **overrides: str) -> dict[str, str]:
+    def _arb_live_spot_state(
+        self,
+        *,
+        market: dict | None = None,
+        seconds_into_window: int | None = None,
+    ) -> dict[str, str]:
+        state = {
+            "strategy_spot_price": "0.000000",
+            "strategy_spot_anchor": "0.000000",
+            "strategy_spot_delta_bps": "0.0000",
+            "strategy_spot_fair_up": "0.000000",
+            "strategy_spot_fair_down": "0.000000",
+            "strategy_spot_source": "",
+            "strategy_spot_age_ms": "0",
+            "strategy_spot_binance": "0.000000",
+            "strategy_spot_chainlink": "0.000000",
+        }
+        if self.spot_feed is None:
+            return state
+
+        try:
+            snapshot = self.spot_feed.get_snapshot()
+        except Exception:  # noqa: BLE001
+            return state
+
+        reference_price = float(snapshot.reference_price or 0.0)
+        if reference_price <= 0:
+            return state
+
+        state.update(
+            {
+                "strategy_spot_price": f"{reference_price:.6f}",
+                "strategy_spot_source": snapshot.source,
+                "strategy_spot_age_ms": str(int(snapshot.age_ms)),
+                "strategy_spot_binance": f"{float(snapshot.binance_price or 0.0):.6f}",
+                "strategy_spot_chainlink": f"{float(snapshot.chainlink_price or 0.0):.6f}",
+            }
+        )
+
+        now = time.time()
+        current_window_seconds = int(max(now % 300, 0))
+        market_slug = str(market.get("slug") or "") if market is not None else str(self.db.get_bot_state("strategy_market_slug") or "")
+        if not market_slug.startswith("btc-updown-5m-"):
+            base_start = int(now - current_window_seconds)
+            market_slug = f"btc-updown-5m-{base_start}"
+        anchor_key = f"arb_spot_anchor:{market_slug}"
+        anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
+        if anchor_price <= 0:
+            return state
+
+        seconds_value = seconds_into_window if seconds_into_window is not None else current_window_seconds
+        seconds_remaining = max(300 - int(seconds_value), 0)
+        fair_up = self._arb_spot_fair_up(
+            anchor_price=anchor_price,
+            current_price=reference_price,
+            seconds_remaining=seconds_remaining,
+        )
+        fair_down = max(1.0 - fair_up, 0.0)
+        delta_bps = ((reference_price / anchor_price) - 1.0) * 10000 if anchor_price > 0 else 0.0
+
+        state.update(
+            {
+                "strategy_spot_anchor": f"{anchor_price:.6f}",
+                "strategy_spot_delta_bps": f"{delta_bps:.4f}",
+                "strategy_spot_fair_up": f"{fair_up:.6f}",
+                "strategy_spot_fair_down": f"{fair_down:.6f}",
+            }
+        )
+        return state
+
+    def _arb_state_defaults(self, *, market: dict | None = None, seconds_into_window: int | None = None, **overrides: str) -> dict[str, str]:
         state = {
             "strategy_market_bias": "Arbitraje doble pata 50 / 50",
             "strategy_plan_legs": "0",
@@ -2601,16 +2693,8 @@ class BTC5mStrategyService:
             "strategy_pair_sum": "0.000000",
             "strategy_edge_pct": "0.000000",
             "strategy_fair_value": "0.000000",
-            "strategy_spot_price": "0.000000",
-            "strategy_spot_anchor": "0.000000",
-            "strategy_spot_delta_bps": "0.0000",
-            "strategy_spot_fair_up": "0.000000",
-            "strategy_spot_fair_down": "0.000000",
-            "strategy_spot_source": "",
-            "strategy_spot_age_ms": "0",
-            "strategy_spot_binance": "0.000000",
-            "strategy_spot_chainlink": "0.000000",
         }
+        state.update(self._arb_live_spot_state(market=market, seconds_into_window=seconds_into_window))
         state.update({key: value for key, value in overrides.items() if value is not None})
         return state
 

@@ -1390,7 +1390,7 @@ def test_arb_micro_does_not_buy_pair_above_one_without_edge(tmp_path: Path) -> N
 
     assert stats["filled"] == 0
     assert db.list_copy_positions() == []
-    assert "no edge" in str(db.get_bot_state("strategy_last_note") or "")
+    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -1417,7 +1417,7 @@ def test_arb_micro_refuses_live_mode(tmp_path: Path) -> None:
     db.close()
 
 
-def test_arb_micro_buys_single_cheap_side_from_bid_implied_fair_value(tmp_path: Path) -> None:
+def test_arb_micro_skips_single_cheap_side_without_locked_pair_edge(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
@@ -1459,12 +1459,10 @@ def test_arb_micro_buys_single_cheap_side_from_bid_implied_fair_value(tmp_path: 
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] >= 4
-    positions = db.list_copy_positions()
-    assert len(positions) == 1
-    assert str(positions[0]["outcome"]) == "Up"
-    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
-    assert "cheap Up" in str(db.get_bot_state("strategy_last_note") or "")
+    assert stats["filled"] == 0
+    assert db.list_copy_positions() == []
+    assert db.get_bot_state("strategy_price_mode") == "underround"
+    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -1649,7 +1647,7 @@ def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Pat
     db.close()
 
 
-def test_arb_micro_uses_spot_context_for_cheap_side(tmp_path: Path) -> None:
+def test_arb_micro_uses_spot_context_without_opening_single_side_trade(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     slug = "btc-updown-5m-spot-cheap"
@@ -1707,14 +1705,13 @@ def test_arb_micro_uses_spot_context_for_cheap_side(tmp_path: Path) -> None:
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] >= 4
-    positions = db.list_copy_positions()
-    assert len(positions) == 1
-    assert str(positions[0]["outcome"]) == "Up"
-    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
+    assert stats["filled"] == 0
+    assert db.list_copy_positions() == []
+    assert db.get_bot_state("strategy_price_mode") == "underround"
     assert db.get_bot_state("strategy_spot_source") == "binance-direct"
     assert float(db.get_bot_state("strategy_spot_anchor") or 0.0) == 70000.0
     assert float(db.get_bot_state("strategy_spot_fair_up") or 0.0) > 0.45
+    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
