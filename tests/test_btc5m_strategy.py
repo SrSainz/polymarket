@@ -1525,6 +1525,76 @@ def test_arb_micro_caps_market_exposure_and_cools_down_same_window(tmp_path: Pat
     db.close()
 
 
+def test_arb_micro_respects_remaining_fill_capacity_in_same_window(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=50)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Fill Capacity",
+        "slug": "btc-updown-5m-fill-cap",
+        "conditionId": "cond-arb-fill-cap",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    db.upsert_strategy_window(
+        slug=market["slug"],
+        condition_id=market["conditionId"],
+        title=market["question"],
+        price_mode="underround",
+        timing_regime="early-mid",
+        primary_outcome="Up",
+        hedge_outcome="Down",
+        primary_ratio=0.5,
+        planned_budget=20.0,
+        current_exposure=0.0,
+        notes="seed",
+    )
+    db.record_strategy_window_fills(
+        slug=market["slug"],
+        fill_count=10,
+        added_notional=0.0,
+        replenishment_count=0,
+        notes="seed fills",
+    )
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "300"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.55", "size": "300"}],
+            },
+        },
+        balance=1000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.10),
+        logger=logging.getLogger("test-btc5m-arb-fill-cap"),
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] <= 2
+    row = db.get_strategy_window(market["slug"])
+    assert row is not None
+    assert int(row["filled_orders"] or 0) <= 12
+    db.close()
+
+
 def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

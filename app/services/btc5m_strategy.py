@@ -1110,6 +1110,8 @@ class BTC5mStrategyService:
             )
             return None
 
+        filled_orders = 0
+        remaining_instruction_capacity = _ARB_MAX_FILLS_PER_WINDOW
         if window_state is not None:
             last_trade_at = int(window_state["last_trade_at"] or 0)
             if last_trade_at > 0:
@@ -1141,6 +1143,7 @@ class BTC5mStrategyService:
                     ),
                 )
                 return None
+            remaining_instruction_capacity = max(_ARB_MAX_FILLS_PER_WINDOW - filled_orders, 0)
 
         up_outcome, down_outcome = priced_outcomes[0], priced_outcomes[1]
         if up_outcome.best_ask > down_outcome.best_ask:
@@ -1191,6 +1194,8 @@ class BTC5mStrategyService:
                     spot_context=spot_context,
                 )
                 for idx, level in enumerate(pair_levels, start=1):
+                    if len(instructions) + 2 > remaining_instruction_capacity:
+                        break
                     up_instruction = self._build_arb_instruction(
                         market=market,
                         target=up_outcome,
@@ -1214,8 +1219,13 @@ class BTC5mStrategyService:
                     down_notional += down_instruction.notional
 
                 if instructions and overlay_target is not None:
+                    remaining_plan_budget = max(cycle_budget - (up_notional + down_notional), 0.0)
                     overlay_budget = _round_down(
-                        min(cycle_budget * _ARB_PAIR_OVERLAY_FRACTION, cash_balance - (up_notional + down_notional)),
+                        min(
+                            cycle_budget * _ARB_PAIR_OVERLAY_FRACTION,
+                            remaining_plan_budget,
+                            cash_balance - (up_notional + down_notional),
+                        ),
                         "0.01",
                     )
                     if overlay_budget >= self._arb_min_notional():
@@ -1230,6 +1240,8 @@ class BTC5mStrategyService:
                         )
                         base_index = len(instructions) + 1
                         for offset, level in enumerate(overlay_levels, start=0):
+                            if len(instructions) + 1 > remaining_instruction_capacity:
+                                break
                             instruction = self._build_arb_instruction(
                                 market=market,
                                 target=overlay_target,
@@ -1321,7 +1333,7 @@ class BTC5mStrategyService:
             if single_levels:
                 instructions = [
                     instruction
-                    for idx, level in enumerate(single_levels, start=1)
+                    for idx, level in enumerate(single_levels[:remaining_instruction_capacity], start=1)
                     if (
                         instruction := self._build_arb_instruction(
                             market=market,
