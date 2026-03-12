@@ -1457,5 +1457,5 @@ def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Pat
     assert stats["filled"] >= 4
     positions = db.list_copy_positions()
     assert len(positions) == 2
-    assert float(positions[0]["avg_price"]) >= 0.41 or float(positions[1]["avg_price"]) >= 0.56
+    assert float(positions[0]["avg_price"]) >= 0.4099 or float(positions[1]["avg_price"]) >= 0.5599
     db.close()

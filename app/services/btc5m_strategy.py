@@ -53,20 +53,20 @@ _VIDARX_ALLOWED_SETUPS = {
     ("tilted", "early-mid"),
     ("tilted", "mid-late"),
 }
-_ARB_PAIR_SUM_MAX = 0.995
-_ARB_CHEAP_SIDE_SUM_MAX = 1.030
-_ARB_FAIR_VALUE_EDGE_MIN = 0.012
+_ARB_PAIR_SUM_MAX = 1.005
+_ARB_CHEAP_SIDE_SUM_MAX = 1.060
+_ARB_FAIR_VALUE_EDGE_MIN = 0.006
 _ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.65
-_ARB_MAX_PAIR_LEVELS = 10
+_ARB_MAX_PAIR_LEVELS = 20
 _ARB_EARLY_MID_END = 150
 _ARB_MID_LATE_START = 151
 _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 290
 _ARB_MIN_NOTIONAL = 1.00
-_ARB_PAIR_BURST_BASE = (2.0, 3.0, 5.0, 8.0, 13.0)
-_ARB_PAIR_BURST_MID_LATE = (2.0, 3.0, 5.0, 8.0, 13.0, 21.0, 34.0)
-_ARB_SINGLE_BURST_BASE = (1.0, 1.5, 2.5, 4.0, 6.0)
-_ARB_SINGLE_BURST_MID_LATE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 13.0)
+_ARB_PAIR_BURST_BASE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0)
+_ARB_PAIR_BURST_MID_LATE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0, 27.0, 40.0)
+_ARB_SINGLE_BURST_BASE = (0.7, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0)
+_ARB_SINGLE_BURST_MID_LATE = (0.7, 1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0, 27.0)
 _MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
@@ -1186,7 +1186,7 @@ class BTC5mStrategyService:
             desired *= 1.0
 
         if current_total_exposure > 0:
-            desired *= 0.75
+            desired *= 0.95
 
         min_pair_budget = self._arb_min_notional() * 2
         desired = max(desired, min_pair_budget)
