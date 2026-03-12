@@ -89,23 +89,6 @@ def _build_handler(
                 limit = _safe_int(query.get("limit", ["50"])[0], default=50, minimum=1, maximum=500)
                 self._json(_executions_payload(db_path, limit=limit))
                 return
-            if path == "/api/signals":
-                query = parse_qs(parsed.query)
-                limit = _safe_int(query.get("limit", ["100"])[0], default=100, minimum=1, maximum=500)
-                self._json(_signals_payload(db_path, limit=limit))
-                return
-            if path == "/api/selected-wallets":
-                query = parse_qs(parsed.query)
-                limit = _safe_int(query.get("limit", ["5"])[0], default=5, minimum=1, maximum=20)
-                self._json(_selected_wallets_payload(db_path, limit=limit))
-                return
-            if path == "/api/risk-blocks":
-                query = parse_qs(parsed.query)
-                limit = _safe_int(query.get("limit", ["5"])[0], default=5, minimum=1, maximum=20)
-                hours = _safe_int(query.get("hours", ["24"])[0], default=24, minimum=1, maximum=24 * 30)
-                self._json(_risk_blocks_payload(db_path, limit=limit, hours=hours))
-                return
-
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
         def do_POST(self) -> None:  # noqa: N802
@@ -268,13 +251,17 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_primary_exposure = _bot_state_float(conn, "strategy_primary_exposure")
         strategy_hedge_exposure = _bot_state_float(conn, "strategy_hedge_exposure")
         strategy_replenishment_count = _bot_state_int(conn, "strategy_replenishment_count")
+        strategy_data_source = _bot_state_text(conn, "strategy_data_source")
+        strategy_feed_connected = _bot_state_int(conn, "strategy_feed_connected")
+        strategy_feed_age_ms = _bot_state_int(conn, "strategy_feed_age_ms")
+        strategy_feed_tracked_assets = _bot_state_int(conn, "strategy_feed_tracked_assets")
         strategy_resolution_count_today = _single_float(
             conn,
             """
             SELECT COUNT(*) AS value
             FROM executions
             WHERE mode = 'paper'
-              AND notes LIKE 'vidarx_resolution:%'
+              AND (notes LIKE 'strategy_resolution:%' OR notes LIKE 'vidarx_resolution:%')
               AND strftime('%Y-%m-%d', ts, 'unixepoch') = ?
             """,
             (today_utc,),
@@ -285,7 +272,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             SELECT COALESCE(SUM(pnl_delta), 0) AS value
             FROM executions
             WHERE mode = 'paper'
-              AND notes LIKE 'vidarx_resolution:%'
+              AND (notes LIKE 'strategy_resolution:%' OR notes LIKE 'vidarx_resolution:%')
               AND strftime('%Y-%m-%d', ts, 'unixepoch') = ?
             """,
             (today_utc,),
@@ -428,6 +415,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_primary_exposure": round(strategy_primary_exposure, 4),
         "strategy_hedge_exposure": round(strategy_hedge_exposure, 4),
         "strategy_replenishment_count": int(strategy_replenishment_count),
+        "strategy_data_source": strategy_data_source,
+        "strategy_feed_connected": bool(strategy_feed_connected),
+        "strategy_feed_age_ms": int(strategy_feed_age_ms),
+        "strategy_feed_tracked_assets": int(strategy_feed_tracked_assets),
         "strategy_current_market_live_pnl": round(current_market_live_pnl, 4),
         "strategy_current_market_total_exposure": round(current_market_total_exposure, 4),
         "strategy_current_market_primary_exposure": round(primary_exposure_actual, 4),
@@ -437,7 +428,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_setup_performance": setup_performance,
         "strategy_resolution_count_today": int(strategy_resolution_count_today),
         "strategy_resolution_pnl_today": round(strategy_resolution_pnl_today, 4),
-        "strategy_is_lab": strategy_entry_mode == "vidarx_micro",
+        "strategy_is_lab": strategy_entry_mode in {"vidarx_micro", "arb_micro"},
         "daily_realized_pnl": round(daily_realized_pnl, 4),
         "daily_profit_gross": round(daily_profit_gross, 4),
         "daily_loss_gross": round(daily_loss_gross, 4),

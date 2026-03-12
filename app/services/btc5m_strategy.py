@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
@@ -52,6 +53,13 @@ _VIDARX_ALLOWED_SETUPS = {
     ("tilted", "early-mid"),
     ("tilted", "mid-late"),
 }
+_ARB_PAIR_SUM_MAX = 0.985
+_ARB_MAX_PAIR_LEVELS = 6
+_ARB_EARLY_MID_END = 125
+_ARB_MID_LATE_START = 140
+_ARB_MIN_SECONDS = 20
+_ARB_MAX_SECONDS = 260
+_MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -108,6 +116,15 @@ class VidarxEntryLevel:
     is_replenishment: bool
 
 
+@dataclass(frozen=True)
+class ArbPairLevel:
+    up_price: float
+    down_price: float
+    shares: float
+    pair_sum: float
+    total_notional: float
+
+
 class BTC5mStrategyService:
     def __init__(
         self,
@@ -133,8 +150,12 @@ class BTC5mStrategyService:
         self.settings = settings
         self.logger = logger
         self.risk = RiskManager(settings.config)
+        self._cached_market: dict | None = None
+        self._cached_market_expires_at = 0.0
 
     def run(self, mode: str = "paper") -> dict[str, int]:
+        if self.settings.config.strategy_entry_mode == "arb_micro":
+            return self._run_arb_micro(mode=mode)
         if self.settings.config.strategy_entry_mode == "vidarx_micro":
             return self._run_vidarx_micro(mode=mode)
 
@@ -272,6 +293,228 @@ class BTC5mStrategyService:
             self._record_strategy_snapshot(market=market, opportunity=opportunity, note=note)
         return self._complete_cycle(
             mode=mode,
+            stats=stats,
+            note=note,
+            cash_balance=cash_balance,
+            allowance=allowance,
+            total_exposure=total_exposure,
+            live_total_capital=live_total_capital,
+        )
+
+    def _run_arb_micro(self, *, mode: str) -> dict[str, int]:
+        stats = {
+            "pending": 0,
+            "filled": 0,
+            "blocked": 0,
+            "failed": 0,
+            "skipped": 0,
+            "opportunities": 0,
+        }
+        if mode == "live":
+            total_exposure = self.db.get_total_exposure()
+            cash_balance, allowance = self._live_cash_snapshot(mode="paper")
+            live_total_capital = cash_balance + total_exposure
+            note = "arb_micro is paper-only; use `python run.py paper` or `python run.py once`"
+            stats["blocked"] += 1
+            self._record_balance_snapshot(
+                mode="paper",
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+            self._record_strategy_snapshot(
+                note=note,
+                extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        self._settle_resolved_paper_positions(stats)
+        total_exposure = self.db.get_total_exposure()
+        cash_balance, allowance = self._live_cash_snapshot(mode="paper")
+        marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
+        live_total_capital = cash_balance + marked_exposure
+        self._record_balance_snapshot(
+            mode="paper",
+            cash_balance=cash_balance,
+            allowance=allowance,
+            total_exposure=total_exposure,
+            live_total_capital=live_total_capital,
+            marked_exposure=marked_exposure,
+            unrealized_pnl=unrealized_pnl,
+        )
+
+        drawdown_floor = self.settings.config.bankroll * (1.0 - _VIDARX_MAX_DRAWDOWN_PCT)
+        if live_total_capital <= drawdown_floor:
+            note = (
+                f"arb_micro drawdown stop: capital {live_total_capital:.2f} <= "
+                f"{drawdown_floor:.2f} ({_VIDARX_MAX_DRAWDOWN_PCT:.0%} loss)"
+            )
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                note=note,
+                extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        market = self._discover_market()
+        if market is None:
+            stats["skipped"] += 1
+            note = "no active btc5m market"
+            self._record_strategy_snapshot(
+                note=note,
+                extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        plan = self._build_arb_micro_plan(
+            market=market,
+            cash_balance=cash_balance,
+            effective_bankroll=live_total_capital,
+            current_total_exposure=total_exposure,
+        )
+        if plan is None:
+            stats["skipped"] += 1
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=self.db.get_bot_state("strategy_last_note") or "no arb plan",
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        stats["pending"] = len(plan.instructions)
+        stats["opportunities"] = len(plan.instructions)
+        self._record_strategy_snapshot(
+            market=market,
+            note=plan.note,
+            extra_state={
+                "strategy_target_outcome": plan.primary_target.label,
+                "strategy_target_price": f"{plan.primary_target.best_ask:.6f}",
+                "strategy_trigger_outcome": "pair_sum",
+                "strategy_trigger_price_seen": f"{plan.trigger.best_ask + (plan.secondary_target.best_ask if plan.secondary_target else 0.0):.6f}",
+                "strategy_market_bias": plan.market_bias,
+                "strategy_plan_legs": str(len(plan.instructions)),
+                "strategy_window_seconds": str(plan.window_seconds),
+                "strategy_cycle_budget": f"{plan.cycle_budget:.6f}",
+                "strategy_current_market_exposure": f"{self._get_condition_exposure(str(market.get('conditionId') or '')):.6f}",
+                "strategy_resolution_mode": "paper-settle-at-close",
+                "strategy_timing_regime": plan.timing_regime,
+                "strategy_price_mode": plan.price_mode,
+                "strategy_primary_ratio": f"{plan.primary_ratio:.6f}",
+                "strategy_primary_outcome": plan.primary_target.label,
+                "strategy_hedge_outcome": plan.secondary_target.label if plan.secondary_target else "",
+                "strategy_primary_exposure": f"{plan.primary_notional:.6f}",
+                "strategy_hedge_exposure": f"{plan.secondary_notional:.6f}",
+                "strategy_replenishment_count": str(plan.replenishment_count),
+            },
+        )
+        self.db.upsert_strategy_window(
+            slug=str(market.get("slug") or ""),
+            condition_id=str(market.get("conditionId") or ""),
+            title=str(market.get("question") or market.get("slug") or ""),
+            price_mode=plan.price_mode,
+            timing_regime=plan.timing_regime,
+            primary_outcome=plan.primary_target.label,
+            hedge_outcome=plan.secondary_target.label if plan.secondary_target else "",
+            primary_ratio=plan.primary_ratio,
+            planned_budget=plan.cycle_budget,
+            current_exposure=self._get_condition_exposure(str(market.get("conditionId") or "")),
+            notes=plan.note,
+        )
+
+        note = plan.note
+        filled_notional = 0.0
+        for instruction in plan.instructions:
+            try:
+                result = self.paper_broker.execute(instruction)
+            except Exception as error:  # noqa: BLE001
+                stats["failed"] += 1
+                note = f"arb_micro execution failed: {error}"
+                self.logger.exception("arb_micro paper execution failed: %s", error)
+                continue
+
+            if result.status == "filled":
+                stats["filled"] += 1
+                filled_notional += result.notional
+            elif result.status == "skipped":
+                stats["skipped"] += 1
+                note = result.message or note
+
+        if stats["filled"] > 0:
+            self.db.record_strategy_window_fills(
+                slug=str(market.get("slug") or ""),
+                fill_count=stats["filled"],
+                added_notional=filled_notional,
+                replenishment_count=0,
+                notes=note,
+            )
+
+        total_exposure = self.db.get_total_exposure()
+        cash_balance, allowance = self._live_cash_snapshot(mode="paper")
+        marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
+        live_total_capital = cash_balance + marked_exposure
+        self._record_balance_snapshot(
+            mode="paper",
+            cash_balance=cash_balance,
+            allowance=allowance,
+            total_exposure=total_exposure,
+            live_total_capital=live_total_capital,
+            marked_exposure=marked_exposure,
+            unrealized_pnl=unrealized_pnl,
+        )
+        self._record_strategy_snapshot(
+            market=market,
+            note=note,
+            extra_state={
+                "strategy_target_outcome": plan.primary_target.label,
+                "strategy_target_price": f"{plan.primary_target.best_ask:.6f}",
+                "strategy_trigger_outcome": "pair_sum",
+                "strategy_trigger_price_seen": f"{plan.trigger.best_ask + (plan.secondary_target.best_ask if plan.secondary_target else 0.0):.6f}",
+                "strategy_market_bias": plan.market_bias,
+                "strategy_plan_legs": str(len(plan.instructions)),
+                "strategy_window_seconds": str(plan.window_seconds),
+                "strategy_cycle_budget": f"{plan.cycle_budget:.6f}",
+                "strategy_current_market_exposure": f"{self._get_condition_exposure(str(market.get('conditionId') or '')):.6f}",
+                "strategy_resolution_mode": "paper-settle-at-close",
+                "strategy_timing_regime": plan.timing_regime,
+                "strategy_price_mode": plan.price_mode,
+                "strategy_primary_ratio": f"{plan.primary_ratio:.6f}",
+                "strategy_primary_outcome": plan.primary_target.label,
+                "strategy_hedge_outcome": plan.secondary_target.label if plan.secondary_target else "",
+                "strategy_primary_exposure": f"{plan.primary_notional:.6f}",
+                "strategy_hedge_exposure": f"{plan.secondary_notional:.6f}",
+                "strategy_replenishment_count": "0",
+            },
+        )
+        return self._complete_cycle(
+            mode="paper",
             stats=stats,
             note=note,
             cash_balance=cash_balance,
@@ -525,8 +768,20 @@ class BTC5mStrategyService:
     def _discover_market(self) -> dict | None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
         base_start = now_ts - (now_ts % 300)
-        for candidate_ts in (base_start, base_start + 300, base_start - 300):
-            slug = f"btc-updown-5m-{candidate_ts}"
+        candidate_slugs = tuple(f"btc-updown-5m-{candidate_ts}" for candidate_ts in (base_start, base_start + 300, base_start - 300))
+
+        cached_market = self._cached_market
+        if (
+            cached_market is not None
+            and time.monotonic() < self._cached_market_expires_at
+            and str(cached_market.get("slug") or "") in candidate_slugs
+            and not bool(cached_market.get("closed"))
+            and bool(cached_market.get("acceptingOrders", False))
+        ):
+            self._prime_market_feed(cached_market)
+            return dict(cached_market)
+
+        for slug in candidate_slugs:
             market = self.gamma_client.get_market_by_slug(slug)
             if not market:
                 continue
@@ -534,8 +789,24 @@ class BTC5mStrategyService:
                 continue
             if not bool(market.get("acceptingOrders", False)):
                 continue
+            self._cached_market = dict(market)
+            self._cached_market_expires_at = time.monotonic() + _MARKET_METADATA_CACHE_SECONDS
+            self._prime_market_feed(market)
             return market
+        self._cached_market = None
+        self._cached_market_expires_at = 0.0
         return None
+
+    def _prime_market_feed(self, market: dict) -> None:
+        token_ids = _parse_json_list(market.get("clobTokenIds"))
+        if not token_ids:
+            return
+        track_assets = getattr(self.clob_client, "track_assets", None)
+        if callable(track_assets):
+            try:
+                track_assets(token_ids)
+            except Exception as error:  # noqa: BLE001
+                self.logger.debug("market feed prime skipped: %s", error)
 
     def _build_opportunity(self, market: dict) -> StrategyOpportunity | None:
         outcomes = _parse_json_list(market.get("outcomes"))
@@ -643,6 +914,298 @@ class BTC5mStrategyService:
             trigger=rich_side,
             rationale=rationale,
             event_start_ts=event_start_ts,
+        )
+
+    def _build_arb_micro_plan(
+        self,
+        *,
+        market: dict,
+        cash_balance: float,
+        effective_bankroll: float,
+        current_total_exposure: float,
+    ) -> StrategyPlan | None:
+        outcomes = _parse_json_list(market.get("outcomes"))
+        token_ids = _parse_json_list(market.get("clobTokenIds"))
+        if len(outcomes) != 2 or len(token_ids) != 2:
+            self._record_strategy_snapshot(market=market, note="arb_micro: market outcomes unavailable")
+            return None
+
+        priced_outcomes: list[MarketOutcome] = []
+        for label, token_id in zip(outcomes, token_ids):
+            book = self._safe_book(token_id)
+            if not book:
+                self._record_strategy_snapshot(market=market, note=f"arb_micro: no orderbook for {label}")
+                return None
+            best_ask = _best_ask(book)
+            best_bid = _best_bid(book)
+            best_ask_size = _best_ask_size(book)
+            ask_levels = _ask_levels(book)
+            if best_ask is None or best_bid is None or best_ask_size is None or not ask_levels:
+                self._record_strategy_snapshot(market=market, note=f"incomplete book for {label}")
+                return None
+            priced_outcomes.append(
+                MarketOutcome(
+                    label=str(label),
+                    asset_id=str(token_id),
+                    best_ask=best_ask,
+                    best_bid=best_bid,
+                    best_ask_size=best_ask_size,
+                    ask_levels=ask_levels,
+                )
+            )
+
+        seconds_into_window = self._seconds_into_window(market)
+        timing_regime, timing_note = self._select_arb_timing_regime(seconds_into_window=seconds_into_window)
+        if timing_regime is None:
+            self._record_strategy_snapshot(
+                market=market,
+                note=timing_note,
+                extra_state=self._arb_state_defaults(strategy_window_seconds=str(seconds_into_window)),
+            )
+            return None
+
+        up_outcome, down_outcome = priced_outcomes[0], priced_outcomes[1]
+        if up_outcome.best_ask > down_outcome.best_ask:
+            primary_target, secondary_target = down_outcome, up_outcome
+        else:
+            primary_target, secondary_target = up_outcome, down_outcome
+
+        pair_sum = up_outcome.best_ask + down_outcome.best_ask
+        if pair_sum >= _ARB_PAIR_SUM_MAX:
+            self._record_strategy_snapshot(
+                market=market,
+                note=f"arb_micro no underround: pair ask sum {pair_sum:.3f} >= {_ARB_PAIR_SUM_MAX:.3f}",
+                extra_state=self._arb_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_timing_regime=timing_regime,
+                    strategy_trigger_price_seen=f"{pair_sum:.6f}",
+                ),
+            )
+            return None
+
+        cycle_budget = self._target_arb_cycle_budget(
+            cash_balance=cash_balance,
+            effective_bankroll=effective_bankroll,
+            current_total_exposure=current_total_exposure,
+            timing_regime=timing_regime,
+        )
+        if cycle_budget < self.settings.config.min_trade_amount * 2:
+            self._record_strategy_snapshot(
+                market=market,
+                note="arb_micro bankroll below dual-leg minimum",
+                extra_state=self._arb_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_timing_regime=timing_regime,
+                ),
+            )
+            return None
+
+        pair_levels = self._build_arb_pair_levels(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            budget=cycle_budget,
+        )
+        if not pair_levels:
+            self._record_strategy_snapshot(
+                market=market,
+                note="arb_micro no sweepable underround levels",
+                extra_state=self._arb_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_timing_regime=timing_regime,
+                ),
+            )
+            return None
+
+        instructions: list[CopyInstruction] = []
+        primary_notional = 0.0
+        secondary_notional = 0.0
+        for idx, level in enumerate(pair_levels, start=1):
+            up_instruction = self._build_arb_instruction(
+                market=market,
+                target=up_outcome,
+                shares=level.shares,
+                price=level.up_price,
+                pair_sum=level.pair_sum,
+                tranche_index=idx,
+            )
+            down_instruction = self._build_arb_instruction(
+                market=market,
+                target=down_outcome,
+                shares=level.shares,
+                price=level.down_price,
+                pair_sum=level.pair_sum,
+                tranche_index=idx,
+            )
+            if up_instruction is None or down_instruction is None:
+                continue
+            instructions.extend([up_instruction, down_instruction])
+            if primary_target.asset_id == up_outcome.asset_id:
+                primary_notional += up_instruction.notional
+                secondary_notional += down_instruction.notional
+            else:
+                primary_notional += down_instruction.notional
+                secondary_notional += up_instruction.notional
+
+        if not instructions:
+            self._record_strategy_snapshot(
+                market=market,
+                note="arb_micro no viable paired instructions",
+                extra_state=self._arb_state_defaults(
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_timing_regime=timing_regime,
+                ),
+            )
+            return None
+
+        total_pair_notional = primary_notional + secondary_notional
+        captured_edge_pct = max(1.0 - (pair_levels[0].pair_sum), 0.0)
+        note = (
+            f"underround {pair_levels[0].pair_sum:.3f} | edge {captured_edge_pct * 100:.2f}% | "
+            f"{timing_regime} | niveles {len(pair_levels)} | patas {len(instructions)}"
+        )
+        return StrategyPlan(
+            instructions=tuple(instructions),
+            note=note,
+            primary_target=primary_target,
+            secondary_target=secondary_target,
+            trigger=primary_target,
+            window_seconds=seconds_into_window,
+            cycle_budget=round(total_pair_notional, 6),
+            market_bias="Arbitraje doble pata 50 / 50",
+            timing_regime=timing_regime,
+            price_mode="underround",
+            primary_ratio=0.5,
+            primary_notional=primary_notional,
+            secondary_notional=secondary_notional,
+            replenishment_count=0,
+        )
+
+    def _select_arb_timing_regime(self, *, seconds_into_window: int) -> tuple[str | None, str]:
+        if _ARB_MIN_SECONDS <= seconds_into_window <= _ARB_EARLY_MID_END:
+            return "early-mid", ""
+        if _ARB_MID_LATE_START <= seconds_into_window <= _ARB_MAX_SECONDS:
+            return "mid-late", ""
+        if seconds_into_window < _ARB_MIN_SECONDS:
+            return None, f"arb_micro demasiado pronto: {seconds_into_window}s < {_ARB_MIN_SECONDS}s"
+        if seconds_into_window < _ARB_MID_LATE_START:
+            return None, (
+                f"arb_micro fuera de banda temporal: {seconds_into_window}s fuera de "
+                f"{_ARB_MIN_SECONDS}-{_ARB_EARLY_MID_END}s y {_ARB_MID_LATE_START}-{_ARB_MAX_SECONDS}s"
+            )
+        return None, f"arb_micro tarde: {seconds_into_window}s > {_ARB_MAX_SECONDS}s"
+
+    def _target_arb_cycle_budget(
+        self,
+        *,
+        cash_balance: float,
+        effective_bankroll: float,
+        current_total_exposure: float,
+        timing_regime: str,
+    ) -> float:
+        if self.settings.config.strategy_fixed_trade_amount > 0:
+            desired = self.settings.config.strategy_fixed_trade_amount
+        else:
+            desired = effective_bankroll * self.settings.config.strategy_trade_allocation_pct
+        if timing_regime == "early-mid":
+            desired *= 0.8
+        else:
+            desired *= 1.0
+
+        if current_total_exposure > 0:
+            desired *= 0.75
+
+        min_pair_budget = self.settings.config.min_trade_amount * 2
+        desired = max(desired, min_pair_budget)
+        desired = min(desired, cash_balance)
+        return _round_down(desired, "0.01")
+
+    def _build_arb_pair_levels(
+        self,
+        *,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        budget: float,
+    ) -> list[ArbPairLevel]:
+        up_levels = [[level.price, level.size] for level in up_outcome.ask_levels[:_ARB_MAX_PAIR_LEVELS]]
+        down_levels = [[level.price, level.size] for level in down_outcome.ask_levels[:_ARB_MAX_PAIR_LEVELS]]
+        pairs: list[ArbPairLevel] = []
+        up_idx = 0
+        down_idx = 0
+        remaining_budget = budget
+
+        while (
+            up_idx < len(up_levels)
+            and down_idx < len(down_levels)
+            and remaining_budget >= self.settings.config.min_trade_amount * 2
+            and len(pairs) < _ARB_MAX_PAIR_LEVELS
+        ):
+            up_price, up_size = float(up_levels[up_idx][0]), float(up_levels[up_idx][1])
+            down_price, down_size = float(down_levels[down_idx][0]), float(down_levels[down_idx][1])
+            pair_sum = up_price + down_price
+            if pair_sum >= _ARB_PAIR_SUM_MAX:
+                break
+
+            max_shares_budget = remaining_budget / max(pair_sum, 1e-9)
+            shares = _round_down(min(up_size, down_size, max_shares_budget), "0.0001")
+            if shares <= 0:
+                break
+
+            up_notional = shares * up_price
+            down_notional = shares * down_price
+            if up_notional < self.settings.config.min_trade_amount or down_notional < self.settings.config.min_trade_amount:
+                break
+
+            total_notional = up_notional + down_notional
+            pairs.append(
+                ArbPairLevel(
+                    up_price=up_price,
+                    down_price=down_price,
+                    shares=shares,
+                    pair_sum=pair_sum,
+                    total_notional=total_notional,
+                )
+            )
+            remaining_budget -= total_notional
+            up_levels[up_idx][1] = max(up_size - shares, 0.0)
+            down_levels[down_idx][1] = max(down_size - shares, 0.0)
+
+            if up_levels[up_idx][1] <= 1e-9:
+                up_idx += 1
+            if down_levels[down_idx][1] <= 1e-9:
+                down_idx += 1
+        return pairs
+
+    def _build_arb_instruction(
+        self,
+        *,
+        market: dict,
+        target: MarketOutcome,
+        shares: float,
+        price: float,
+        pair_sum: float,
+        tranche_index: int,
+    ) -> CopyInstruction | None:
+        if shares <= 0 or price <= 0:
+            return None
+        notional = _round_down(shares * price, "0.01")
+        size = _round_down(notional / price, "0.0001")
+        if notional < self.settings.config.min_trade_amount or size <= 0:
+            return None
+        return CopyInstruction(
+            action=SignalAction.ADD if self.db.get_copy_position(target.asset_id) else SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset=target.asset_id,
+            condition_id=str(market.get("conditionId") or ""),
+            size=size,
+            price=price,
+            notional=size * price,
+            source_wallet="strategy:arb_micro",
+            source_signal_id=0,
+            title=str(market.get("question") or market.get("slug") or ""),
+            slug=str(market.get("slug") or ""),
+            outcome=target.label,
+            category="crypto",
+            reason=f"arb_micro:pair:{pair_sum:.3f}:tranche-{tranche_index}",
         )
 
     def _build_vidarx_plan(
@@ -1150,6 +1713,7 @@ class BTC5mStrategyService:
             self.db.set_bot_state("live_marked_exposure", f"{marked_exposure:.8f}")
         if unrealized_pnl is not None:
             self.db.set_bot_state("live_unrealized_pnl", f"{unrealized_pnl:.8f}")
+        self._record_market_feed_state()
 
     def _paper_mark_to_market_snapshot(self) -> tuple[float, float]:
         marked_exposure = 0.0
@@ -1184,6 +1748,7 @@ class BTC5mStrategyService:
         self.db.set_bot_state("strategy_entry_mode", self.settings.config.strategy_entry_mode)
         self.db.set_bot_state("strategy_last_note", note)
         self.db.set_bot_state("strategy_last_updated_at", str(int(datetime.now(timezone.utc).timestamp())))
+        self._record_market_feed_state()
         if market is not None:
             self.db.set_bot_state("strategy_market_slug", str(market.get("slug") or ""))
             self.db.set_bot_state("strategy_market_title", str(market.get("question") or market.get("slug") or ""))
@@ -1194,6 +1759,28 @@ class BTC5mStrategyService:
             self.db.set_bot_state("strategy_trigger_price_seen", f"{opportunity.trigger.best_ask:.6f}")
         for key, value in (extra_state or {}).items():
             self.db.set_bot_state(key, value)
+
+    def _market_feed_status(self) -> dict[str, object]:
+        status_fn = getattr(self.clob_client, "market_feed_status", None)
+        if not callable(status_fn):
+            return {"mode": "rest-fallback", "connected": False, "tracked_assets": 0, "age_ms": 0}
+        try:
+            status = status_fn()
+        except Exception:  # noqa: BLE001
+            return {"mode": "rest-fallback", "connected": False, "tracked_assets": 0, "age_ms": 0}
+        return {
+            "mode": str(getattr(status, "mode", "rest-fallback") or "rest-fallback"),
+            "connected": bool(getattr(status, "connected", False)),
+            "tracked_assets": int(getattr(status, "tracked_assets", 0) or 0),
+            "age_ms": int(getattr(status, "age_ms", 0) or 0),
+        }
+
+    def _record_market_feed_state(self) -> None:
+        status = self._market_feed_status()
+        self.db.set_bot_state("strategy_data_source", str(status["mode"]))
+        self.db.set_bot_state("strategy_feed_connected", "1" if bool(status["connected"]) else "0")
+        self.db.set_bot_state("strategy_feed_age_ms", str(int(status["age_ms"])))
+        self.db.set_bot_state("strategy_feed_tracked_assets", str(int(status["tracked_assets"])))
 
     def _has_condition_conflict(self, condition_id: str) -> bool:
         for row in self.db.list_copy_positions():
@@ -1286,8 +1873,10 @@ class BTC5mStrategyService:
         live_total_capital: float,
     ) -> None:
         available_to_trade = self._available_to_trade(cash_balance=cash_balance, allowance=allowance)
+        feed_status = self._market_feed_status()
         self.logger.info(
             "strategy => mode=%s pending=%s filled=%s blocked=%s skipped=%s failed=%s opportunities=%s note=%s "
+            "data_source=%s feed_connected=%s feed_age_ms=%s tracked_assets=%s "
             "cash_balance=%.4f available_to_trade=%.4f allowance=%.4f exposure=%.4f live_total_capital=%.4f",
             mode,
             stats["pending"],
@@ -1297,6 +1886,10 @@ class BTC5mStrategyService:
             stats["failed"],
             stats["opportunities"],
             note,
+            feed_status["mode"],
+            feed_status["connected"],
+            feed_status["age_ms"],
+            feed_status["tracked_assets"],
             cash_balance,
             available_to_trade,
             allowance,
@@ -1317,7 +1910,7 @@ class BTC5mStrategyService:
         return self.paper_broker.execute(instruction)
 
     def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:
-        if self.settings.config.strategy_entry_mode == "vidarx_micro":
+        if self.settings.config.strategy_entry_mode in {"vidarx_micro", "arb_micro"}:
             return
         positions = self.db.list_copy_positions()
         for position in positions:
@@ -1381,6 +1974,30 @@ class BTC5mStrategyService:
             "strategy_target_outcome": "",
             "strategy_target_price": "0.000000",
             "strategy_trigger_outcome": "",
+            "strategy_trigger_price_seen": "0.000000",
+        }
+        state.update({key: value for key, value in overrides.items() if value is not None})
+        return state
+
+    def _arb_state_defaults(self, **overrides: str) -> dict[str, str]:
+        state = {
+            "strategy_market_bias": "Arbitraje doble pata 50 / 50",
+            "strategy_plan_legs": "0",
+            "strategy_window_seconds": "0",
+            "strategy_cycle_budget": "0.000000",
+            "strategy_current_market_exposure": "0.000000",
+            "strategy_resolution_mode": "paper-settle-at-close",
+            "strategy_timing_regime": "",
+            "strategy_price_mode": "underround",
+            "strategy_primary_ratio": "0.500000",
+            "strategy_primary_outcome": "",
+            "strategy_hedge_outcome": "",
+            "strategy_primary_exposure": "0.000000",
+            "strategy_hedge_exposure": "0.000000",
+            "strategy_replenishment_count": "0",
+            "strategy_target_outcome": "",
+            "strategy_target_price": "0.000000",
+            "strategy_trigger_outcome": "pair_sum",
             "strategy_trigger_price_seen": "0.000000",
         }
         state.update({key: value for key, value in overrides.items() if value is not None})
@@ -1709,13 +2326,13 @@ class BTC5mStrategyService:
                 size=size,
                 price=settlement_price,
                 notional=size * settlement_price,
-                source_wallet="strategy:vidarx_micro",
+                source_wallet="strategy:settlement",
                 source_signal_id=0,
                 title=str(row["title"] or ""),
                 slug=slug,
                 outcome=str(row["outcome"] or ""),
                 category=str(row["category"] or "crypto"),
-                reason=f"vidarx_resolution:{slug}:{row['outcome'] or ''}",
+                reason=f"strategy_resolution:{slug}:{row['outcome'] or ''}",
             )
             result = self.paper_broker.execute(instruction)
             stats["opportunities"] += 1

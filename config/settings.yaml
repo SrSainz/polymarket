@@ -1,102 +1,41 @@
-watched_wallets:
-  - "0xa81f087970a7ce196eacb3271e96e89294d91bb8"
-auto_select_wallets: true
-top_wallets_to_copy: 6
-leaderboard_category: "OVERALL"
-leaderboard_time_period: "MONTH"
-leaderboard_candidate_limit: 100
-prioritize_dynamic_wallets: true
-dynamic_wallet_slots: 3
-dynamic_leaderboard_category: "CRYPTO"
-dynamic_leaderboard_time_period: "DAY"
-min_dynamic_recent_trades: 1
-min_dynamic_trade_share: 0.02
-max_dynamic_share_for_base_wallet: 0.65
-wallet_selection_refresh_minutes: 30
-min_wallet_win_rate: 0.52
-min_closed_positions_for_scoring: 5
-min_recent_trades: 5
-min_copyable_positions_per_wallet: 1
-recent_trade_lookback_hours: 24
-recent_trades_limit_per_wallet: 200
-closed_positions_limit: 200
-seed_new_wallets_without_backfill: false
-require_recent_trade_for_position: true
-position_recent_trade_lookback_hours: 24
-position_recent_trades_limit: 300
-
-polling_interval_seconds: 45
+polling_interval_seconds: 1
+market_feed_enabled: true
+market_feed_stale_seconds: 2.5
 execution_mode: "paper"
 dry_run: true
-strategy_mode: "btc5m_orderbook"
-strategy_entry_mode: "vidarx_micro"
-strategy_trigger_price: 0.98
-strategy_trade_allocation_pct: 0.10
-strategy_fixed_trade_amount: 0.0
-strategy_max_opposite_price: 0.03
-strategy_max_target_spread: 0.02
-strategy_max_open_positions: 1
-strategy_min_seconds_into_window: 10
-strategy_max_seconds_into_window: 210
 
-bankroll: 16.87
-sizing_mode: "proportional_to_source"
-fixed_amount_per_trade: 25.0
-proportional_scale: 0.10
-noise_threshold_shares: 1.0
-min_trade_amount: 1.0
-min_price: 0.03
-max_price: 0.97
-skip_expired_source_positions: true
-expired_market_grace_hours: 6
-short_horizon_only: true
-max_market_horizon_days: 7
-forced_include_market_keywords:
-  - "btc 5 minute up or down"
-  - "bitcoin 5 minute up or down"
-  - "btc-updown-5m"
-dynamic_keywords:
-  - "btc 5 minute up or down"
-  - "bitcoin 5 minute up or down"
-  - "btc-updown-5m"
-dynamic_max_allocation_pct: 0.50
-dynamic_skip_manual_confirmation: true
-btc5m_reserve_enabled: true
-btc5m_reserved_notional: 200.0
-btc5m_reserved_allocation_pct: 0.50
+strategy_mode: "btc5m_orderbook"
+strategy_entry_mode: "arb_micro"
+
+bankroll: 10000.0
+min_trade_amount: 5.0
+min_price: 0.02
+max_price: 0.98
+slippage_limit: 0.03
+
+strategy_trade_allocation_pct: 0.03
+strategy_fixed_trade_amount: 0.0
+strategy_min_seconds_into_window: 20
+strategy_max_seconds_into_window: 260
+
+max_position_per_market: 10000.0
+max_total_exposure: 10000.0
+max_daily_loss: 2500.0
+max_daily_loss_pct: 0.25
+profit_keep_ratio: 0.0
+
+btc5m_reserve_enabled: false
+btc5m_reserved_notional: 0.0
+btc5m_reserved_allocation_pct: 0.0
 btc5m_reserve_protected_pct: 0.0
 btc5m_ignore_global_exposure_limit: true
 btc5m_relaxed_risk: true
-live_only_btc5m: true
-live_btc5m_ticket_allocation_pct: 0.10
-live_btc5m_max_open_positions: 3
-btc5m_reserve_keywords:
-  - "btc 5 minute up or down"
-  - "bitcoin 5 minute up or down"
-  - "btc-updown-5m"
+
 autonomous_decisions_enabled: false
-autonomous_take_profit_pct: 0.12
-autonomous_stop_loss_pct: 0.08
-autonomous_depreciation_window_minutes: 45
-autonomous_depreciation_threshold_pct: 0.03
-autonomous_reduce_fraction: 0.50
-autonomous_cooldown_minutes: 30
 manual_confirmation_enabled: false
-confirmation_start_hour: 8
-confirmation_end_hour: 20
-confirmation_timeout_minutes: 30
-confirmation_timezone: "Europe/Madrid"
 telegram_execution_notifications_enabled: true
 telegram_daily_summary_enabled: false
-telegram_daily_summary_hour: 20
-telegram_daily_summary_timezone: "Europe/Madrid"
 
-max_position_per_market: 8.44
-max_total_exposure: 16.87
-max_daily_loss: 120.0
-max_daily_loss_pct: 0.10
-profit_keep_ratio: 0.50
-slippage_limit: 0.03
-
-allowed_tags: []
+allowed_tags:
+  - "crypto"
 blocked_tags: []

@@ -77,13 +77,14 @@ function strategyLabel(summary) {
   const mode = String(summary.strategy_mode || "").trim();
   const entry = String(summary.strategy_entry_mode || "").trim();
   if (!mode) return "-";
+  if (entry === "arb_micro") return "Arbitraje BTC5m";
   if (entry === "vidarx_micro") return "Simulador Vidarx";
   if (mode !== "btc5m_orderbook") return mode;
   return `BTC5m / ${entry || "-"}`;
 }
 
 function isVidarxLab(summary = lastSummary) {
-  return Boolean(summary && summary.strategy_entry_mode === "vidarx_micro");
+  return Boolean(summary && ["vidarx_micro", "arb_micro"].includes(summary.strategy_entry_mode));
 }
 
 function currentBreakdown(summary) {
@@ -113,6 +114,53 @@ function timingLabel(summary) {
   if (regime === "early-mid") return "inicio-mitad";
   if (regime === "mid-late") return "mitad-final";
   return regime;
+}
+
+function feedModeInfo(summary) {
+  const source = String(summary?.strategy_data_source || "rest-fallback");
+  const ageMs = Number(summary?.strategy_feed_age_ms || 0);
+  const trackedAssets = Number(summary?.strategy_feed_tracked_assets || 0);
+  const connected = Boolean(summary?.strategy_feed_connected);
+
+  if (source === "websocket") {
+    return {
+      label: "WebSocket",
+      meta: `${ageMs} ms | ${trackedAssets} assets`,
+      className: "feed-pill ws",
+      summaryLabel: `ws ${ageMs}ms / ${trackedAssets} assets`,
+      connected,
+    };
+  }
+  if (source === "websocket-warming") {
+    return {
+      label: "WS calentando",
+      meta: `${trackedAssets} assets`,
+      className: "feed-pill warming",
+      summaryLabel: `ws calentando / ${trackedAssets} assets`,
+      connected,
+    };
+  }
+  return {
+    label: "REST fallback",
+    meta: connected ? "cache parcial" : "sin ws",
+    className: "feed-pill rest",
+    summaryLabel: "rest fallback",
+    connected,
+  };
+}
+
+function currentEdgeInfo(summary) {
+  if (String(summary?.strategy_entry_mode || "") !== "arb_micro") {
+    return { pairSum: null, edgePct: null };
+  }
+  const pairSum = Number(summary?.strategy_trigger_price_seen || 0);
+  if (!pairSum || Number.isNaN(pairSum)) {
+    return { pairSum: null, edgePct: null };
+  }
+  return {
+    pairSum,
+    edgePct: Math.max((1 - pairSum) * 100, 0),
+  };
 }
 
 function shortSlug(slug) {
@@ -286,12 +334,20 @@ function paintSummary(summary) {
   const strategyPlanLegs = Number(summary.strategy_plan_legs || 0);
   const strategyBias = ratioLabel(summary);
   const strategyCycleBudget = Number(summary.strategy_cycle_budget || 0);
+  const strategyDataSource = String(summary.strategy_data_source || "rest-fallback");
+  const strategyFeedConnected = Boolean(summary.strategy_feed_connected);
+  const strategyFeedAgeMs = Number(summary.strategy_feed_age_ms || 0);
+  const strategyFeedTrackedAssets = Number(summary.strategy_feed_tracked_assets || 0);
+  const feedInfo = feedModeInfo(summary);
+  const edgeInfo = currentEdgeInfo(summary);
+  const strategySpeedLabel = feedInfo.summaryLabel;
   const currentMarketLivePnl = Number(summary.strategy_current_market_live_pnl || 0);
   const currentMarketExposure = Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0);
   const replenishmentCount = Number(summary.strategy_replenishment_count || 0);
   const timing = timingLabel(summary);
+  const strategyNoteText = strategyNote || "sin trigger";
   document.getElementById("strategyCardMeta").textContent = isVidarxLab(summary)
-    ? `${strategyBias || "sin reparto"} | plan ${fmtUsdPlain(strategyCycleBudget, 2)} | ${strategyNote || strategyTitle}`
+    ? `${strategyBias || "sin reparto"} | plan ${fmtUsdPlain(strategyCycleBudget, 2)} | ${strategySpeedLabel} | ${strategyNote || strategyTitle}`
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
     : strategyNote || strategyTitle;
@@ -308,6 +364,13 @@ function paintSummary(summary) {
     : triggerOutcome
     ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}`
     : "-";
+  const heroFeedSource = document.getElementById("heroFeedSource");
+  heroFeedSource.textContent = feedInfo.label;
+  heroFeedSource.className = feedInfo.className;
+  document.getElementById("heroFeedMeta").textContent =
+    edgeInfo.pairSum !== null
+      ? `pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}% | ${feedInfo.meta}`
+      : `${feedInfo.meta} | ${strategyNoteText}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
 
@@ -323,11 +386,10 @@ function paintSummary(summary) {
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const lastLiveExecution = Number(summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
-  const strategyNoteText = strategyNote || "sin trigger";
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
     ? currentMarketExposure > 0
-      ? `Ventana actual en ${tradingModeLabel(summary)}. En esta ventana hay ${fmtUsdPlain(currentMarketExposure, 2)} metidos y va ${fmtUsd(currentMarketLivePnl, 2)}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
-      : `Ventana actual en ${tradingModeLabel(summary)} sin posicion abierta. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ultima lectura de ventana: ${strategyNoteText}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      ? `Ventana actual en ${tradingModeLabel(summary)}. En esta ventana hay ${fmtUsdPlain(currentMarketExposure, 2)} metidos y va ${fmtUsd(currentMarketLivePnl, 2)}. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Reparto ${strategyBias || "sin reparto"}, momento ${timing}, reposiciones ${replenishmentCount}, datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      : `Ventana actual en ${tradingModeLabel(summary)} sin posicion abierta. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ultima lectura de ventana: ${strategyNoteText}. Datos ${strategySpeedLabel}${strategyFeedConnected ? "" : " sin enlace"}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
   paintLabOverview(summary);
@@ -339,16 +401,21 @@ function paintLabOverview(summary) {
   const deployed = Math.max(Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0), 0);
   const cycleBudget = Math.max(Number(summary.strategy_cycle_budget || 0), 0);
   const exposurePct = cycleBudget > 0 ? Math.min((deployed / cycleBudget) * 100, 100) : 0;
+  const feedInfo = feedModeInfo(summary);
+  const edgeInfo = currentEdgeInfo(summary);
 
   document.getElementById("labModeValue").textContent = isVidarxLab(summary)
     ? `${timingLabel(summary)} / ${String(summary.strategy_price_mode || "sin banda").replaceAll("-", " ")}`
     : strategyLabel(summary);
   document.getElementById("labWindowValue").textContent =
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
+  document.getElementById("labFeedValue").textContent = feedInfo.label;
+  document.getElementById("labEdgeValue").textContent =
+    edgeInfo.edgePct !== null ? `${fmt(edgeInfo.edgePct, 2)}%` : "-";
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `ventana ${windowSeconds}s | reparto ${ratioLabel(summary)} | compras ${summary.strategy_plan_legs || 0} | edge ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
@@ -698,25 +765,18 @@ function paintSignals(items) {
 async function refreshAll() {
   try {
     if (runtimeMode === "local") {
-      const [summary, positions, executions, signals, selectedWallets, riskBlocks] = await Promise.all([
+      const [summary, positions, executions] = await Promise.all([
         getJson(withCacheBust(buildApiUrl("/api/summary"))),
         getJson(withCacheBust(buildApiUrl("/api/positions"))),
         getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
-        getJson(withCacheBust(buildApiUrl("/api/signals?limit=100"))),
-        safeGetJson(withCacheBust(buildApiUrl("/api/selected-wallets?limit=6")), { items: [] }),
-        safeGetJson(withCacheBust(buildApiUrl("/api/risk-blocks?hours=24&limit=5")), {
-          items: [],
-          hours: 24,
-          blocked_total: 0,
-        }),
       ]);
 
       paintSummary(summary);
       paintPositions(positions.items || []);
       paintExecutions(executions.items || []);
-      paintSignals(signals.items || []);
-      paintSelectedWallets(selectedWallets.items || []);
-      paintRiskBlocks(riskBlocks || {});
+      paintSignals([]);
+      paintSelectedWallets([]);
+      paintRiskBlocks({});
       paintExposureDonut(summary || {});
       paintOperationPnl(executions.items || []);
       paintStrategySetups(summary || {});
@@ -815,6 +875,33 @@ document.getElementById("refreshSeconds").addEventListener("change", () => {
   configureAutoRefresh();
 });
 
+document.getElementById("apiBaseBtn").addEventListener("click", async () => {
+  const input = document.getElementById("apiBaseInput");
+  const value = String(input.value || "").trim().replace(/\/+$/, "");
+  apiBase = value;
+  saveApiBase(apiBase);
+  try {
+    await getJson(withCacheBust(buildApiUrl("/api/health")));
+    runtimeMode = "local";
+    document.querySelector(".kicker").textContent = "Proyecto principal (Local DB)";
+    document.getElementById("runtimeBadge").textContent = modeLabel();
+    document.getElementById("lastUpdated").textContent = `Backend API guardado: ${apiBase || "local"}`;
+    document.getElementById("resetBtn").disabled = false;
+    document.getElementById("resetBtn").title = "";
+  } catch (error) {
+    runtimeMode = apiBase ? "public-fallback" : "public";
+    document.querySelector(".kicker").textContent =
+      runtimeMode === "public-fallback" ? "Proyecto principal (Public API Fallback)" : "Proyecto principal (Public API)";
+    document.getElementById("runtimeBadge").textContent = modeLabel();
+    document.getElementById("resetBtn").disabled = true;
+    document.getElementById("resetBtn").title = "Solo disponible cuando el dashboard esta conectado al backend local";
+    document.getElementById("lastUpdated").textContent = apiBase
+      ? `No conecta con ${apiBase}: ${error.message}. Se mantiene fallback publico.`
+      : "Backend API borrado. Usando solo fallback publico.";
+  }
+  await refreshAll();
+});
+
 document.getElementById("resetBtn").addEventListener("click", async () => {
   const button = document.getElementById("resetBtn");
   if (runtimeMode !== "local") {
@@ -855,6 +942,7 @@ async function bootstrap() {
   const savedApiBase = loadSavedApiBase();
   const hostDefaultApi = DEFAULT_REMOTE_API_BY_HOST[window.location.hostname] || "";
   apiBase = apiParam || savedApiBase || hostDefaultApi;
+  document.getElementById("apiBaseInput").value = apiBase;
   saveApiBase(apiBase);
 
   try {

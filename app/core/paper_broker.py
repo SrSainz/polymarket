@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, TradeSide
@@ -80,7 +80,7 @@ class PaperBroker:
                     category=instruction.category,
                 )
 
-            self.db.add_daily_pnl(datetime.utcnow().date().isoformat(), pnl_delta)
+            self.db.add_daily_pnl(datetime.now(timezone.utc).date().isoformat(), pnl_delta)
 
         result = ExecutionResult(
             mode="paper",

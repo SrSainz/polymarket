@@ -7,14 +7,16 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.polymarket.auth import build_authenticated_clob_client
+from app.polymarket.market_feed import FeedStatus, MarketFeed
 from app.settings import EnvSettings
 
 
 class CLOBClient:
-    def __init__(self, base_url: str, env: EnvSettings, timeout: int = 15) -> None:
+    def __init__(self, base_url: str, env: EnvSettings, timeout: int = 15, market_feed: MarketFeed | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.env = env
+        self.market_feed = market_feed
         self.session = requests.Session()
 
         retries = Retry(
@@ -27,7 +29,25 @@ class CLOBClient:
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
 
+    def track_assets(self, token_ids: list[str] | tuple[str, ...]) -> None:
+        if self.market_feed is None:
+            return
+        self.market_feed.ensure_assets(token_ids)
+
+    def market_feed_status(self) -> FeedStatus:
+        if self.market_feed is None:
+            return FeedStatus(mode="rest-fallback", connected=False, tracked_assets=0, age_ms=0)
+        return self.market_feed.status()
+
+    def close(self) -> None:
+        if self.market_feed is not None:
+            self.market_feed.close()
+
     def get_midpoint(self, token_id: str) -> float | None:
+        if self.market_feed is not None:
+            midpoint = self.market_feed.get_midpoint(token_id)
+            if midpoint is not None:
+                return midpoint
         try:
             response = self.session.get(
                 f"{self.base_url}/midpoint",
@@ -46,6 +66,10 @@ class CLOBClient:
             return None
 
     def get_book(self, token_id: str) -> dict[str, Any]:
+        if self.market_feed is not None:
+            book = self.market_feed.get_book(token_id)
+            if book:
+                return book
         response = self.session.get(
             f"{self.base_url}/book",
             params={"token_id": token_id},

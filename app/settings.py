@@ -38,11 +38,13 @@ class BotConfig(BaseModel):
     require_recent_trade_for_position: bool = False
     position_recent_trade_lookback_hours: int = 72
     position_recent_trades_limit: int = 300
-    polling_interval_seconds: int = 45
+    polling_interval_seconds: int = 1
+    market_feed_enabled: bool = True
+    market_feed_stale_seconds: float = 2.5
     execution_mode: Literal["paper", "live"] = "paper"
     dry_run: bool = True
-    strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "copy_wallets"
-    strategy_entry_mode: Literal["buy_above", "buy_opposite", "vidarx_micro"] = "buy_opposite"
+    strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "btc5m_orderbook"
+    strategy_entry_mode: Literal["buy_above", "buy_opposite", "vidarx_micro", "arb_micro"] = "arb_micro"
     strategy_trigger_price: float = 0.98
     strategy_trade_allocation_pct: float = 0.10
     strategy_fixed_trade_amount: float = 0.0
@@ -52,7 +54,7 @@ class BotConfig(BaseModel):
     strategy_min_seconds_into_window: int = 10
     strategy_max_seconds_into_window: int = 240
 
-    bankroll: float = 1000.0
+    bankroll: float = 10000.0
     sizing_mode: Literal["fixed_amount_per_trade", "proportional_to_source"] = "proportional_to_source"
     fixed_amount_per_trade: float = 25.0
     proportional_scale: float = 0.15
@@ -200,6 +202,10 @@ class BotConfig(BaseModel):
             raise ValueError("position_recent_trade_lookback_hours must be >= 1")
         if self.position_recent_trades_limit < 1:
             raise ValueError("position_recent_trades_limit must be >= 1")
+        if self.polling_interval_seconds < 1:
+            raise ValueError("polling_interval_seconds must be >= 1")
+        if self.market_feed_stale_seconds <= 0:
+            raise ValueError("market_feed_stale_seconds must be > 0")
         if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
         if self.btc5m_reserved_notional < 0:
@@ -252,6 +258,7 @@ class EnvSettings(BaseModel):
     data_api_host: str = "https://data-api.polymarket.com"
     gamma_api_host: str = "https://gamma-api.polymarket.com"
     clob_host: str = "https://clob.polymarket.com"
+    clob_ws_host: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
     polymarket_private_key: str = ""
     polymarket_chain_id: int = 137
@@ -277,6 +284,7 @@ class EnvSettings(BaseModel):
             data_api_host=os.getenv("POLYMARKET_DATA_API_HOST", "https://data-api.polymarket.com"),
             gamma_api_host=os.getenv("POLYMARKET_GAMMA_API_HOST", "https://gamma-api.polymarket.com"),
             clob_host=os.getenv("POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
+            clob_ws_host=os.getenv("POLYMARKET_CLOB_WS_HOST", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
             polymarket_private_key=os.getenv("POLYMARKET_PRIVATE_KEY", ""),
             polymarket_chain_id=int(os.getenv("POLYMARKET_CHAIN_ID", "137")),
             polymarket_funder=os.getenv("POLYMARKET_FUNDER", ""),

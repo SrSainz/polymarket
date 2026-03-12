@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Simulador BTC 5m</title>
+    <title>Laboratorio BTC 5m</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -20,7 +20,7 @@
       <header class="topbar shell-card">
         <div class="brand">
           <p class="kicker">Proyecto principal</p>
-          <h1>Simulador BTC 5m</h1>
+          <h1>Laboratorio BTC 5m</h1>
           <div class="brand-meta">
             <span id="runtimeBadge" class="soft-badge">Local DB</span>
             <span id="tradingBadge" class="soft-badge accent-badge">PAPER</span>
@@ -29,10 +29,15 @@
           </div>
         </div>
         <div class="toolbar">
+          <div class="toolbar-field toolbar-field-wide">
+            <label class="refresh-label" for="apiBaseInput">Backend API</label>
+            <input id="apiBaseInput" type="text" placeholder="https://tu-backend/api" />
+          </div>
           <div class="toolbar-field">
             <label class="refresh-label" for="refreshSeconds">Auto-refresh (s)</label>
             <input id="refreshSeconds" type="number" min="3" max="300" value="10" />
           </div>
+          <button id="apiBaseBtn" type="button" class="secondary-btn">Guardar API</button>
           <button id="refreshBtn" type="button">Refrescar</button>
           <button id="resetBtn" type="button" class="danger-btn">Limpiar y reiniciar</button>
         </div>
@@ -42,9 +47,9 @@
         <section class="hero panel panel-hero" id="overviewSection">
           <div class="hero-copy">
             <p class="hero-kicker">Modo teorico</p>
-            <h2 class="hero-title" id="strategyHeroTitle">Seguimiento simple de la ventana actual de Bitcoin en Polymarket.</h2>
+            <h2 class="hero-title" id="strategyHeroTitle">Seguimiento simple del mercado actual de Bitcoin en Polymarket.</h2>
             <p id="systemNotice" class="hero-text">
-              Aqui veremos cuanto dinero lleva metido el simulador, como va repartido entre subida y bajada, y cuanto gana o pierde al cerrarse cada ventana.
+              Aqui veremos cuanto dinero lleva metido el laboratorio, como va repartido entre subida y bajada y cuanto gana o pierde al cerrarse cada ventana.
             </p>
           </div>
           <div class="hero-side">
@@ -60,6 +65,11 @@
             <article class="hero-stat">
               <span class="hero-stat-label">Momento de esta ventana</span>
               <strong id="heroTriggerSeen">-</strong>
+            </article>
+            <article class="hero-stat">
+              <span class="hero-stat-label">Fuente y edge</span>
+              <strong id="heroFeedSource">-</strong>
+              <small id="heroFeedMeta" class="hero-stat-meta">pair sum - | edge -</small>
             </article>
           </div>
         </section>
@@ -120,6 +130,14 @@
               <div class="allocation-row">
                 <span>Mercado actual</span>
                 <strong id="labWindowValue">-</strong>
+              </div>
+              <div class="allocation-row">
+                <span>Fuente</span>
+                <strong id="labFeedValue">-</strong>
+              </div>
+              <div class="allocation-row">
+                <span>Edge bruto</span>
+                <strong id="labEdgeValue">-</strong>
               </div>
               <div class="progress">
                 <span id="labExposureFill" class="progress-fill progress-fill-core" style="width: 0%"></span>
