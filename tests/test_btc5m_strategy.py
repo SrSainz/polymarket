@@ -1417,13 +1417,14 @@ def test_arb_micro_refuses_live_mode(tmp_path: Path) -> None:
     db.close()
 
 
-def test_arb_micro_skips_single_cheap_side_without_locked_pair_edge(tmp_path: Path) -> None:
+def test_arb_micro_opens_controlled_cheap_side_when_spot_confirms_bias(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
+    slug = "btc-updown-5m-cheap"
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat().replace("+00:00", "Z")
     market = {
         "question": "Bitcoin Up or Down - Cheap Side",
-        "slug": "btc-updown-5m-cheap",
+        "slug": slug,
         "conditionId": "cond-arb-cheap",
         "closed": False,
         "acceptingOrders": True,
@@ -1434,15 +1435,28 @@ def test_arb_micro_skips_single_cheap_side_without_locked_pair_edge(tmp_path: Pa
     clob = _FakeCLOBClient(
         books={
             "asset-up": {
-                "bids": [{"price": "0.25"}],
-                "asks": [{"price": "0.26", "size": "150"}, {"price": "0.27", "size": "150"}],
+                "bids": [{"price": "0.43"}],
+                "asks": [{"price": "0.44", "size": "150"}, {"price": "0.45", "size": "150"}],
             },
             "asset-down": {
-                "bids": [{"price": "0.71"}],
-                "asks": [{"price": "0.75", "size": "150"}, {"price": "0.76", "size": "150"}],
+                "bids": [{"price": "0.56"}],
+                "asks": [{"price": "0.57", "size": "150"}, {"price": "0.58", "size": "150"}],
             },
         },
         balance=1000.0,
+    )
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "70000.00000000")
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=69750.0,
+            lead_price=69750.0,
+            binance_price=69750.0,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=5,
+            connected=True,
+        )
     )
     service = BTC5mStrategyService(
         db,
@@ -1455,14 +1469,18 @@ def test_arb_micro_skips_single_cheap_side_without_locked_pair_edge(tmp_path: Pa
         trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
         settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
         logger=logging.getLogger("test-btc5m-arb-cheap"),
+        spot_feed=spot_feed,
     )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] == 0
-    assert db.list_copy_positions() == []
-    assert db.get_bot_state("strategy_price_mode") == "underround"
-    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
+    assert stats["filled"] > 0
+    positions = db.list_copy_positions()
+    assert len(positions) >= 1
+    assert {str(row["outcome"]) for row in positions} == {"Down"}
+    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
+    assert "cheap Down" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 

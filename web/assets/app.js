@@ -278,9 +278,9 @@ function simplifiedStrategyReason(summary) {
     const strongestEdge = Math.max(Number(summary?.strategy_edge_pct || 0) * 100, 0);
     return pairSum > 0
       ? strongestEdge >= 8
-        ? `Se ve ventaja relativa en un lado, pero este modo solo entra cuando puede cerrar el bracket con dos patas equilibradas. La suma va por ${fmt(pairSum, 3)}.`
-        : `No hay margen bloqueado suficiente ahora mismo. La suma de las dos patas va por ${fmt(pairSum, 3)}.`
-      : "No hay margen bloqueado suficiente ahora mismo.";
+        ? `Se ve ventaja en una pata, pero todavia no compensa abrir el bracket con la mezcla actual. La suma va por ${fmt(pairSum, 3)}.`
+        : `No hay margen suficiente ahora mismo para abrir o sesgar el bracket. La suma de las dos patas va por ${fmt(pairSum, 3)}.`
+      : "No hay margen suficiente ahora mismo para abrir o sesgar el bracket.";
   }
   if (noteLower.includes("incomplete book")) {
     return "Una de las dos patas tiene poca liquidez visible y el bot prefiere esperar.";
@@ -626,7 +626,7 @@ function paintSummary(summary, items = lastPositions) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   document.getElementById("systemNotice").textContent = isVidarxLab(summary)
     ? currentMarketExposure > 0
-      ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, equilibrio por acciones ${actualRatio}, fase ${bracketPhase.toLowerCase()}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones totales. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, reparto por acciones ${actualRatio}, fase ${bracketPhase.toLowerCase()}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones totales. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
       : `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, fase ${bracketPhase.toLowerCase()}. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
 
