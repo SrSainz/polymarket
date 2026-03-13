@@ -56,7 +56,7 @@ _VIDARX_ALLOWED_SETUPS = {
     ("tilted", "mid-late"),
 }
 _ARB_PAIR_SUM_MAX = 0.985
-_ARB_CHEAP_SIDE_SUM_MAX = 1.015
+_ARB_CHEAP_SIDE_SUM_MAX = 1.03
 _ARB_FAIR_VALUE_EDGE_MIN = 0.025
 _ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.035
 _ARB_PAIR_OVERLAY_FRACTION = 0.0
@@ -68,7 +68,7 @@ _ARB_ENABLE_PAIR_OVERLAY = False
 _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 290
 _ARB_MIN_NOTIONAL = 1.00
-_ARB_CHEAP_SIDE_MIN_DELTA_BPS = 12.0
+_ARB_CHEAP_SIDE_MIN_DELTA_BPS = 6.0
 _ARB_REBALANCE_RATIO_TRIGGER = 0.06
 _ARB_REBALANCE_BUDGET_FRACTION = 0.35
 _ARB_PAIR_BURST_BASE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0)
@@ -82,9 +82,9 @@ _ARB_MAX_MARKET_EXPOSURE_FRACTION = 0.05
 _ARB_MAX_TOTAL_EXPOSURE_FRACTION = 0.20
 _ARB_BURST_COOLDOWN_SECONDS = 4.0
 _ARB_MAX_FILLS_PER_WINDOW = 24
-_ARB_CHEAP_SIDE_BASE_PAIR_MAX = 1.015
-_ARB_CHEAP_SIDE_MID_PAIR_MAX = 1.015
-_ARB_CHEAP_SIDE_HIGH_PAIR_MAX = 1.015
+_ARB_CHEAP_SIDE_BASE_PAIR_MAX = 1.02
+_ARB_CHEAP_SIDE_MID_PAIR_MAX = 1.025
+_ARB_CHEAP_SIDE_HIGH_PAIR_MAX = 1.03
 _MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
@@ -1453,7 +1453,8 @@ class BTC5mStrategyService:
                     )
                     note = (
                         f"cheap {target.label} ask {target.best_ask:.3f} < fair {fair_value:.3f} | "
-                        f"edge {relative_edge * 100:.2f}% | {edge_source} | {timing_regime} | niveles {len(single_levels)} | "
+                        f"edge {relative_edge * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
+                        f"{edge_source} | {timing_regime} | niveles {len(single_levels)} | "
                         f"compras {len(instructions)} | objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
                         f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | fase {bracket_phase}"
                     )
@@ -1489,12 +1490,14 @@ class BTC5mStrategyService:
                         current_up_ratio=current_ratio_after,
                         bracket_phase=bracket_phase,
                     )
+        delta_note = f" | delta {spot_context.delta_bps:+.1f}bps" if spot_context is not None else ""
         self._record_strategy_snapshot(
             market=market,
             note=(
                 f"arb_micro no locked edge: pair sum {pair_sum:.3f} | "
                 f"Up edge {edge_up * 100:.2f}% | Down edge {edge_down * 100:.2f}% | "
-                f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
+                f"{delta_note.lstrip()}"
+                f"{' | ' if delta_note else ''}objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
                 f"actual {self._arb_ratio_label(up_ratio=current_up_ratio, down_ratio=max(1.0 - current_up_ratio, 0.0))} | fase {bracket_phase}"
             ),
             extra_state=self._arb_state_defaults(
@@ -1688,7 +1691,7 @@ class BTC5mStrategyService:
         if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS and max_edge < 0.10:
             return None
 
-        required_edge = max(_ARB_FAIR_VALUE_EDGE_MIN, 0.10)
+        required_edge = max(_ARB_FAIR_VALUE_EDGE_MIN, 0.08)
         strong_ratio_gap = _ARB_REBALANCE_RATIO_TRIGGER * 0.5
 
         if (
