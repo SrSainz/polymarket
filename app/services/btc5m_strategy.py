@@ -70,6 +70,12 @@ _ARB_MAX_SECONDS = 290
 _ARB_MIN_NOTIONAL = 1.00
 _ARB_CHEAP_SIDE_MIN_DELTA_BPS = 2.5
 _ARB_CHEAP_SIDE_STRONG_EDGE_MIN = 0.11
+_ARB_CHEAP_SIDE_SOFT_DELTA_BPS = 0.75
+_ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN = 0.04
+_ARB_CHEAP_SIDE_NET_EDGE_MIN = 0.025
+_ARB_CHEAP_SIDE_OVERROUND_DRAG_WEIGHT = 0.65
+_ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT = 0.35
+_ARB_CHEAP_SIDE_FEE_ESTIMATE = 0.0025
 _ARB_REBALANCE_RATIO_TRIGGER = 0.06
 _ARB_REBALANCE_BUDGET_FRACTION = 0.35
 _ARB_PAIR_BURST_BASE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0)
@@ -173,6 +179,15 @@ class ArbSingleSideLevel:
     price: float
     shares: float
     notional: float
+
+
+@dataclass(frozen=True)
+class ArbSingleSideSignal:
+    target: MarketOutcome
+    fair_value: float
+    raw_edge: float
+    net_edge: float
+    edge_source: str
 
 
 @dataclass(frozen=True)
@@ -1414,7 +1429,11 @@ class BTC5mStrategyService:
                 current_up_ratio=current_up_ratio,
             )
         if cheap_side is not None:
-            target, fair_value, relative_edge, edge_source = cheap_side
+            target = cheap_side.target
+            fair_value = cheap_side.fair_value
+            relative_edge = cheap_side.raw_edge
+            net_edge = cheap_side.net_edge
+            edge_source = cheap_side.edge_source
             ratio_gap_abs = abs(desired_up_ratio - current_up_ratio)
             single_budget_fraction = _ARB_SINGLE_SIDE_BUDGET_FRACTION
             if existing_market_notional > 0:
@@ -1454,7 +1473,8 @@ class BTC5mStrategyService:
                     )
                     note = (
                         f"cheap {target.label} ask {target.best_ask:.3f} < fair {fair_value:.3f} | "
-                        f"edge {relative_edge * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
+                        f"edge {relative_edge * 100:.2f}% net {net_edge * 100:.2f}% | "
+                        f"delta {spot_context.delta_bps:+.1f}bps | "
                         f"{edge_source} | {timing_regime} | niveles {len(single_levels)} | "
                         f"compras {len(instructions)} | objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
                         f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | fase {bracket_phase}"
@@ -1476,7 +1496,7 @@ class BTC5mStrategyService:
                         replenishment_count=0,
                         trigger_value=target.best_ask,
                         pair_sum=pair_sum,
-                        edge_pct=relative_edge,
+                        edge_pct=max(net_edge, 0.0),
                         fair_value=fair_value,
                         spot_price=spot_context.current_price if spot_context is not None else 0.0,
                         spot_anchor=spot_context.anchor_price if spot_context is not None else 0.0,
@@ -1496,7 +1516,8 @@ class BTC5mStrategyService:
             market=market,
             note=(
                 f"arb_micro no locked edge: pair sum {pair_sum:.3f} | "
-                f"Up edge {edge_up * 100:.2f}% | Down edge {edge_down * 100:.2f}% | "
+                f"Up edge {edge_up * 100:.2f}% net {self._arb_estimated_single_side_net_edge(target=up_outcome, fair_value=fair_up, pair_sum=pair_sum, delta_bps=spot_context.delta_bps if spot_context is not None else 0.0) * 100:.2f}% | "
+                f"Down edge {edge_down * 100:.2f}% net {self._arb_estimated_single_side_net_edge(target=down_outcome, fair_value=fair_down, pair_sum=pair_sum, delta_bps=spot_context.delta_bps if spot_context is not None else 0.0) * 100:.2f}% | "
                 f"{delta_note.lstrip()}"
                 f"{' | ' if delta_note else ''}objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
                 f"actual {self._arb_ratio_label(up_ratio=current_up_ratio, down_ratio=max(1.0 - current_up_ratio, 0.0))} | fase {bracket_phase}"
@@ -1508,7 +1529,9 @@ class BTC5mStrategyService:
                 strategy_timing_regime=timing_regime,
                 strategy_trigger_price_seen=f"{pair_sum:.6f}",
                 strategy_pair_sum=f"{pair_sum:.6f}",
-                strategy_edge_pct=f"{max(edge_up, edge_down, 0.0):.6f}",
+                strategy_edge_pct=(
+                    f"{max(self._arb_estimated_single_side_net_edge(target=up_outcome, fair_value=fair_up, pair_sum=pair_sum, delta_bps=spot_context.delta_bps if spot_context is not None else 0.0), self._arb_estimated_single_side_net_edge(target=down_outcome, fair_value=fair_down, pair_sum=pair_sum, delta_bps=spot_context.delta_bps if spot_context is not None else 0.0), 0.0):.6f}"
+                ),
                 strategy_fair_value=f"{max(fair_up, fair_down, 0.0):.6f}",
                 strategy_spot_price=f"{spot_context.current_price:.6f}" if spot_context is not None else "0.000000",
                 strategy_spot_anchor=f"{spot_context.anchor_price:.6f}" if spot_context is not None else "0.000000",
@@ -1662,7 +1685,7 @@ class BTC5mStrategyService:
         spot_context: ArbSpotContext | None = None,
         desired_up_ratio: float = 0.5,
         current_up_ratio: float = 0.5,
-    ) -> tuple[MarketOutcome, float, float, str] | None:
+    ) -> ArbSingleSideSignal | None:
         if spot_context is None:
             return None
 
@@ -1681,7 +1704,20 @@ class BTC5mStrategyService:
                 edge_source_down = "spot"
         up_edge = fair_up - up_outcome.best_ask
         down_edge = fair_down - down_outcome.best_ask
+        up_net_edge = self._arb_estimated_single_side_net_edge(
+            target=up_outcome,
+            fair_value=fair_up,
+            pair_sum=pair_sum,
+            delta_bps=spot_context.delta_bps,
+        )
+        down_net_edge = self._arb_estimated_single_side_net_edge(
+            target=down_outcome,
+            fair_value=fair_down,
+            pair_sum=pair_sum,
+            delta_bps=spot_context.delta_bps,
+        )
         max_edge = max(up_edge, down_edge, 0.0)
+        max_net_edge = max(up_net_edge, down_net_edge, 0.0)
         cheap_side_pair_max = _ARB_CHEAP_SIDE_BASE_PAIR_MAX
         if max_edge >= 0.12 or abs(spot_context.delta_bps) >= 16:
             cheap_side_pair_max = _ARB_CHEAP_SIDE_MID_PAIR_MAX
@@ -1694,49 +1730,89 @@ class BTC5mStrategyService:
             pair_sum <= min(_ARB_CHEAP_SIDE_BASE_PAIR_MAX, _ARB_CHEAP_SIDE_SUM_MAX)
             and max_edge >= _ARB_CHEAP_SIDE_STRONG_EDGE_MIN
         )
-        if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS and max_edge < 0.10 and not strong_single_side_signal:
+        soft_single_side_signal = (
+            pair_sum <= min(_ARB_CHEAP_SIDE_MID_PAIR_MAX, _ARB_CHEAP_SIDE_SUM_MAX)
+            and max_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN
+            and abs(spot_context.delta_bps) >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS
+        )
+        if (
+            abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS
+            and max_edge < 0.10
+            and not strong_single_side_signal
+            and not soft_single_side_signal
+        ):
             return None
 
-        required_edge = max(_ARB_FAIR_VALUE_EDGE_MIN, 0.08)
         strong_ratio_gap = _ARB_REBALANCE_RATIO_TRIGGER * 0.5
+        required_net_edge = _ARB_CHEAP_SIDE_NET_EDGE_MIN + min(max(pair_sum - 1.0, 0.0) * 0.35, 0.01)
+        if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
+            required_net_edge = max(required_net_edge, _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
 
         if (
             desired_up_ratio > current_up_ratio + strong_ratio_gap
-            and up_edge >= required_edge
+            and up_net_edge >= required_net_edge
             and (
                 spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
-                or (strong_single_side_signal and up_edge >= down_edge)
+                or (spot_context.delta_bps >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS and up_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
+                or (strong_single_side_signal and up_net_edge >= down_net_edge)
             )
         ):
-            return up_outcome, fair_up, up_edge, edge_source_up
+            return ArbSingleSideSignal(
+                target=up_outcome,
+                fair_value=fair_up,
+                raw_edge=up_edge,
+                net_edge=up_net_edge,
+                edge_source=edge_source_up,
+            )
         if (
             desired_up_ratio < current_up_ratio - strong_ratio_gap
-            and down_edge >= required_edge
+            and down_net_edge >= required_net_edge
             and (
                 spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
-                or (strong_single_side_signal and down_edge > up_edge)
+                or (spot_context.delta_bps <= -_ARB_CHEAP_SIDE_SOFT_DELTA_BPS and down_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
+                or (strong_single_side_signal and down_net_edge > up_net_edge)
             )
         ):
-            return down_outcome, fair_down, down_edge, edge_source_down
+            return ArbSingleSideSignal(
+                target=down_outcome,
+                fair_value=fair_down,
+                raw_edge=down_edge,
+                net_edge=down_net_edge,
+                edge_source=edge_source_down,
+            )
 
         if (
-            up_edge >= down_edge
-            and up_edge >= required_edge
+            up_net_edge >= down_net_edge
+            and up_net_edge >= required_net_edge
             and (
                 spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                or (spot_context.delta_bps >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS and up_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
                 or strong_single_side_signal
             )
         ):
-            return up_outcome, fair_up, up_edge, edge_source_up
+            return ArbSingleSideSignal(
+                target=up_outcome,
+                fair_value=fair_up,
+                raw_edge=up_edge,
+                net_edge=up_net_edge,
+                edge_source=edge_source_up,
+            )
         if (
-            down_edge > up_edge
-            and down_edge >= required_edge
+            down_net_edge > up_net_edge
+            and down_net_edge >= required_net_edge
             and (
                 spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                or (spot_context.delta_bps <= -_ARB_CHEAP_SIDE_SOFT_DELTA_BPS and down_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
                 or strong_single_side_signal
             )
         ):
-            return down_outcome, fair_down, down_edge, edge_source_down
+            return ArbSingleSideSignal(
+                target=down_outcome,
+                fair_value=fair_down,
+                raw_edge=down_edge,
+                net_edge=down_net_edge,
+                edge_source=edge_source_down,
+            )
         return None
 
     def _build_arb_single_side_levels(
@@ -1790,6 +1866,24 @@ class BTC5mStrategyService:
                 continue
 
         return levels
+
+    def _arb_estimated_single_side_net_edge(
+        self,
+        *,
+        target: MarketOutcome,
+        fair_value: float,
+        pair_sum: float,
+        delta_bps: float,
+    ) -> float:
+        raw_edge = fair_value - target.best_ask
+        overround_drag = max(pair_sum - 1.0, 0.0) * _ARB_CHEAP_SIDE_OVERROUND_DRAG_WEIGHT
+        spread = max(target.best_ask - target.best_bid, 0.0)
+        slippage_cap = max(float(self.settings.config.slippage_limit), 0.0)
+        effective_spread = min(spread, slippage_cap) if slippage_cap > 0 else spread
+        spread_drag = effective_spread * _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT
+        drift_shortfall = max(_ARB_CHEAP_SIDE_MIN_DELTA_BPS - abs(delta_bps), 0.0)
+        drift_drag = min(drift_shortfall / 400.0, 0.006)
+        return raw_edge - overround_drag - spread_drag - drift_drag - _ARB_CHEAP_SIDE_FEE_ESTIMATE
 
     def _arb_min_notional(self) -> float:
         return min(self.settings.config.min_trade_amount, _ARB_MIN_NOTIONAL)
