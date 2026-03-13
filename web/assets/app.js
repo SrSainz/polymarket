@@ -1,9 +1,10 @@
 const DEFAULT_WALLET = "0xa81f087970a7ce196eacb3271e96e89294d91bb8";
 const DATA_API = "https://data-api.polymarket.com";
 const API_BASE_STORAGE_KEY = "polymarket_bot_api_base";
-const DEFAULT_REMOTE_API_BY_HOST = {
-  "polymarket-fawn.vercel.app": "https://scores-trade-kept-developed.trycloudflare.com",
-};
+const DEFAULT_REMOTE_API_BY_HOST = {};
+const DEPRECATED_REMOTE_APIS = new Set([
+  "https://scores-trade-kept-developed.trycloudflare.com",
+]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
 
@@ -81,6 +82,13 @@ function shortWallet(wallet) {
   const value = String(wallet || "");
   if (value.length <= 14) return value;
   return `${value.slice(0, 8)}...${value.slice(-6)}`;
+}
+
+function normalizeApiBase(raw) {
+  const value = String(raw || "").trim().replace(/\/+$/, "");
+  if (!value) return "";
+  if (DEPRECATED_REMOTE_APIS.has(value)) return "";
+  return value;
 }
 
 function modeLabel() {
@@ -618,7 +626,7 @@ function disconnectedSummary() {
 
 function loadSavedApiBase() {
   try {
-    return (window.localStorage.getItem(API_BASE_STORAGE_KEY) || "").trim();
+    return normalizeApiBase(window.localStorage.getItem(API_BASE_STORAGE_KEY) || "");
   } catch (_error) {
     return "";
   }
@@ -626,11 +634,12 @@ function loadSavedApiBase() {
 
 function saveApiBase(value) {
   try {
-    if (!value) {
+    const normalized = normalizeApiBase(value);
+    if (!normalized) {
       window.localStorage.removeItem(API_BASE_STORAGE_KEY);
       return;
     }
-    window.localStorage.setItem(API_BASE_STORAGE_KEY, value);
+    window.localStorage.setItem(API_BASE_STORAGE_KEY, normalized);
   } catch (_error) {
     // Ignore storage failures.
   }
@@ -1384,8 +1393,9 @@ document.getElementById("refreshSeconds").addEventListener("change", () => {
 
 document.getElementById("apiBaseBtn").addEventListener("click", async () => {
   const input = document.getElementById("apiBaseInput");
-  const value = String(input.value || "").trim().replace(/\/+$/, "");
+  const value = normalizeApiBase(input.value || "");
   apiBase = value;
+  input.value = apiBase;
   saveApiBase(apiBase);
   try {
     await getJson(withCacheBust(buildApiUrl("/api/health")));
@@ -1445,9 +1455,9 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
 async function bootstrap() {
   const params = new URLSearchParams(window.location.search);
   watchedWallet = (params.get("wallet") || DEFAULT_WALLET).toLowerCase();
-  const apiParam = (params.get("api") || "").trim().replace(/\/+$/, "");
+  const apiParam = normalizeApiBase(params.get("api") || "");
   const savedApiBase = loadSavedApiBase();
-  const hostDefaultApi = DEFAULT_REMOTE_API_BY_HOST[window.location.hostname] || "";
+  const hostDefaultApi = normalizeApiBase(DEFAULT_REMOTE_API_BY_HOST[window.location.hostname] || "");
   apiBase = apiParam || savedApiBase || hostDefaultApi;
   document.getElementById("apiBaseInput").value = apiBase;
   saveApiBase(apiBase);
