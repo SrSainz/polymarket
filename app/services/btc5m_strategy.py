@@ -68,7 +68,8 @@ _ARB_ENABLE_PAIR_OVERLAY = False
 _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 290
 _ARB_MIN_NOTIONAL = 1.00
-_ARB_CHEAP_SIDE_MIN_DELTA_BPS = 6.0
+_ARB_CHEAP_SIDE_MIN_DELTA_BPS = 2.5
+_ARB_CHEAP_SIDE_STRONG_EDGE_MIN = 0.11
 _ARB_REBALANCE_RATIO_TRIGGER = 0.06
 _ARB_REBALANCE_BUDGET_FRACTION = 0.35
 _ARB_PAIR_BURST_BASE = (1.0, 1.5, 2.5, 4.0, 6.0, 8.0, 12.0, 18.0)
@@ -1686,9 +1687,14 @@ class BTC5mStrategyService:
             cheap_side_pair_max = _ARB_CHEAP_SIDE_MID_PAIR_MAX
         if max_edge >= 0.16 and abs(spot_context.delta_bps) >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
             cheap_side_pair_max = _ARB_CHEAP_SIDE_HIGH_PAIR_MAX
-        if pair_sum > min(cheap_side_pair_max, _ARB_CHEAP_SIDE_SUM_MAX):
+        effective_pair_cap = min(cheap_side_pair_max, _ARB_CHEAP_SIDE_SUM_MAX)
+        if pair_sum > effective_pair_cap:
             return None
-        if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS and max_edge < 0.10:
+        strong_single_side_signal = (
+            pair_sum <= min(_ARB_CHEAP_SIDE_BASE_PAIR_MAX, _ARB_CHEAP_SIDE_SUM_MAX)
+            and max_edge >= _ARB_CHEAP_SIDE_STRONG_EDGE_MIN
+        )
+        if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS and max_edge < 0.10 and not strong_single_side_signal:
             return None
 
         required_edge = max(_ARB_FAIR_VALUE_EDGE_MIN, 0.08)
@@ -1697,19 +1703,39 @@ class BTC5mStrategyService:
         if (
             desired_up_ratio > current_up_ratio + strong_ratio_gap
             and up_edge >= required_edge
-            and spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
+            and (
+                spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                or (strong_single_side_signal and up_edge >= down_edge)
+            )
         ):
             return up_outcome, fair_up, up_edge, edge_source_up
         if (
             desired_up_ratio < current_up_ratio - strong_ratio_gap
             and down_edge >= required_edge
-            and spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
+            and (
+                spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                or (strong_single_side_signal and down_edge > up_edge)
+            )
         ):
             return down_outcome, fair_down, down_edge, edge_source_down
 
-        if up_edge >= down_edge and up_edge >= required_edge and spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
+        if (
+            up_edge >= down_edge
+            and up_edge >= required_edge
+            and (
+                spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                or strong_single_side_signal
+            )
+        ):
             return up_outcome, fair_up, up_edge, edge_source_up
-        if down_edge > up_edge and down_edge >= required_edge and spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS:
+        if (
+            down_edge > up_edge
+            and down_edge >= required_edge
+            and (
+                spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                or strong_single_side_signal
+            )
+        ):
             return down_outcome, fair_down, down_edge, edge_source_down
         return None
 

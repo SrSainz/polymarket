@@ -1802,7 +1802,7 @@ def test_arb_micro_uses_spot_context_to_open_controlled_single_side_trade(tmp_pa
     db.close()
 
 
-def test_arb_micro_keeps_skipping_single_side_even_with_strong_edge(tmp_path: Path) -> None:
+def test_arb_micro_opens_single_side_on_small_delta_with_strong_edge(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     slug = "btc-updown-5m-small-delta"
@@ -1860,10 +1860,12 @@ def test_arb_micro_keeps_skipping_single_side_even_with_strong_edge(tmp_path: Pa
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] == 0
-    assert db.list_copy_positions() == []
-    assert db.get_bot_state("strategy_price_mode") == "underround"
-    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
+    assert stats["filled"] > 0
+    positions = db.list_copy_positions()
+    assert positions
+    assert {str(row["outcome"]) for row in positions} == {"Down"}
+    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
+    assert "cheap Down" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 

@@ -335,6 +335,16 @@ function friendlyWindowState(summary) {
   return { label: "Esperando arbitraje", detail: simplifiedStrategyReason(summary) };
 }
 
+function backendWarningText() {
+  if (runtimeMode === "local") return "";
+  if (runtimeMode === "public-fallback") {
+    return apiBase
+      ? `Aviso: esta web no esta conectando bien con el backend del NAS (${apiBase}) y esta mostrando un fallback publico.`
+      : "Aviso: esta web esta mostrando un fallback publico porque no tiene backend del NAS configurado.";
+  }
+  return "Aviso: esta web esta en modo publico y no esta leyendo la base real del NAS.";
+}
+
 function shortSlug(slug) {
   const value = String(slug || "");
   if (!value) return "-";
@@ -624,11 +634,15 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const lastLiveExecution = Number(summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
-  document.getElementById("systemNotice").textContent = isVidarxLab(summary)
+  const backendWarning = backendWarningText();
+  const strategySummary = isVidarxLab(summary)
     ? currentMarketExposure > 0
       ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, reparto por acciones ${actualRatio}, fase ${bracketPhase.toLowerCase()}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones totales. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
       : `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, fase ${bracketPhase.toLowerCase()}. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
+  document.getElementById("systemNotice").textContent = backendWarning
+    ? `${backendWarning} ${strategySummary}`
+    : strategySummary;
 
   paintLabOverview(summary);
 }
