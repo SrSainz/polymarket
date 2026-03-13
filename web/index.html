@@ -54,20 +54,20 @@
           </div>
           <div class="hero-side">
             <article class="hero-stat">
-              <span class="hero-stat-label">Caja disponible ahora</span>
+              <span id="heroCashLabel" class="hero-stat-label">Caja disponible ahora</span>
               <strong id="heroCashBalance">-</strong>
               <small id="heroCashMeta" class="hero-stat-meta">capital total -</small>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Compra actual</span>
+              <span id="heroTargetLabel" class="hero-stat-label">Compra actual</span>
               <strong id="heroTargetOutcome">-</strong>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Momento de esta ventana</span>
+              <span id="heroTriggerLabel" class="hero-stat-label">Momento de esta ventana</span>
               <strong id="heroTriggerSeen">-</strong>
             </article>
             <article class="hero-stat">
-              <span class="hero-stat-label">Fuente y edge</span>
+              <span id="heroFeedLabel" class="hero-stat-label">Fuente y edge</span>
               <strong id="heroFeedSource">-</strong>
               <small id="heroFeedMeta" class="hero-stat-meta">pair sum - | edge -</small>
             </article>
@@ -93,22 +93,22 @@
             <p class="card-subvalue" id="exposureMark">total simulador -</p>
           </article>
           <article class="card">
-            <p class="card-label">Ganancia / perdida total simulador</p>
+            <p id="pnlLabel" class="card-label">Ganancia / perdida total simulador</p>
             <p class="card-value" id="pnl">-</p>
             <p class="card-subvalue" id="pnlBreakdown">cerrado - / en vivo -</p>
           </article>
           <article class="card">
-            <p class="card-label">Capital total del simulador</p>
+            <p id="liveCashLabel" class="card-label">Capital total del simulador</p>
             <p class="card-value" id="liveCashBalance">-</p>
             <p class="card-subvalue" id="liveCashMeta">disponible -</p>
           </article>
           <article class="card">
-            <p class="card-label">Compras previstas en esta ventana</p>
+            <p id="pendingSignalsLabel" class="card-label">Compras previstas en esta ventana</p>
             <p class="card-value" id="pendingSignals">-</p>
             <p class="card-subvalue">intentos de la ventana actual</p>
           </article>
           <article class="card">
-            <p class="card-label">Estado ahora</p>
+            <p id="strategyModeLabel" class="card-label">Estado ahora</p>
             <p class="card-value" id="strategyModeCard">-</p>
             <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
           </article>
@@ -258,8 +258,8 @@
           <article class="panel bucket-panel">
             <div class="panel-head">
               <div>
-                <h2>Patas abiertas</h2>
-                <p class="panel-copy">Compras que siguen abiertas dentro del mercado actual.</p>
+                <h2 id="positionsCurrentTitle">Patas abiertas</h2>
+                <p id="positionsCurrentCopy" class="panel-copy">Compras que siguen abiertas dentro del mercado actual.</p>
               </div>
               <span id="positionsBtcCount" class="badge">0</span>
             </div>
@@ -284,8 +284,8 @@
           <article class="panel bucket-panel">
             <div class="panel-head">
               <div>
-                <h2>Otras patas / archivo</h2>
-                <p class="panel-copy">Operaciones fuera del mercado principal o ya desplazadas.</p>
+                <h2 id="positionsArchiveTitle">Otras patas / archivo</h2>
+                <p id="positionsArchiveCopy" class="panel-copy">Operaciones fuera del mercado principal o ya desplazadas.</p>
               </div>
               <span id="positionsGeneralCount" class="badge">0</span>
             </div>
@@ -311,8 +311,8 @@
         <details class="panel panel-details" open>
           <summary class="panel-head">
             <div>
-              <h2>Ejecuciones recientes</h2>
-              <p class="panel-copy">Todas las compras y cierres que ha ido haciendo el simulador.</p>
+              <h2 id="executionsTitle">Ejecuciones recientes</h2>
+              <p id="executionsCopy" class="panel-copy">Todas las compras y cierres que ha ido haciendo el simulador.</p>
             </div>
             <span class="badge">Ultimas 50</span>
           </summary>

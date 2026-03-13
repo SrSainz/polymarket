@@ -14,6 +14,10 @@ let lastSummary = null;
 let lastPositions = [];
 let lastExecutions = [];
 
+function isPublicRuntime() {
+  return runtimeMode !== "local";
+}
+
 const fmt = (value, digits = 4) => {
   const asNumber = Number(value);
   if (Number.isNaN(asNumber)) return "-";
@@ -82,11 +86,13 @@ function modeLabel() {
 }
 
 function tradingModeLabel(summary) {
+  if (isPublicRuntime()) return "PUBLICO";
   const isLive = Boolean(summary.live_mode_active);
   return isLive ? "LIVE" : "PAPER";
 }
 
 function strategyLabel(summary) {
+  if (isPublicRuntime()) return "Perfil publico";
   const mode = String(summary.strategy_mode || "").trim();
   const entry = String(summary.strategy_entry_mode || "").trim();
   if (!mode) return "-";
@@ -251,6 +257,56 @@ function latestStrategyExecution() {
   );
 }
 
+function latestObservedExecution() {
+  return Array.isArray(lastExecutions) && lastExecutions.length ? lastExecutions[0] : null;
+}
+
+function publicLatestActionLabel(item = latestObservedExecution()) {
+  const latest = item;
+  if (!latest) return "Sin movimientos recientes";
+  const action = String(latest.action || "-").toLowerCase();
+  const actionLabel = action === "buy" ? "Compra" : action === "sell" ? "Venta" : action || "-";
+  const outcome = friendlyOutcomeName(latest.outcome || "-");
+  const price = Number(latest.price || 0);
+  const market = String(latest.title || latest.notes || "").trim();
+  const marketLabel = market ? ` en ${market}` : "";
+  return `${actionLabel} ${outcome}${price > 0 ? ` @ ${fmt(price, 3)}` : ""}${marketLabel}`;
+}
+
+function applyPublicModeLabels() {
+  document.getElementById("heroCashLabel").textContent = "Exposicion publica";
+  document.getElementById("heroTargetLabel").textContent = "Ultimo movimiento";
+  document.getElementById("heroTriggerLabel").textContent = "Actividad visible";
+  document.getElementById("heroFeedLabel").textContent = "Fuente";
+  document.getElementById("pnlLabel").textContent = "P&L realizado visible";
+  document.getElementById("liveCashLabel").textContent = "Datos del simulador";
+  document.getElementById("pendingSignalsLabel").textContent = "Senales del bot";
+  document.getElementById("strategyModeLabel").textContent = "Estado de la web";
+  document.getElementById("positionsCurrentTitle").textContent = "Posiciones publicas";
+  document.getElementById("positionsCurrentCopy").textContent = "Lo que la Data API publica muestra ahora mismo para esta wallet.";
+  document.getElementById("positionsArchiveTitle").textContent = "Sincronizacion del NAS";
+  document.getElementById("positionsArchiveCopy").textContent = "Conecta el backend del NAS para separar ventana actual, archivo y simulador.";
+  document.getElementById("executionsTitle").textContent = "Actividad publica reciente";
+  document.getElementById("executionsCopy").textContent = "Movimientos visibles de la wallet observada, no del simulador del NAS.";
+}
+
+function applyLocalModeLabels() {
+  document.getElementById("heroCashLabel").textContent = "Caja disponible ahora";
+  document.getElementById("heroTargetLabel").textContent = "Compra actual";
+  document.getElementById("heroTriggerLabel").textContent = "Momento de esta ventana";
+  document.getElementById("heroFeedLabel").textContent = "Fuente y edge";
+  document.getElementById("pnlLabel").textContent = "Ganancia / perdida total simulador";
+  document.getElementById("liveCashLabel").textContent = "Capital total del simulador";
+  document.getElementById("pendingSignalsLabel").textContent = "Compras previstas en esta ventana";
+  document.getElementById("strategyModeLabel").textContent = "Estado ahora";
+  document.getElementById("positionsCurrentTitle").textContent = "Patas abiertas";
+  document.getElementById("positionsCurrentCopy").textContent = "Compras que siguen abiertas dentro del mercado actual.";
+  document.getElementById("positionsArchiveTitle").textContent = "Otras patas / archivo";
+  document.getElementById("positionsArchiveCopy").textContent = "Operaciones fuera del mercado principal o ya desplazadas.";
+  document.getElementById("executionsTitle").textContent = "Ejecuciones recientes";
+  document.getElementById("executionsCopy").textContent = "Todas las compras y cierres que ha ido haciendo el simulador.";
+}
+
 function currentWindowDirection(summary) {
   const breakdown = currentBreakdown(summary);
   if (!breakdown.length) return "Sin posicion abierta";
@@ -354,6 +410,11 @@ function shortSlug(slug) {
 function setLiveBadge(summary) {
   const badge = document.getElementById("tradingBadge");
   if (!badge) return;
+  if (isPublicRuntime()) {
+    badge.textContent = "PUBLICO";
+    badge.classList.remove("live-badge", "paper-badge");
+    return;
+  }
   const isLive = Boolean(summary.live_mode_active);
   badge.textContent = tradingModeLabel(summary);
   badge.classList.remove("live-badge", "paper-badge");
@@ -510,26 +571,39 @@ function saveApiBase(value) {
 
 function paintSummary(summary, items = lastPositions) {
   lastSummary = summary;
+  if (isPublicRuntime()) {
+    applyPublicModeLabels();
+  } else {
+    applyLocalModeLabels();
+  }
   const buckets = splitPositionBuckets(summary, items);
   const windowState = friendlyWindowState(summary);
   const currentWindowExposure = Number(summary.strategy_current_market_total_exposure ?? buckets.currentSummary.exposure ?? 0);
   const totalExposure = Number(summary.exposure ?? buckets.totalExposure ?? 0);
   const totalExposureMark = Number(summary.exposure_mark ?? totalExposure);
-  document.getElementById("openPositionsLabel").textContent = isVidarxLab(summary)
+  document.getElementById("openPositionsLabel").textContent = isPublicRuntime()
+    ? "Posiciones publicas abiertas"
+    : isVidarxLab(summary)
     ? "Patas abiertas en esta ventana"
     : "Patas abiertas ahora";
-  document.getElementById("openPositions").textContent = String(buckets.currentSummary.count);
-  document.getElementById("openPositionsMeta").textContent = isVidarxLab(summary)
+  document.getElementById("openPositions").textContent = String(isPublicRuntime() ? buckets.totalCount : buckets.currentSummary.count);
+  document.getElementById("openPositionsMeta").textContent = isPublicRuntime()
+    ? "fuente Data API publica"
+    : isVidarxLab(summary)
     ? `totales simulador ${summary.open_positions ?? buckets.totalCount ?? 0}`
     : "operaciones vivas ahora mismo";
-  document.getElementById("exposureLabel").textContent = isVidarxLab(summary)
+  document.getElementById("exposureLabel").textContent = isPublicRuntime()
+    ? "Dinero visible en posiciones"
+    : isVidarxLab(summary)
     ? "Dinero metido en esta ventana"
     : "Dinero metido total";
   document.getElementById("exposure").textContent = fmtUsdPlain(
-    isVidarxLab(summary) ? currentWindowExposure : totalExposure,
+    isPublicRuntime() ? totalExposure : isVidarxLab(summary) ? currentWindowExposure : totalExposure,
     2
   );
-  document.getElementById("exposureMark").textContent = isVidarxLab(summary)
+  document.getElementById("exposureMark").textContent = isPublicRuntime()
+    ? `P&L realizado visible ${fmtUsd(Number(summary.realized_pnl ?? summary.cumulative_pnl ?? 0), 2)}`
+    : isVidarxLab(summary)
     ? `total simulador ${fmtUsdPlain(totalExposure, 2)} | valor vivo ${fmtUsdPlain(totalExposureMark, 2)}`
     : `valor ahora ${fmtUsdPlain(totalExposureMark, 2)}`;
 
@@ -537,10 +611,14 @@ function paintSummary(summary, items = lastPositions) {
   const realized = Number(summary.realized_pnl ?? summary.cumulative_pnl ?? 0);
   const unrealized = Number(summary.unrealized_pnl ?? 0);
   document.getElementById("pnl").textContent = fmtUsd(pnlTotal, 2);
-  document.getElementById("pnlBreakdown").textContent = `cerrado ${fmtUsd(realized, 2)} / en vivo ${fmtUsd(unrealized, 2)}`;
+  document.getElementById("pnlBreakdown").textContent = isPublicRuntime()
+    ? "sin mark-to-market fiable en fallback publico"
+    : `cerrado ${fmtUsd(realized, 2)} / en vivo ${fmtUsd(unrealized, 2)}`;
   setCardTone("pnl", pnlTotal);
 
-  document.getElementById("pendingSignals").textContent = isVidarxLab(summary)
+  document.getElementById("pendingSignals").textContent = isPublicRuntime()
+    ? "-"
+    : isVidarxLab(summary)
     ? String(summary.strategy_plan_legs ?? 0)
     : String(summary.pending_signals ?? "-");
   const liveCashBalance = Number(summary.live_cash_balance ?? 0);
@@ -548,12 +626,16 @@ function paintSummary(summary, items = lastPositions) {
   const liveEquityEstimate = Number(summary.live_equity_estimate ?? summary.live_total_capital ?? liveCashBalance);
   const liveBalanceUpdatedAt = Number(summary.live_balance_updated_at ?? 0);
   const liveSnapshotText = liveBalanceUpdatedAt > 0 ? tsToIso(liveBalanceUpdatedAt) : "sin snapshot";
-  document.getElementById("liveCashBalance").textContent = fmtUsdPlain(liveEquityEstimate, 2);
-  document.getElementById("liveCashMeta").textContent =
-    `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | snapshot ${liveSnapshotText}`;
-  document.getElementById("heroCashBalance").textContent = fmtUsdPlain(liveAvailableToTrade, 2);
-  document.getElementById("heroCashMeta").textContent =
-    `capital total ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)}`;
+  document.getElementById("liveCashBalance").textContent = isPublicRuntime() ? "-" : fmtUsdPlain(liveEquityEstimate, 2);
+  document.getElementById("liveCashMeta").textContent = isPublicRuntime()
+    ? "requiere backend del NAS para caja, capital y estado reales"
+    : `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | snapshot ${liveSnapshotText}`;
+  document.getElementById("heroCashBalance").textContent = isPublicRuntime()
+    ? fmtUsdPlain(totalExposure, 2)
+    : fmtUsdPlain(liveAvailableToTrade, 2);
+  document.getElementById("heroCashMeta").textContent = isPublicRuntime()
+    ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones visibles | wallet ${shortWallet(watchedWallet)}`
+    : `capital total ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
@@ -594,18 +676,27 @@ function paintSummary(summary, items = lastPositions) {
   const replenishmentCount = Number(summary.strategy_replenishment_count || 0);
   const timing = timingLabel(summary);
   const strategyNoteText = strategyNote || "sin trigger";
-  document.getElementById("strategyCardMeta").textContent = isVidarxLab(summary)
+  const latestObserved = latestObservedExecution();
+  document.getElementById("strategyCardMeta").textContent = isPublicRuntime()
+    ? "Esta web esta leyendo solo posiciones y actividad publicas. Para el estado real del bot, conecta el backend del NAS."
+    : isVidarxLab(summary)
     ? windowState.detail
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
     : strategyNote || strategyTitle;
-  document.getElementById("strategyHeroTitle").textContent = strategyTitle;
-  document.getElementById("heroTargetOutcome").textContent = isVidarxLab(summary)
+  document.getElementById("strategyHeroTitle").textContent = isPublicRuntime()
+    ? `Perfil publico de ${shortWallet(watchedWallet)}`
+    : strategyTitle;
+  document.getElementById("heroTargetOutcome").textContent = isPublicRuntime()
+    ? publicLatestActionLabel()
+    : isVidarxLab(summary)
     ? `${currentWindowDirection(summary)} | objetivo ${desiredRatio}`
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)}`
     : "-";
-  document.getElementById("heroTriggerSeen").textContent = isVidarxLab(summary)
+  document.getElementById("heroTriggerSeen").textContent = isPublicRuntime()
+    ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones | ${Array.isArray(lastExecutions) ? lastExecutions.length : 0} movimientos`
+    : isVidarxLab(summary)
     ? strategyWindowSeconds > 0
       ? `${timing} | ${strategyWindowSeconds}s | ${strategyPlanLegs} compras | ${bracketPhase}`
       : "-"
@@ -613,10 +704,11 @@ function paintSummary(summary, items = lastPositions) {
     ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}`
     : "-";
   const heroFeedSource = document.getElementById("heroFeedSource");
-  heroFeedSource.textContent = feedInfo.label;
-  heroFeedSource.className = feedInfo.className;
-  document.getElementById("heroFeedMeta").textContent =
-    edgeInfo.pairSum !== null
+  heroFeedSource.textContent = isPublicRuntime() ? "Data API publica" : feedInfo.label;
+  heroFeedSource.className = isPublicRuntime() ? "feed-pill rest" : feedInfo.className;
+  document.getElementById("heroFeedMeta").textContent = isPublicRuntime()
+    ? `${runtimeMode === "public-fallback" ? "fallback publico" : "modo publico"} | backend NAS no conectado | wallet ${shortWallet(watchedWallet)}`
+    : edgeInfo.pairSum !== null
       ? `${edgeInfo.label} | pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.hasCurrent ? ` | BTC ${fmtBtcPrice(spotInfo.current)}` : ""}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ${feedInfo.meta}`
       : `${spotInfo.hasCurrent ? `BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ` : ""}${feedInfo.meta} | ${windowState.label.toLowerCase()}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
@@ -635,7 +727,9 @@ function paintSummary(summary, items = lastPositions) {
   const lastLiveExecution = Number(summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   const backendWarning = backendWarningText();
-  const strategySummary = isVidarxLab(summary)
+  const strategySummary = isPublicRuntime()
+    ? `Estas viendo solo datos publicos de ${shortWallet(watchedWallet)}: ${summary.open_positions ?? buckets.totalCount ?? 0} posiciones abiertas visibles, ${fmtUsdPlain(totalExposure, 2)} visibles en mercado y P&L realizado visible ${fmtUsd(realized, 2)}. Para la caja, capital y decisiones del bot del NAS necesitas que esta web conecte con su backend real.`
+    : isVidarxLab(summary)
     ? currentMarketExposure > 0
       ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, reparto por acciones ${actualRatio}, fase ${bracketPhase.toLowerCase()}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones totales. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
       : `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, fase ${bracketPhase.toLowerCase()}. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
@@ -648,6 +742,22 @@ function paintSummary(summary, items = lastPositions) {
 }
 
 function paintLabOverview(summary) {
+  if (isPublicRuntime()) {
+    const totalExposure = Number(summary.exposure ?? 0);
+    document.getElementById("labModeValue").textContent = "Perfil publico";
+    document.getElementById("labWindowValue").textContent = String(latestObservedExecution()?.title || lastPositions[0]?.title || "-");
+    document.getElementById("labFeedValue").textContent = "Data API publica";
+    document.getElementById("labSpotCurrent").textContent = "-";
+    document.getElementById("labSpotAnchor").textContent = "-";
+    document.getElementById("labSpotDelta").textContent = "requiere backend del NAS";
+    document.getElementById("labSpotFair").textContent = "no disponible en fallback";
+    document.getElementById("labEdgeValue").textContent = "no disponible";
+    document.getElementById("labWindowFill").style.width = "0%";
+    document.getElementById("labExposureFill").style.width = `${Math.min((totalExposure / 1000) * 100, 100)}%`;
+    document.getElementById("labMeta").textContent =
+      `Mostrando solo posiciones y actividad publicas de ${shortWallet(watchedWallet)}. Para BTC actual, price to beat y decisiones del bot necesitas conectar el backend del NAS.`;
+    return;
+  }
   const windowSeconds = Math.max(Number(summary.strategy_window_seconds || 0), 0);
   const windowPct = Math.min((windowSeconds / 300) * 100, 100);
   const deployed = Math.max(Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0), 0);
@@ -681,6 +791,31 @@ function paintLabOverview(summary) {
 }
 
 function paintSelectedWallets(items) {
+  if (isPublicRuntime()) {
+    const body = document.getElementById("selectedWalletsList");
+    const latest = latestObservedExecution();
+    const publicRows = [
+      ["Wallet observada", shortWallet(watchedWallet)],
+      ["Posiciones abiertas", String(lastSummary?.open_positions ?? lastPositions.length ?? 0)],
+      ["Dinero visible", fmtUsdPlain(Number(lastSummary?.exposure ?? 0), 2)],
+      ["P&L realizado visible", fmtUsd(Number(lastSummary?.realized_pnl ?? lastSummary?.cumulative_pnl ?? 0), 2)],
+      ["Ultimo movimiento", latest ? publicLatestActionLabel() : "Sin movimientos recientes"],
+    ];
+    document.getElementById("selectedWalletsCount").textContent = String(publicRows.length);
+    body.innerHTML = publicRows
+      .map(
+        ([label, value]) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(value)}</span>
+      </li>
+    `
+      )
+      .join("");
+    document.getElementById("selectedWalletsMeta").textContent =
+      "Vista publica: util para seguir una wallet, no para ver el estado real del simulador del NAS.";
+    return;
+  }
   const body = document.getElementById("selectedWalletsList");
   if (isVidarxLab()) {
     const breakdown = currentBreakdown(lastSummary);
@@ -739,6 +874,30 @@ function paintSelectedWallets(items) {
 }
 
 function paintRiskBlocks(payload) {
+  if (isPublicRuntime()) {
+    const body = document.getElementById("riskBlocksList");
+    const items = (Array.isArray(lastExecutions) ? lastExecutions : []).slice(0, 6);
+    document.getElementById("riskBlocksCount").textContent = String(items.length);
+    if (!items.length) {
+      body.innerHTML = `<li class="mini-item"><strong>Sin actividad visible</strong><span>La Data API aun no devuelve movimientos para esta wallet.</span></li>`;
+      document.getElementById("riskBlocksMeta").textContent = "sin actividad publica reciente";
+      return;
+    }
+    body.innerHTML = items
+      .map(
+        (item) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(tsToIso(item.ts))}</strong>
+        <span>${escapeHtml(publicLatestActionLabel(item))}</span>
+        <span>${fmtUsdPlain(Number(item.notional || 0), 2)}</span>
+      </li>
+    `
+      )
+      .join("");
+    document.getElementById("riskBlocksMeta").textContent =
+      "Ultimos movimientos visibles en la Data API publica.";
+    return;
+  }
   if (isVidarxLab()) {
     const body = document.getElementById("riskBlocksList");
     const items = Array.isArray(lastSummary?.strategy_recent_resolutions) ? lastSummary.strategy_recent_resolutions : [];
@@ -946,7 +1105,11 @@ function paintPositions(items) {
   document.getElementById("btcBucketExposure").textContent = fmtUsdPlain(currentExposure, 2);
   document.getElementById("btcBucketPnl").textContent = fmtUsd(currentLivePnl, 2);
 
-  if (isVidarxLab()) {
+  if (isPublicRuntime()) {
+    document.getElementById("generalBucketCount").textContent = "sin NAS";
+    document.getElementById("generalBucketExposure").textContent = "-";
+    document.getElementById("generalBucketPnl").textContent = "-";
+  } else if (isVidarxLab()) {
     const resolvedNotional = (Array.isArray(lastSummary?.strategy_recent_resolutions) ? lastSummary.strategy_recent_resolutions : []).reduce(
       (acc, item) => acc + Number(item.notional || 0),
       0
@@ -1060,15 +1223,19 @@ async function refreshAll() {
       status: "observed",
       action: (item.side || "").toLowerCase(),
       side: (item.side || "").toLowerCase(),
+      outcome: item.outcome || "",
       size: Number(item.size || 0),
       price: Number(item.price || 0),
       notional: Number(item.size || 0) * Number(item.price || 0),
       source_wallet: watchedWallet,
+      title: item.title || item.market || item.slug || "",
       pnl_delta: 0,
+      notes: item.title || item.market || item.slug || "-",
     }));
 
     const realized = positions.reduce((acc, item) => acc + Number(item.realized_pnl || 0), 0);
     const summary = {
+      strategy_entry_mode: "",
       open_positions: positions.length,
       exposure: positions.reduce((acc, item) => acc + item.size * item.avg_price, 0),
       cumulative_pnl: realized,
