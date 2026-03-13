@@ -15,7 +15,11 @@ let lastPositions = [];
 let lastExecutions = [];
 
 function isPublicRuntime() {
-  return runtimeMode !== "local";
+  return runtimeMode === "public" || runtimeMode === "public-fallback";
+}
+
+function isBackendDisconnectedRuntime() {
+  return runtimeMode === "backend-unreachable";
 }
 
 const fmt = (value, digits = 4) => {
@@ -81,17 +85,20 @@ function shortWallet(wallet) {
 
 function modeLabel() {
   if (runtimeMode === "local") return "Local DB";
+  if (runtimeMode === "backend-unreachable") return "NAS desconectado";
   if (runtimeMode === "public-fallback") return "Fallback publico";
   return "Public API";
 }
 
 function tradingModeLabel(summary) {
+  if (runtimeMode === "backend-unreachable") return "NAS OFF";
   if (isPublicRuntime()) return "PUBLICO";
   const isLive = Boolean(summary.live_mode_active);
   return isLive ? "LIVE" : "PAPER";
 }
 
 function strategyLabel(summary) {
+  if (runtimeMode === "backend-unreachable") return "Backend NAS";
   if (isPublicRuntime()) return "Perfil publico";
   const mode = String(summary.strategy_mode || "").trim();
   const entry = String(summary.strategy_entry_mode || "").trim();
@@ -290,6 +297,23 @@ function applyPublicModeLabels() {
   document.getElementById("executionsCopy").textContent = "Movimientos visibles de la wallet observada, no del simulador del NAS.";
 }
 
+function applyBackendDisconnectedLabels() {
+  document.getElementById("heroCashLabel").textContent = "Backend del NAS";
+  document.getElementById("heroTargetLabel").textContent = "Estado";
+  document.getElementById("heroTriggerLabel").textContent = "Siguiente paso";
+  document.getElementById("heroFeedLabel").textContent = "Conexion";
+  document.getElementById("pnlLabel").textContent = "Ganancia / perdida";
+  document.getElementById("liveCashLabel").textContent = "Capital del simulador";
+  document.getElementById("pendingSignalsLabel").textContent = "Compras previstas en esta ventana";
+  document.getElementById("strategyModeLabel").textContent = "Estado ahora";
+  document.getElementById("positionsCurrentTitle").textContent = "Patas abiertas";
+  document.getElementById("positionsCurrentCopy").textContent = "Conecta el backend del NAS para ver la ventana real y sus patas.";
+  document.getElementById("positionsArchiveTitle").textContent = "Archivo / resto";
+  document.getElementById("positionsArchiveCopy").textContent = "Sin backend no podemos separar ventana actual, archivo y simulador.";
+  document.getElementById("executionsTitle").textContent = "Ejecuciones recientes";
+  document.getElementById("executionsCopy").textContent = "Esta vista necesita el backend del NAS para mostrar compras, cierres y PnL reales.";
+}
+
 function applyLocalModeLabels() {
   document.getElementById("heroCashLabel").textContent = "Caja disponible ahora";
   document.getElementById("heroTargetLabel").textContent = "Compra actual";
@@ -393,6 +417,11 @@ function friendlyWindowState(summary) {
 
 function backendWarningText() {
   if (runtimeMode === "local") return "";
+  if (runtimeMode === "backend-unreachable") {
+    return apiBase
+      ? `Aviso: la web no puede conectar con el backend del NAS en ${apiBase}. Revisa la URL publica del dashboard o el tunel.`
+      : "Aviso: no hay backend del NAS configurado. Introduce una URL valida arriba para ver el bot real.";
+  }
   if (runtimeMode === "public-fallback") {
     return apiBase
       ? `Aviso: esta web no esta conectando bien con el backend del NAS (${apiBase}) y esta mostrando un fallback publico.`
@@ -549,6 +578,44 @@ function withCacheBust(url) {
   return `${url}${separator}_t=${Date.now()}`;
 }
 
+function disconnectedSummary() {
+  return {
+    strategy_mode: "btc5m_orderbook",
+    strategy_entry_mode: "arb_micro",
+    strategy_market_title: "backend NAS desconectado",
+    strategy_last_note: "Sin conexion con el backend del NAS",
+    strategy_data_source: "rest-fallback",
+    strategy_feed_connected: 0,
+    strategy_feed_age_ms: 0,
+    strategy_feed_tracked_assets: 0,
+    strategy_price_mode: "",
+    strategy_pair_sum: 0,
+    strategy_edge_pct: 0,
+    strategy_fair_value: 0,
+    strategy_spot_price: 0,
+    strategy_spot_anchor: 0,
+    strategy_window_seconds: 0,
+    strategy_plan_legs: 0,
+    strategy_current_market_total_exposure: 0,
+    strategy_current_market_live_pnl: 0,
+    strategy_resolution_count_today: 0,
+    strategy_resolution_pnl_today: 0,
+    live_cash_balance: 0,
+    live_available_to_trade: 0,
+    live_equity_estimate: 0,
+    live_total_capital: 0,
+    exposure: 0,
+    exposure_mark: 0,
+    open_positions: 0,
+    cumulative_pnl: 0,
+    realized_pnl: 0,
+    unrealized_pnl: 0,
+    pnl_total: 0,
+    pending_signals: 0,
+    live_mode_active: false,
+  };
+}
+
 function loadSavedApiBase() {
   try {
     return (window.localStorage.getItem(API_BASE_STORAGE_KEY) || "").trim();
@@ -571,7 +638,9 @@ function saveApiBase(value) {
 
 function paintSummary(summary, items = lastPositions) {
   lastSummary = summary;
-  if (isPublicRuntime()) {
+  if (isBackendDisconnectedRuntime()) {
+    applyBackendDisconnectedLabels();
+  } else if (isPublicRuntime()) {
     applyPublicModeLabels();
   } else {
     applyLocalModeLabels();
@@ -1105,7 +1174,11 @@ function paintPositions(items) {
   document.getElementById("btcBucketExposure").textContent = fmtUsdPlain(currentExposure, 2);
   document.getElementById("btcBucketPnl").textContent = fmtUsd(currentLivePnl, 2);
 
-  if (isPublicRuntime()) {
+  if (isBackendDisconnectedRuntime()) {
+    document.getElementById("generalBucketCount").textContent = "sin NAS";
+    document.getElementById("generalBucketExposure").textContent = "-";
+    document.getElementById("generalBucketPnl").textContent = "-";
+  } else if (isPublicRuntime()) {
     document.getElementById("generalBucketCount").textContent = "sin NAS";
     document.getElementById("generalBucketExposure").textContent = "-";
     document.getElementById("generalBucketPnl").textContent = "-";
@@ -1195,6 +1268,20 @@ async function refreshAll() {
       paintRiskBlocks({});
       paintExposureDonut(summary || {});
       paintOperationPnl(executions.items || []);
+      paintStrategySetups(summary || {});
+      return;
+    }
+
+    if (isBackendDisconnectedRuntime()) {
+      const summary = disconnectedSummary();
+      paintExecutions([]);
+      paintSummary(summary, []);
+      paintPositions([]);
+      paintSignals([]);
+      paintSelectedWallets([]);
+      paintRiskBlocks({ items: [], hours: 24, blocked_total: 0 });
+      paintExposureDonut(summary || {});
+      paintOperationPnl([]);
       paintStrategySetups(summary || {});
       return;
     }
@@ -1309,15 +1396,15 @@ document.getElementById("apiBaseBtn").addEventListener("click", async () => {
     document.getElementById("resetBtn").disabled = false;
     document.getElementById("resetBtn").title = "";
   } catch (error) {
-    runtimeMode = apiBase ? "public-fallback" : "public";
+    runtimeMode = apiBase ? "backend-unreachable" : "backend-unreachable";
     document.querySelector(".kicker").textContent =
-      runtimeMode === "public-fallback" ? "Proyecto principal (Public API Fallback)" : "Proyecto principal (Public API)";
+      "Proyecto principal (Backend NAS desconectado)";
     document.getElementById("runtimeBadge").textContent = modeLabel();
     document.getElementById("resetBtn").disabled = true;
     document.getElementById("resetBtn").title = "Solo disponible cuando el dashboard esta conectado al backend local";
     document.getElementById("lastUpdated").textContent = apiBase
-      ? `No conecta con ${apiBase}: ${error.message}. Se mantiene fallback publico.`
-      : "Backend API borrado. Usando solo fallback publico.";
+      ? `No conecta con ${apiBase}: ${error.message}. La web queda en modo backend desconectado.`
+      : "Backend API borrado. La web queda en modo backend desconectado.";
   }
   await refreshAll();
 });
@@ -1369,19 +1456,17 @@ async function bootstrap() {
     await getJson(withCacheBust(buildApiUrl("/api/health")));
     runtimeMode = "local";
   } catch (error) {
-    runtimeMode = apiBase ? "public-fallback" : "public";
+    runtimeMode = "backend-unreachable";
     if (apiBase) {
       document.getElementById("lastUpdated").textContent =
-        `No conecta con API local (${apiBase}): ${error.message}. Mostrando fallback publico.`;
+        `No conecta con el backend del NAS (${apiBase}): ${error.message}.`;
     }
   }
 
   document.querySelector(".kicker").textContent =
     runtimeMode === "local"
       ? "Proyecto principal (Local DB)"
-      : runtimeMode === "public-fallback"
-      ? "Proyecto principal (Public API Fallback)"
-      : "Proyecto principal (Public API)";
+      : "Proyecto principal (Backend NAS desconectado)";
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const resetBtn = document.getElementById("resetBtn");
   if (runtimeMode !== "local") {
