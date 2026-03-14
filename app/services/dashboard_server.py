@@ -15,6 +15,10 @@ _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
 
 
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
+
+
 def run_dashboard_server(
     db_path: Path,
     static_dir: Path,
@@ -31,7 +35,7 @@ def run_dashboard_server(
         execution_mode=execution_mode,
         live_trading_enabled=live_trading_enabled,
     )
-    server = ThreadingHTTPServer((host, port), handler_class)
+    server = ReusableThreadingHTTPServer((host, port), handler_class)
     print(f"dashboard => http://{host}:{port}")
     server.serve_forever()
 
