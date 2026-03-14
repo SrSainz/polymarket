@@ -2032,6 +2032,90 @@ def test_arb_micro_reduces_new_cycle_budget_when_previous_window_carry_exists(tm
     db.close()
 
 
+def test_arb_micro_does_not_keep_buying_same_cheap_side_when_bracket_is_far_off_target(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-1773529920"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=170)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Wrong Cheap Side",
+        "slug": slug,
+        "conditionId": "cond-arb-wrong-cheap-side",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.16"}],
+                "asks": [{"price": "0.18", "size": "400"}, {"price": "0.19", "size": "400"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.82"}],
+                "asks": [{"price": "0.84", "size": "400"}, {"price": "0.85", "size": "400"}],
+            },
+        },
+        balance=1000.0,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70942.58,
+            lead_price=70942.58,
+            binance_price=70942.58,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=8,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-wrong-cheap-side"),
+        spot_feed=spot_feed,
+    )
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "71017.17000000")
+    seeded = service.paper_broker.execute(
+        CopyInstruction(
+            action=SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset="asset-up",
+            condition_id=market["conditionId"],
+            size=111.1111,
+            price=0.18,
+            notional=19.999998,
+            source_wallet="strategy:test-seed",
+            source_signal_id=0,
+            title=market["question"],
+            slug=slug,
+            outcome="Up",
+            category="crypto",
+            reason="test-seed",
+        )
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert seeded.status == "filled"
+    assert stats["filled"] == 0
+    positions = db.list_copy_positions()
+    assert {str(row["outcome"]) for row in positions} == {"Up"}
+    assert "no locked edge" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
 def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

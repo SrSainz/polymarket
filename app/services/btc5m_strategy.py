@@ -1904,6 +1904,12 @@ class BTC5mStrategyService:
                 edge_source=edge_source_down,
             )
 
+        wrong_side_block_gap = max(_ARB_REBALANCE_RATIO_TRIGGER * 2.0, 0.12)
+        if desired_up_ratio > current_up_ratio + wrong_side_block_gap:
+            return None
+        if desired_up_ratio < current_up_ratio - wrong_side_block_gap:
+            return None
+
         if (
             up_net_edge >= down_net_edge
             and up_net_edge >= required_net_edge
