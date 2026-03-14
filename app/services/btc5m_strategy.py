@@ -210,6 +210,15 @@ class ArbSpotContext:
     chainlink_price: float | None
 
 
+@dataclass(frozen=True)
+class ArbCarryState:
+    total_open_windows: int
+    active_open_windows: int
+    previous_open_windows: int
+    carry_exposure: float
+    current_market_exposure: float
+
+
 class BTC5mStrategyService:
     def __init__(
         self,
@@ -482,9 +491,16 @@ class BTC5mStrategyService:
             )
 
         current_condition_id = str(market.get("conditionId") or "")
-        open_condition_ids = self._get_open_btc5m_condition_ids()
-        if current_condition_id not in open_condition_ids and len(open_condition_ids) >= self.settings.config.strategy_max_open_positions:
-            note = "arb_micro open market limit reached"
+        carry_state = self._arb_carry_state(
+            current_condition_id=current_condition_id,
+            current_market_start_ts=self._btc5m_market_start_ts(market),
+        )
+        if (
+            current_condition_id
+            and carry_state.current_market_exposure <= 0
+            and carry_state.active_open_windows >= self.settings.config.strategy_max_open_positions
+        ):
+            note = "arb_micro concurrent market limit reached"
             stats["blocked"] += 1
             self._record_strategy_snapshot(
                 market=market,
@@ -492,7 +508,7 @@ class BTC5mStrategyService:
                 extra_state=self._arb_state_defaults(
                     market=market,
                     seconds_into_window=self._seconds_into_window(market),
-                    strategy_current_market_exposure=f"{self._get_condition_exposure(current_condition_id):.6f}",
+                    strategy_current_market_exposure=f"{carry_state.current_market_exposure:.6f}",
                     strategy_window_seconds=str(self._seconds_into_window(market)),
                 ),
             )
@@ -511,6 +527,8 @@ class BTC5mStrategyService:
             cash_balance=cash_balance,
             effective_bankroll=live_total_capital,
             current_total_exposure=total_exposure,
+            carry_exposure=carry_state.carry_exposure,
+            carry_window_count=carry_state.previous_open_windows,
         )
         if plan is None:
             stats["skipped"] += 1
@@ -1075,6 +1093,8 @@ class BTC5mStrategyService:
         cash_balance: float,
         effective_bankroll: float,
         current_total_exposure: float,
+        carry_exposure: float = 0.0,
+        carry_window_count: int = 0,
     ) -> StrategyPlan | None:
         outcomes = _parse_json_list(market.get("outcomes"))
         token_ids = _parse_json_list(market.get("clobTokenIds"))
@@ -1184,12 +1204,17 @@ class BTC5mStrategyService:
             current_up_ratio=current_up_ratio,
             desired_up_ratio=desired_up_ratio,
         )
+        carry_note = self._arb_carry_note(
+            carry_exposure=carry_exposure,
+            carry_window_count=carry_window_count,
+        )
 
         cycle_budget = self._target_arb_cycle_budget(
             cash_balance=cash_balance,
             effective_bankroll=effective_bankroll,
             current_total_exposure=current_total_exposure,
             timing_regime=timing_regime,
+            carry_exposure=carry_exposure,
         )
         cycle_budget = min(
             cycle_budget,
@@ -1203,6 +1228,7 @@ class BTC5mStrategyService:
             pair_sum=pair_sum,
             delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
             ratio_gap=abs(desired_up_ratio - current_up_ratio),
+            carry_exposure=carry_exposure,
         )
         if cycle_budget < self._arb_min_notional():
             self._record_strategy_snapshot(
@@ -1253,6 +1279,7 @@ class BTC5mStrategyService:
             pair_net_edge=pair_net_edge,
             delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
             ratio_gap=abs(desired_up_ratio - current_up_ratio),
+            carry_exposure=carry_exposure,
         )
         remaining_instruction_capacity = self._arb_dynamic_instruction_capacity(
             cycle_budget=cycle_budget,
@@ -1260,6 +1287,7 @@ class BTC5mStrategyService:
             pair_sum=pair_sum,
             delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
             ratio_gap=abs(desired_up_ratio - current_up_ratio),
+            carry_exposure=carry_exposure,
         )
         if window_state is not None:
             last_trade_at = int(window_state["last_trade_at"] or 0)
@@ -1271,6 +1299,7 @@ class BTC5mStrategyService:
                     pair_net_edge=pair_net_edge,
                     delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
                     ratio_gap=abs(desired_up_ratio - current_up_ratio),
+                    carry_exposure=carry_exposure,
                 )
                 if seconds_since_last_trade < dynamic_cooldown:
                     self._record_strategy_snapshot(
@@ -1432,7 +1461,7 @@ class BTC5mStrategyService:
                         bias_note += f" | delta {spot_context.delta_bps:+.1f}bps"
                     note = (
                         f"underround {pair_levels[0].pair_sum:.3f} | net {captured_edge_pct * 100:.2f}% | "
-                        f"{timing_regime} | niveles {len(pair_levels)} | patas {len(instructions)}{bias_note}"
+                        f"{timing_regime} | niveles {len(pair_levels)} | patas {len(instructions)}{bias_note}{carry_note}"
                     )
                     return StrategyPlan(
                         instructions=tuple(instructions),
@@ -1489,6 +1518,7 @@ class BTC5mStrategyService:
             current_down_notional=current_down_notional,
             spot_context=spot_context,
             bracket_phase=bracket_phase,
+            carry_note=carry_note,
         )
         if bracket_plan is not None:
             return bracket_plan
@@ -1555,7 +1585,7 @@ class BTC5mStrategyService:
                         f"delta {spot_context.delta_bps:+.1f}bps | "
                         f"{edge_source} | {timing_regime} | niveles {len(single_levels)} | "
                         f"compras {len(instructions)} | objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
-                        f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | fase {bracket_phase}"
+                        f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | fase {bracket_phase}{carry_note}"
                     )
                     return StrategyPlan(
                         instructions=tuple(instructions),
@@ -1598,7 +1628,7 @@ class BTC5mStrategyService:
                 f"Down edge {edge_down * 100:.2f}% net {self._arb_estimated_single_side_net_edge(target=down_outcome, fair_value=fair_down, pair_sum=pair_sum, delta_bps=spot_context.delta_bps if spot_context is not None else 0.0) * 100:.2f}% | "
                 f"{delta_note.lstrip()}"
                 f"{' | ' if delta_note else ''}objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
-                f"actual {self._arb_ratio_label(up_ratio=current_up_ratio, down_ratio=max(1.0 - current_up_ratio, 0.0))} | fase {bracket_phase}"
+                f"actual {self._arb_ratio_label(up_ratio=current_up_ratio, down_ratio=max(1.0 - current_up_ratio, 0.0))} | fase {bracket_phase}{carry_note}"
             ),
             extra_state=self._arb_state_defaults(
                 market=market,
@@ -1649,6 +1679,7 @@ class BTC5mStrategyService:
         effective_bankroll: float,
         current_total_exposure: float,
         timing_regime: str,
+        carry_exposure: float = 0.0,
     ) -> float:
         if self.settings.config.strategy_fixed_trade_amount > 0:
             desired = self.settings.config.strategy_fixed_trade_amount
@@ -1661,6 +1692,9 @@ class BTC5mStrategyService:
 
         if current_total_exposure > 0:
             desired *= 0.95
+        if carry_exposure > 0 and effective_bankroll > 0:
+            carry_ratio = min(carry_exposure / effective_bankroll, 0.25)
+            desired *= max(0.45, 1.0 - (carry_ratio * 2.2))
 
         min_pair_budget = self._arb_min_notional() * 2
         desired = max(desired, min_pair_budget)
@@ -2109,6 +2143,7 @@ class BTC5mStrategyService:
         pair_net_edge: float,
         delta_bps: float,
         ratio_gap: float,
+        carry_exposure: float = 0.0,
     ) -> float:
         scale = 1.0
         if timing_regime == "mid-late":
@@ -2133,6 +2168,9 @@ class BTC5mStrategyService:
             scale *= 1.12
         elif ratio_gap >= 0.06:
             scale *= 1.06
+        if carry_exposure > 0:
+            carry_ratio = min(carry_exposure / max(base_budget + carry_exposure, 1e-9), 0.80)
+            scale *= max(0.40, 1.0 - (carry_ratio * 1.05))
 
         desired = _round_down(min(base_budget * scale, max_budget), "0.01")
         min_pair_budget = self._arb_min_notional() * 2
@@ -2148,6 +2186,7 @@ class BTC5mStrategyService:
         pair_net_edge: float,
         delta_bps: float,
         ratio_gap: float,
+        carry_exposure: float = 0.0,
     ) -> float:
         cooldown = 1.5 if timing_regime == "mid-late" else 2.0
         if pair_net_edge >= 0.020:
@@ -2164,6 +2203,9 @@ class BTC5mStrategyService:
             cooldown -= 0.1
         if ratio_gap >= 0.10:
             cooldown -= 0.2
+        if carry_exposure > 0:
+            carry_ratio = min(carry_exposure / max(carry_exposure + 20.0, 1.0), 0.75)
+            cooldown += min(carry_ratio * 0.9, 0.5)
         return min(max(cooldown, _ARB_BURST_COOLDOWN_MIN_SECONDS), _ARB_BURST_COOLDOWN_MAX_SECONDS)
 
     def _arb_dynamic_instruction_capacity(
@@ -2174,6 +2216,7 @@ class BTC5mStrategyService:
         pair_sum: float,
         delta_bps: float,
         ratio_gap: float,
+        carry_exposure: float = 0.0,
     ) -> int:
         capacity = 18 if timing_regime == "mid-late" else 14
         if cycle_budget >= 25:
@@ -2194,6 +2237,9 @@ class BTC5mStrategyService:
             capacity += 8
         elif ratio_gap >= 0.06:
             capacity += 4
+        if carry_exposure > 0:
+            carry_ratio = min(carry_exposure / max(cycle_budget + carry_exposure, 1e-9), 0.80)
+            capacity = int(round(capacity * max(0.45, 1.0 - (carry_ratio * 0.70))))
         return int(min(max(capacity, 8), _ARB_MAX_PLAN_INSTRUCTIONS))
 
     def _arb_pair_tranche_targets(
@@ -2295,6 +2341,7 @@ class BTC5mStrategyService:
         current_down_notional: float,
         spot_context: ArbSpotContext | None,
         bracket_phase: str,
+        carry_note: str = "",
     ) -> StrategyPlan | None:
         if pair_sum > _ARB_BIASED_BRACKET_SUM_MAX:
             return None
@@ -2438,7 +2485,7 @@ class BTC5mStrategyService:
             f"biased bracket {pair_sum:.3f} | net {pair_net_edge * 100:.2f}% | "
             f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=max(1.0 - desired_up_ratio, 0.0))} | "
             f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
-            f"fase {bracket_phase}"
+            f"fase {bracket_phase}{carry_note}"
         )
         if spot_context is not None:
             note += f" | delta {spot_context.delta_bps:+.1f}bps"
@@ -3208,6 +3255,68 @@ class BTC5mStrategyService:
                 condition_ids.add(condition_id)
         return condition_ids
 
+    def _btc5m_slug_start_ts(self, slug: str) -> int:
+        if not slug.startswith("btc-updown-5m-"):
+            return 0
+        try:
+            return int(slug.rsplit("-", 1)[-1])
+        except ValueError:
+            return 0
+
+    def _btc5m_market_start_ts(self, market: dict) -> int:
+        start_ts = _to_timestamp(
+            str((market.get("events") or [{}])[0].get("startTime") or market.get("eventStartTime") or "")
+        )
+        if start_ts > 0:
+            return start_ts
+        return self._btc5m_slug_start_ts(str(market.get("slug") or ""))
+
+    def _arb_carry_state(self, *, current_condition_id: str, current_market_start_ts: int) -> ArbCarryState:
+        open_condition_ids: set[str] = set()
+        active_condition_ids: set[str] = set()
+        previous_condition_ids: set[str] = set()
+        carry_exposure = 0.0
+        current_market_exposure = 0.0
+
+        for row in self.db.list_copy_positions():
+            slug = str(row["slug"] or "")
+            if "btc-updown-5m-" not in slug:
+                continue
+            size = float(row["size"] or 0.0)
+            avg_price = float(row["avg_price"] or 0.0)
+            if size <= 0:
+                continue
+
+            condition_id = str(row["condition_id"] or "")
+            if condition_id:
+                open_condition_ids.add(condition_id)
+
+            exposure = abs(size * avg_price) if avg_price > 0 else 0.0
+            if condition_id == current_condition_id:
+                current_market_exposure += exposure
+                if condition_id:
+                    active_condition_ids.add(condition_id)
+                continue
+
+            row_start_ts = self._btc5m_slug_start_ts(slug)
+            is_previous_window = current_market_start_ts > 0 and row_start_ts > 0 and row_start_ts < current_market_start_ts
+            if is_previous_window:
+                carry_exposure += exposure
+                if condition_id:
+                    previous_condition_ids.add(condition_id)
+                continue
+
+            if condition_id:
+                active_condition_ids.add(condition_id)
+
+        return ArbCarryState(
+            total_open_windows=len(open_condition_ids),
+            active_open_windows=len(active_condition_ids),
+            previous_open_windows=len(previous_condition_ids),
+            carry_exposure=carry_exposure,
+            current_market_exposure=current_market_exposure,
+        )
+
     def _get_condition_exposure(self, condition_id: str) -> float:
         exposure = 0.0
         for row in self.db.list_copy_positions():
@@ -3219,6 +3328,12 @@ class BTC5mStrategyService:
                 continue
             exposure += abs(size * avg_price)
         return exposure
+
+    def _arb_carry_note(self, *, carry_exposure: float, carry_window_count: int) -> str:
+        if carry_exposure <= 0 or carry_window_count <= 0:
+            return ""
+        window_label = "ventana" if carry_window_count == 1 else "ventanas"
+        return f" | carry previo {carry_exposure:.2f} en {carry_window_count} {window_label}"
 
     def _seconds_into_window(self, market: dict) -> int:
         start_ts = _to_timestamp(str((market.get("events") or [{}])[0].get("startTime") or market.get("eventStartTime") or ""))

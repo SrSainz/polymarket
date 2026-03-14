@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from app.core.paper_broker import PaperBroker
 from app.db import Database
-from app.models import ExecutionResult, SignalAction
+from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.spot_feed import SpotSnapshot
 from app.services.btc5m_strategy import BTC5mStrategyService
 from app.settings import AppPaths, AppSettings, BotConfig, EnvSettings
@@ -1863,6 +1863,172 @@ def test_arb_micro_does_not_stop_only_because_window_already_has_many_fills(tmp_
     row = db.get_strategy_window(market["slug"])
     assert row is not None
     assert int(row["filled_orders"] or 0) > 24
+    db.close()
+
+
+def test_arb_micro_keeps_trading_new_window_when_old_window_is_still_open(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    now = datetime.now(timezone.utc)
+    current_start = now - timedelta(seconds=50)
+    old_slug = f"btc-updown-5m-{int((current_start - timedelta(seconds=300)).timestamp())}"
+    current_slug = f"btc-updown-5m-{int(current_start.timestamp())}"
+    current_market = {
+        "question": "Bitcoin Up or Down - Current Window",
+        "slug": current_slug,
+        "conditionId": "cond-arb-current-window",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up-current\", \"asset-down-current\"]",
+        "events": [{"startTime": current_start.isoformat().replace("+00:00", "Z")}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up-old": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "300"}],
+            },
+            "asset-down-old": {
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.55", "size": "300"}],
+            },
+            "asset-up-current": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "300"}],
+            },
+            "asset-down-current": {
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.55", "size": "300"}],
+            },
+        },
+        balance=1000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(
+            {
+                old_slug: {
+                    "question": "Bitcoin Up or Down - Previous Window",
+                    "slug": old_slug,
+                    "conditionId": "cond-arb-old-window",
+                    "closed": False,
+                    "acceptingOrders": True,
+                    "outcomes": "[\"Up\", \"Down\"]",
+                    "clobTokenIds": "[\"asset-up-old\", \"asset-down-old\"]",
+                    "events": [{"startTime": (current_start - timedelta(seconds=300)).isoformat().replace("+00:00", "Z")}],
+                },
+                current_slug: current_market,
+            }
+        ),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=1000.0,
+            strategy_trade_allocation_pct=0.10,
+            strategy_max_open_positions=1,
+        ),
+        logger=logging.getLogger("test-btc5m-arb-window-carry"),
+    )
+    seed = service.paper_broker.execute(
+        CopyInstruction(
+            action=SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset="asset-down-old",
+            condition_id="cond-arb-old-window",
+            size=90.0,
+            price=0.55,
+            notional=49.5,
+            source_wallet="strategy:test-seed",
+            source_signal_id=0,
+            title="Previous Window Carry",
+            slug=old_slug,
+            outcome="Down",
+            category="crypto",
+            reason="test-seed",
+        )
+    )
+    service._discover_market = lambda: current_market  # type: ignore[method-assign]
+    second = service.run(mode="paper")
+
+    assert seed.status == "filled"
+    assert second["filled"] > 0
+    positions = db.list_copy_positions()
+    assert {str(row["condition_id"]) for row in positions} == {
+        "cond-arb-old-window",
+        "cond-arb-current-window",
+    }
+    assert "concurrent market limit reached" not in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_reduces_new_cycle_budget_when_previous_window_carry_exists(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=55)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Carry Budget",
+        "slug": "btc-updown-5m-1773527700",
+        "conditionId": "cond-arb-carry-budget",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "300"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.55", "size": "300"}],
+            },
+        },
+        balance=1000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-carry-budget"),
+    )
+
+    base_plan = service._build_arb_micro_plan(  # noqa: SLF001
+        market=market,
+        cash_balance=1000.0,
+        effective_bankroll=1000.0,
+        current_total_exposure=0.0,
+        carry_exposure=0.0,
+        carry_window_count=0,
+    )
+    carry_plan = service._build_arb_micro_plan(  # noqa: SLF001
+        market=market,
+        cash_balance=1000.0,
+        effective_bankroll=1000.0,
+        current_total_exposure=60.0,
+        carry_exposure=60.0,
+        carry_window_count=1,
+    )
+
+    assert base_plan is not None
+    assert carry_plan is not None
+    assert carry_plan.cycle_budget < base_plan.cycle_budget
+    assert len(carry_plan.instructions) <= len(base_plan.instructions)
+    assert "carry previo" in carry_plan.note
     db.close()
 
 

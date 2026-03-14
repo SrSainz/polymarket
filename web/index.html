@@ -13,58 +13,74 @@
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
-    <div class="bg-shape shape-a"></div>
-    <div class="bg-shape shape-b"></div>
+    <div class="page-glow glow-a"></div>
+    <div class="page-glow glow-b"></div>
+    <div class="page-glow glow-c"></div>
 
     <div class="app-shell">
       <header class="topbar shell-card">
         <div class="brand">
-          <p class="kicker">Proyecto principal</p>
-          <h1>Laboratorio BTC 5m</h1>
+          <div class="brand-heading">
+            <p class="kicker">Polysainz lab</p>
+            <h1>Laboratorio BTC 5m</h1>
+          </div>
           <div class="brand-meta">
             <span id="runtimeBadge" class="soft-badge">Local DB</span>
             <span id="tradingBadge" class="soft-badge accent-badge">PAPER</span>
-            <span id="strategyBadge" class="soft-badge accent-badge">BTC 5m 50% / General 50%</span>
-            <span id="headerTimestamp" class="topbar-note">sincronizando</span>
+            <span id="strategyBadge" class="soft-badge accent-badge">BTC 5m</span>
           </div>
+          <p id="headerTimestamp" class="topbar-note">sincronizando</p>
         </div>
-        <div class="toolbar">
-          <div class="toolbar-field toolbar-field-wide">
-            <label class="refresh-label" for="apiBaseInput">Backend API</label>
-            <input id="apiBaseInput" type="text" placeholder="https://tu-backend/api" />
+
+        <details class="control-drawer" open>
+          <summary>
+            <span>Conexión y refresco</span>
+            <span class="badge">ajustes</span>
+          </summary>
+          <div class="control-grid">
+            <label class="toolbar-field toolbar-field-wide" for="apiBaseInput">
+              <span class="refresh-label">Backend API</span>
+              <input id="apiBaseInput" type="text" placeholder="https://nas.polysainz.com" />
+            </label>
+            <label class="toolbar-field" for="refreshSeconds">
+              <span class="refresh-label">Auto-refresh (s)</span>
+              <input id="refreshSeconds" type="number" min="3" max="300" value="10" />
+            </label>
+            <div class="toolbar-actions">
+              <button id="apiBaseBtn" type="button" class="secondary-btn">Guardar API</button>
+              <button id="refreshBtn" type="button">Refrescar</button>
+              <button id="resetBtn" type="button" class="danger-btn">Limpiar y reiniciar</button>
+            </div>
           </div>
-          <div class="toolbar-field">
-            <label class="refresh-label" for="refreshSeconds">Auto-refresh (s)</label>
-            <input id="refreshSeconds" type="number" min="3" max="300" value="10" />
-          </div>
-          <button id="apiBaseBtn" type="button" class="secondary-btn">Guardar API</button>
-          <button id="refreshBtn" type="button">Refrescar</button>
-          <button id="resetBtn" type="button" class="danger-btn">Limpiar y reiniciar</button>
-        </div>
+        </details>
       </header>
 
       <main class="layout">
         <section class="hero panel panel-hero" id="overviewSection">
-          <div class="hero-copy">
-            <p class="hero-kicker">Modo teorico</p>
+          <div class="hero-main">
+            <p class="hero-kicker">Estado del sistema</p>
             <h2 class="hero-title" id="strategyHeroTitle">Seguimiento simple del mercado actual de Bitcoin en Polymarket.</h2>
             <p id="systemNotice" class="hero-text">
-              Aqui veremos cuanto dinero lleva metido el laboratorio, como va repartido entre subida y bajada y cuanto gana o pierde al cerrarse cada ventana.
+              Aquí veremos si el bot está sincronizado con el NAS, cuánto dinero tiene metido y si la ventana actual se está operando con criterio.
             </p>
+
+            <div class="hero-inline-stats">
+              <article class="hero-inline-card">
+                <span class="hero-stat-label" id="heroTargetLabel">Compra actual</span>
+                <strong id="heroTargetOutcome">-</strong>
+              </article>
+              <article class="hero-inline-card">
+                <span class="hero-stat-label" id="heroTriggerLabel">Ventana actual</span>
+                <strong id="heroTriggerSeen">-</strong>
+              </article>
+            </div>
           </div>
+
           <div class="hero-side">
-            <article class="hero-stat">
+            <article class="hero-stat hero-stat-accent">
               <span id="heroCashLabel" class="hero-stat-label">Caja disponible ahora</span>
               <strong id="heroCashBalance">-</strong>
               <small id="heroCashMeta" class="hero-stat-meta">capital total -</small>
-            </article>
-            <article class="hero-stat">
-              <span id="heroTargetLabel" class="hero-stat-label">Compra actual</span>
-              <strong id="heroTargetOutcome">-</strong>
-            </article>
-            <article class="hero-stat">
-              <span id="heroTriggerLabel" class="hero-stat-label">Momento de esta ventana</span>
-              <strong id="heroTriggerSeen">-</strong>
             </article>
             <article class="hero-stat">
               <span id="heroFeedLabel" class="hero-stat-label">Fuente y edge</span>
@@ -78,14 +94,19 @@
           <a href="#overviewSection" class="section-link">Resumen</a>
           <a href="#strategySection" class="section-link">Mercado</a>
           <a href="#positionsSection" class="section-link">Posiciones</a>
-          <a href="#activitySection" class="section-link">Resultados</a>
+          <a href="#deepDiveSection" class="section-link">Detalle</a>
         </nav>
 
         <section class="cards">
-          <article class="card accent">
-            <p class="card-label" id="openPositionsLabel">Patas abiertas en esta ventana</p>
-            <p class="card-value" id="openPositions">-</p>
-            <p class="card-subvalue" id="openPositionsMeta">totales simulador -</p>
+          <article class="card card-primary accent">
+            <p class="card-label" id="strategyModeLabel">Estado ahora</p>
+            <p class="card-value" id="strategyModeCard">-</p>
+            <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
+          </article>
+          <article class="card card-primary">
+            <p class="card-label" id="liveCashLabel">Capital total del simulador</p>
+            <p class="card-value" id="liveCashBalance">-</p>
+            <p class="card-subvalue" id="liveCashMeta">disponible -</p>
           </article>
           <article class="card">
             <p class="card-label" id="exposureLabel">Dinero metido en esta ventana</p>
@@ -93,31 +114,29 @@
             <p class="card-subvalue" id="exposureMark">total simulador -</p>
           </article>
           <article class="card">
-            <p id="pnlLabel" class="card-label">Ganancia / perdida total simulador</p>
+            <p id="pnlLabel" class="card-label">Ganancia / pérdida total simulador</p>
             <p class="card-value" id="pnl">-</p>
             <p class="card-subvalue" id="pnlBreakdown">cerrado - / en vivo -</p>
           </article>
-          <article class="card">
-            <p id="liveCashLabel" class="card-label">Capital total del simulador</p>
-            <p class="card-value" id="liveCashBalance">-</p>
-            <p class="card-subvalue" id="liveCashMeta">disponible -</p>
+          <article class="card card-compact">
+            <p class="card-label" id="openPositionsLabel">Patas abiertas en esta ventana</p>
+            <p class="card-value" id="openPositions">-</p>
+            <p class="card-subvalue" id="openPositionsMeta">totales simulador -</p>
           </article>
-          <article class="card">
+          <article class="card card-compact">
             <p id="pendingSignalsLabel" class="card-label">Compras previstas en esta ventana</p>
             <p class="card-value" id="pendingSignals">-</p>
             <p class="card-subvalue">intentos de la ventana actual</p>
-          </article>
-          <article class="card">
-            <p id="strategyModeLabel" class="card-label">Estado ahora</p>
-            <p class="card-value" id="strategyModeCard">-</p>
-            <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
           </article>
         </section>
 
         <section class="strategy-grid" id="strategySection">
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Mercado en juego</h2>
+              <div>
+                <h2>Mercado en juego</h2>
+                <p class="panel-copy">La foto útil para saber si el NAS está leyendo la misma ventana que tú.</p>
+              </div>
             </div>
             <div class="allocation-bars">
               <div class="allocation-row">
@@ -152,7 +171,7 @@
                 <strong id="labSpotFair">-</strong>
               </div>
               <div class="allocation-row">
-                <span>Edge bruto</span>
+                <span>Edge visible</span>
                 <strong id="labEdgeValue">-</strong>
               </div>
               <div class="progress">
@@ -164,7 +183,10 @@
 
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Que esta comprando ahora</h2>
+              <div>
+                <h2>Reparto actual</h2>
+                <p class="panel-copy">Qué está comprando el bracket y cómo está distribuido.</p>
+              </div>
               <span id="selectedWalletsCount" class="badge">0</span>
             </div>
             <ul id="selectedWalletsList" class="mini-list"></ul>
@@ -173,11 +195,14 @@
 
           <article class="panel strategy-card">
             <div class="panel-head panel-head-tight">
-              <h2>Ventanas cerradas</h2>
+              <div>
+                <h2>Ventanas cerradas</h2>
+                <p class="panel-copy">Para ver si el motor convierte ventanas en resultado y no solo en actividad.</p>
+              </div>
               <span id="riskBlocksCount" class="badge">0</span>
             </div>
             <ul id="riskBlocksList" class="mini-list"></ul>
-            <p id="riskBlocksMeta" class="mini-meta">sin ventanas cerradas aun</p>
+            <p id="riskBlocksMeta" class="mini-meta">sin ventanas cerradas aún</p>
           </article>
         </section>
 
@@ -185,14 +210,14 @@
           <article class="panel bucket-summary bucket-summary-btc">
             <div class="panel-head panel-head-tight">
               <div>
-                <h2>Mercado actual</h2>
-                <p class="panel-copy">Lo que sigue abierto dentro de la ventana actual.</p>
+                <h2>Ventana viva</h2>
+                <p class="panel-copy">Lo que sigue abierto ahora mismo dentro del bracket principal.</p>
               </div>
               <span id="btcBucketCount" class="badge">0 pos.</span>
             </div>
             <div class="bucket-stats">
               <div class="bucket-stat">
-                <span>Exposicion</span>
+                <span>Exposición</span>
                 <strong id="btcBucketExposure">-</strong>
               </div>
               <div class="bucket-stat">
@@ -205,164 +230,176 @@
           <article class="panel bucket-summary bucket-summary-core">
             <div class="panel-head panel-head-tight">
               <div>
-                <h2>Resoluciones</h2>
-                <p class="panel-copy">Resultado final de las ventanas ya cerradas.</p>
+                <h2>Resoluciones del día</h2>
+                <p class="panel-copy">Resultado acumulado de ventanas que ya terminaron.</p>
               </div>
               <span id="generalBucketCount" class="badge">0 pos.</span>
             </div>
             <div class="bucket-stats">
               <div class="bucket-stat">
-                <span>Exposicion</span>
+                <span>Notional</span>
                 <strong id="generalBucketExposure">-</strong>
               </div>
               <div class="bucket-stat">
-                <span>PnL vivo</span>
+                <span>Resultado</span>
                 <strong id="generalBucketPnl">-</strong>
               </div>
             </div>
           </article>
         </section>
 
-        <section class="mini-panels">
-          <article class="panel">
-            <div class="panel-head panel-head-tight">
-                <h2>Ganado hoy vs perdido hoy</h2>
-            </div>
-            <div class="donut-row">
-              <div id="exposureDonut" class="donut-chart"></div>
-              <ul id="exposureLegend" class="donut-legend"></ul>
-            </div>
-            <p id="exposureDonutMeta" class="mini-meta">sin datos</p>
-          </article>
-
-          <article class="panel" id="activitySection">
-            <div class="panel-head panel-head-tight">
-                <h2>Ultimos resultados</h2>
-              <span id="opsPnlCount" class="badge">0</span>
-            </div>
-            <ul id="opsPnlList" class="mini-list"></ul>
-            <p id="opsPnlMeta" class="mini-meta">ultimas operaciones</p>
-          </article>
-
-          <article class="panel">
-            <div class="panel-head panel-head-tight">
-              <h2>Setups que mejor van</h2>
-              <span id="strategySetupsCount" class="badge">0</span>
-            </div>
-            <ul id="strategySetupsList" class="mini-list"></ul>
-            <p id="strategySetupsMeta" class="mini-meta">sin historial suficiente</p>
-          </article>
-        </section>
-
-        <section class="bucket-grid" id="positionsSection">
-          <article class="panel bucket-panel">
-            <div class="panel-head">
-              <div>
-                <h2 id="positionsCurrentTitle">Patas abiertas</h2>
-                <p id="positionsCurrentCopy" class="panel-copy">Compras que siguen abiertas dentro del mercado actual.</p>
-              </div>
-              <span id="positionsBtcCount" class="badge">0</span>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Mercado</th>
-                    <th>Outcome</th>
-                    <th>Monto</th>
-                    <th>Avg</th>
-                    <th>Mark</th>
-                    <th>PnL vivo</th>
-                    <th>Realized</th>
-                  </tr>
-                </thead>
-                <tbody id="positionsBtcBody"></tbody>
-              </table>
-            </div>
-          </article>
-
-          <article class="panel bucket-panel">
-            <div class="panel-head">
-              <div>
-                <h2 id="positionsArchiveTitle">Otras patas / archivo</h2>
-                <p id="positionsArchiveCopy" class="panel-copy">Operaciones fuera del mercado principal o ya desplazadas.</p>
-              </div>
-              <span id="positionsGeneralCount" class="badge">0</span>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Mercado</th>
-                    <th>Outcome</th>
-                    <th>Monto</th>
-                    <th>Avg</th>
-                    <th>Mark</th>
-                    <th>PnL vivo</th>
-                    <th>Realized</th>
-                  </tr>
-                </thead>
-                <tbody id="positionsGeneralBody"></tbody>
-              </table>
-            </div>
-          </article>
-        </section>
-
-        <details class="panel panel-details" open>
+        <details class="panel panel-details details-drawer" id="deepDiveSection">
           <summary class="panel-head">
             <div>
-              <h2 id="executionsTitle">Ejecuciones recientes</h2>
-              <p id="executionsCopy" class="panel-copy">Todas las compras y cierres que ha ido haciendo el simulador.</p>
+              <h2>Detalle y trazabilidad</h2>
+              <p class="panel-copy">Información ampliada para revisar salud técnica, setups y todas las posiciones.</p>
             </div>
-            <span class="badge">Ultimas 50</span>
+            <span class="badge">ver más</span>
           </summary>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Hora UTC</th>
-                  <th>Accion</th>
-                  <th>Modo</th>
-                  <th>Status</th>
-                  <th>Wallet fuente</th>
-                  <th>Monto USDC</th>
-                  <th>Resultado USD</th>
-                  <th>Notas</th>
-                </tr>
-              </thead>
-              <tbody id="executionsBody"></tbody>
-            </table>
-          </div>
-        </details>
 
-        <details class="panel panel-details">
-          <summary class="panel-head">
-            <div>
-              <h2>Senales</h2>
-              <p class="panel-copy">Registro tecnico interno del motor.</p>
-            </div>
-            <span class="badge">Ultimas 100</span>
-          </summary>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Hora UTC</th>
-                  <th>Mercado</th>
-                  <th>Accion</th>
-                  <th>Delta</th>
-                  <th>Status</th>
-                  <th>Nota</th>
-                </tr>
-              </thead>
-              <tbody id="signalsBody"></tbody>
-            </table>
+          <div class="details-stack">
+            <section class="mini-panels">
+              <article class="panel">
+                <div class="panel-head panel-head-tight">
+                  <h2>Ganado hoy vs perdido hoy</h2>
+                </div>
+                <div class="donut-row">
+                  <div id="exposureDonut" class="donut-chart"></div>
+                  <ul id="exposureLegend" class="donut-legend"></ul>
+                </div>
+                <p id="exposureDonutMeta" class="mini-meta">sin datos</p>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head panel-head-tight">
+                  <h2>Últimos resultados</h2>
+                  <span id="opsPnlCount" class="badge">0</span>
+                </div>
+                <ul id="opsPnlList" class="mini-list"></ul>
+                <p id="opsPnlMeta" class="mini-meta">últimas operaciones</p>
+              </article>
+
+              <article class="panel">
+                <div class="panel-head panel-head-tight">
+                  <h2>Setups que mejor van</h2>
+                  <span id="strategySetupsCount" class="badge">0</span>
+                </div>
+                <ul id="strategySetupsList" class="mini-list"></ul>
+                <p id="strategySetupsMeta" class="mini-meta">sin historial suficiente</p>
+              </article>
+            </section>
+
+            <section class="bucket-grid" id="positionsSection">
+              <article class="panel bucket-panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 id="positionsCurrentTitle">Patas abiertas</h2>
+                    <p id="positionsCurrentCopy" class="panel-copy">Compras que siguen abiertas dentro del mercado actual.</p>
+                  </div>
+                  <span id="positionsBtcCount" class="badge">0</span>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Mercado</th>
+                        <th>Outcome</th>
+                        <th>Monto</th>
+                        <th>Avg</th>
+                        <th>Mark</th>
+                        <th>PnL vivo</th>
+                        <th>Realized</th>
+                      </tr>
+                    </thead>
+                    <tbody id="positionsBtcBody"></tbody>
+                  </table>
+                </div>
+              </article>
+
+              <article class="panel bucket-panel">
+                <div class="panel-head">
+                  <div>
+                    <h2 id="positionsArchiveTitle">Otras patas / archivo</h2>
+                    <p id="positionsArchiveCopy" class="panel-copy">Operaciones fuera del mercado principal o ya desplazadas.</p>
+                  </div>
+                  <span id="positionsGeneralCount" class="badge">0</span>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Mercado</th>
+                        <th>Outcome</th>
+                        <th>Monto</th>
+                        <th>Avg</th>
+                        <th>Mark</th>
+                        <th>PnL vivo</th>
+                        <th>Realized</th>
+                      </tr>
+                    </thead>
+                    <tbody id="positionsGeneralBody"></tbody>
+                  </table>
+                </div>
+              </article>
+            </section>
+
+            <details class="panel panel-details" open>
+              <summary class="panel-head">
+                <div>
+                  <h2 id="executionsTitle">Ejecuciones recientes</h2>
+                  <p id="executionsCopy" class="panel-copy">Todas las compras y cierres que ha ido haciendo el simulador.</p>
+                </div>
+                <span class="badge">últimas 50</span>
+              </summary>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Hora UTC</th>
+                      <th>Acción</th>
+                      <th>Modo</th>
+                      <th>Status</th>
+                      <th>Wallet fuente</th>
+                      <th>Monto USDC</th>
+                      <th>Resultado USD</th>
+                      <th>Notas</th>
+                    </tr>
+                  </thead>
+                  <tbody id="executionsBody"></tbody>
+                </table>
+              </div>
+            </details>
+
+            <details class="panel panel-details">
+              <summary class="panel-head">
+                <div>
+                  <h2>Señales</h2>
+                  <p class="panel-copy">Registro técnico interno del motor.</p>
+                </div>
+                <span class="badge">últimas 100</span>
+              </summary>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Hora UTC</th>
+                      <th>Mercado</th>
+                      <th>Acción</th>
+                      <th>Delta</th>
+                      <th>Status</th>
+                      <th>Nota</th>
+                    </tr>
+                  </thead>
+                  <tbody id="signalsBody"></tbody>
+                </table>
+              </div>
+            </details>
           </div>
         </details>
       </main>
 
       <footer class="footer">
-        <p id="lastUpdated">Ultima actualizacion: -</p>
+        <p id="lastUpdated">Última actualización: -</p>
       </footer>
     </div>
     <script src="/assets/app.js"></script>

@@ -66,6 +66,22 @@ function tsToIso(ts) {
   return date.toISOString().replace(".000Z", "Z");
 }
 
+function isoText(raw) {
+  if (!raw) return "-";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return String(raw);
+  return date.toISOString().replace(".000Z", "Z");
+}
+
+function fmtAgeCompact(seconds) {
+  const safe = Number(seconds);
+  if (Number.isNaN(safe) || safe < 0) return "-";
+  if (safe < 1) return "<1s";
+  if (safe < 60) return `${Math.round(safe)}s`;
+  if (safe < 3600) return `${Math.round(safe / 60)}m`;
+  return `${Math.round(safe / 3600)}h`;
+}
+
 function statusPill(status) {
   const safe = String(status || "").toLowerCase();
   return `<span class="pill ${safe}">${safe || "-"}</span>`;
@@ -230,11 +246,19 @@ function currentEdgeInfo(summary) {
     return { pairSum: null, edgePct: null, fairValue: null, label: "sin edge" };
   }
   const priceMode = String(summary?.strategy_price_mode || "");
+  const label =
+    priceMode === "cheap-side"
+      ? "lado barato"
+      : priceMode === "biased-bracket"
+      ? "bracket sesgado"
+      : priceMode === "underround"
+      ? "underround"
+      : "arbitraje";
   return {
     pairSum: pairSum || null,
     edgePct: storedEdge ? storedEdge * 100 : Math.max((1 - pairSum) * 100, 0),
     fairValue: fairValue || null,
-    label: priceMode === "cheap-side" ? "lado barato" : "arbitraje cerrado",
+    label,
   };
 }
 
@@ -276,6 +300,30 @@ function latestObservedExecution() {
   return Array.isArray(lastExecutions) && lastExecutions.length ? lastExecutions[0] : null;
 }
 
+function snapshotTiming(summary) {
+  const nowMs = Date.now();
+  const backendDate = summary?.timestamp_utc ? new Date(summary.timestamp_utc) : null;
+  const backendMs = backendDate && !Number.isNaN(backendDate.getTime()) ? backendDate.getTime() : 0;
+  const strategyMs = Number(summary?.strategy_last_updated_at || 0) > 0 ? Number(summary.strategy_last_updated_at) * 1000 : 0;
+  const liveBalanceMs = Number(summary?.live_balance_updated_at || 0) > 0 ? Number(summary.live_balance_updated_at) * 1000 : 0;
+  return {
+    backendText: backendMs > 0 ? isoText(summary.timestamp_utc) : new Date().toISOString().replace(".000Z", "Z"),
+    backendAgeSeconds: backendMs > 0 ? Math.max((nowMs - backendMs) / 1000, 0) : 0,
+    strategyAgeSeconds: strategyMs > 0 ? Math.max((nowMs - strategyMs) / 1000, 0) : 0,
+    liveBalanceAgeSeconds: liveBalanceMs > 0 ? Math.max((nowMs - liveBalanceMs) / 1000, 0) : 0,
+  };
+}
+
+function windowTiming(summary) {
+  const elapsed = Math.max(Number(summary?.strategy_window_seconds || 0), 0);
+  const remaining = Math.max(300 - elapsed, 0);
+  return {
+    elapsed,
+    remaining,
+    pct: Math.min((elapsed / 300) * 100, 100),
+  };
+}
+
 function publicLatestActionLabel(item = latestObservedExecution()) {
   const latest = item;
   if (!latest) return "Sin movimientos recientes";
@@ -289,19 +337,19 @@ function publicLatestActionLabel(item = latestObservedExecution()) {
 }
 
 function applyPublicModeLabels() {
-  document.getElementById("heroCashLabel").textContent = "Exposicion publica";
-  document.getElementById("heroTargetLabel").textContent = "Ultimo movimiento";
+  document.getElementById("heroCashLabel").textContent = "Exposición pública";
+  document.getElementById("heroTargetLabel").textContent = "Último movimiento";
   document.getElementById("heroTriggerLabel").textContent = "Actividad visible";
   document.getElementById("heroFeedLabel").textContent = "Fuente";
   document.getElementById("pnlLabel").textContent = "P&L realizado visible";
   document.getElementById("liveCashLabel").textContent = "Datos del simulador";
-  document.getElementById("pendingSignalsLabel").textContent = "Senales del bot";
+  document.getElementById("pendingSignalsLabel").textContent = "Señales del bot";
   document.getElementById("strategyModeLabel").textContent = "Estado de la web";
-  document.getElementById("positionsCurrentTitle").textContent = "Posiciones publicas";
+  document.getElementById("positionsCurrentTitle").textContent = "Posiciones públicas";
   document.getElementById("positionsCurrentCopy").textContent = "Lo que la Data API publica muestra ahora mismo para esta wallet.";
-  document.getElementById("positionsArchiveTitle").textContent = "Sincronizacion del NAS";
+  document.getElementById("positionsArchiveTitle").textContent = "Sincronización del NAS";
   document.getElementById("positionsArchiveCopy").textContent = "Conecta el backend del NAS para separar ventana actual, archivo y simulador.";
-  document.getElementById("executionsTitle").textContent = "Actividad publica reciente";
+  document.getElementById("executionsTitle").textContent = "Actividad pública reciente";
   document.getElementById("executionsCopy").textContent = "Movimientos visibles de la wallet observada, no del simulador del NAS.";
 }
 
@@ -309,8 +357,8 @@ function applyBackendDisconnectedLabels() {
   document.getElementById("heroCashLabel").textContent = "Backend del NAS";
   document.getElementById("heroTargetLabel").textContent = "Estado";
   document.getElementById("heroTriggerLabel").textContent = "Siguiente paso";
-  document.getElementById("heroFeedLabel").textContent = "Conexion";
-  document.getElementById("pnlLabel").textContent = "Ganancia / perdida";
+  document.getElementById("heroFeedLabel").textContent = "Conexión";
+  document.getElementById("pnlLabel").textContent = "Ganancia / pérdida";
   document.getElementById("liveCashLabel").textContent = "Capital del simulador";
   document.getElementById("pendingSignalsLabel").textContent = "Compras previstas en esta ventana";
   document.getElementById("strategyModeLabel").textContent = "Estado ahora";
@@ -323,13 +371,13 @@ function applyBackendDisconnectedLabels() {
 }
 
 function applyLocalModeLabels() {
-  document.getElementById("heroCashLabel").textContent = "Caja disponible ahora";
-  document.getElementById("heroTargetLabel").textContent = "Compra actual";
-  document.getElementById("heroTriggerLabel").textContent = "Momento de esta ventana";
-  document.getElementById("heroFeedLabel").textContent = "Fuente y edge";
-  document.getElementById("pnlLabel").textContent = "Ganancia / perdida total simulador";
+  document.getElementById("heroCashLabel").textContent = "Capital operativo";
+  document.getElementById("heroTargetLabel").textContent = "Reparto actual";
+  document.getElementById("heroTriggerLabel").textContent = "Tiempo de ventana";
+  document.getElementById("heroFeedLabel").textContent = "Salud del feed";
+  document.getElementById("pnlLabel").textContent = "Ganancia / pérdida total";
   document.getElementById("liveCashLabel").textContent = "Capital total del simulador";
-  document.getElementById("pendingSignalsLabel").textContent = "Compras previstas en esta ventana";
+  document.getElementById("pendingSignalsLabel").textContent = "Siguientes compras";
   document.getElementById("strategyModeLabel").textContent = "Estado ahora";
   document.getElementById("positionsCurrentTitle").textContent = "Patas abiertas";
   document.getElementById("positionsCurrentCopy").textContent = "Compras que siguen abiertas dentro del mercado actual.";
@@ -351,16 +399,16 @@ function simplifiedStrategyReason(summary) {
   const note = String(summary?.strategy_last_note || "").trim();
   const noteLower = note.toLowerCase();
   const pairSum = Number(summary?.strategy_pair_sum || 0);
-  const openExposure = Number(summary?.strategy_current_market_total_exposure || 0);
+  const totalExposure = Number(summary?.exposure || summary?.strategy_current_market_total_exposure || 0);
 
   if (!note) return "Esperando a que aparezca un arbitraje con margen real.";
   if (noteLower.includes("drawdown stop")) {
     return "El simulador se ha parado porque supero la perdida maxima permitida.";
   }
-  if (noteLower.includes("open market limit reached")) {
-    return openExposure > 0
-      ? `Ya hay un bracket abierto con ${fmtUsdPlain(openExposure, 2)} metidos y esperamos a que cierre.`
-      : "Ya hay un bracket abierto y no abrimos otro hasta que cierre.";
+  if (noteLower.includes("open market limit reached") || noteLower.includes("concurrent market limit reached")) {
+    return totalExposure > 0
+      ? `Sigue viva la ventana anterior con ${fmtUsdPlain(totalExposure, 2)} expuestos y el bot no mezcla dos brackets a la vez.`
+      : "Hay otra ventana todavía abierta y el bot espera a resolverla antes de abrir la siguiente.";
   }
   if (noteLower.includes("no locked edge")) {
     const strongestEdge = Math.max(Number(summary?.strategy_edge_pct || 0) * 100, 0);
@@ -380,7 +428,7 @@ function simplifiedStrategyReason(summary) {
     return "Ya se alcanzo el maximo de compras permitido para este bracket.";
   }
   if (noteLower.includes("cooldown")) {
-    return "Acabamos de comprar en este bracket y esperamos unos segundos antes de repetir.";
+    return "El motor acaba de ejecutar y se toma una pausa muy corta para no sobrerreaccionar.";
   }
   if (noteLower.includes("no active btc5m market")) {
     return "Todavia no hay un bracket BTC 5m listo para operar.";
@@ -399,7 +447,7 @@ function friendlyWindowState(summary) {
   if (note.includes("drawdown stop")) {
     return { label: "Parado por perdida maxima", detail: simplifiedStrategyReason(summary) };
   }
-  if (note.includes("open market limit reached")) {
+  if (note.includes("open market limit reached") || note.includes("concurrent market limit reached")) {
     return { label: "Bloqueado por bracket abierto", detail: simplifiedStrategyReason(summary) };
   }
   if (openExposure > 0) {
@@ -588,10 +636,12 @@ function withCacheBust(url) {
 
 function disconnectedSummary() {
   return {
+    timestamp_utc: new Date().toISOString(),
     strategy_mode: "btc5m_orderbook",
     strategy_entry_mode: "arb_micro",
     strategy_market_title: "backend NAS desconectado",
     strategy_last_note: "Sin conexion con el backend del NAS",
+    strategy_last_updated_at: 0,
     strategy_data_source: "rest-fallback",
     strategy_feed_connected: 0,
     strategy_feed_age_ms: 0,
@@ -656,6 +706,8 @@ function paintSummary(summary, items = lastPositions) {
   }
   const buckets = splitPositionBuckets(summary, items);
   const windowState = friendlyWindowState(summary);
+  const timingInfo = windowTiming(summary);
+  const snapshotInfo = snapshotTiming(summary);
   const currentWindowExposure = Number(summary.strategy_current_market_total_exposure ?? buckets.currentSummary.exposure ?? 0);
   const totalExposure = Number(summary.exposure ?? buckets.totalExposure ?? 0);
   const totalExposureMark = Number(summary.exposure_mark ?? totalExposure);
@@ -707,13 +759,13 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("liveCashBalance").textContent = isPublicRuntime() ? "-" : fmtUsdPlain(liveEquityEstimate, 2);
   document.getElementById("liveCashMeta").textContent = isPublicRuntime()
     ? "requiere backend del NAS para caja, capital y estado reales"
-    : `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | snapshot ${liveSnapshotText}`;
+    : `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
   document.getElementById("heroCashBalance").textContent = isPublicRuntime()
     ? fmtUsdPlain(totalExposure, 2)
     : fmtUsdPlain(liveAvailableToTrade, 2);
   document.getElementById("heroCashMeta").textContent = isPublicRuntime()
     ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones visibles | wallet ${shortWallet(watchedWallet)}`
-    : `capital total ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)}`;
+    : `capital total ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
@@ -758,7 +810,7 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("strategyCardMeta").textContent = isPublicRuntime()
     ? "Esta web esta leyendo solo posiciones y actividad publicas. Para el estado real del bot, conecta el backend del NAS."
     : isVidarxLab(summary)
-    ? windowState.detail
+    ? `${windowState.detail} Snapshot motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}.`
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
     : strategyNote || strategyTitle;
@@ -768,7 +820,9 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("heroTargetOutcome").textContent = isPublicRuntime()
     ? publicLatestActionLabel()
     : isVidarxLab(summary)
-    ? `${currentWindowDirection(summary)} | objetivo ${desiredRatio}`
+    ? currentMarketExposure > 0
+      ? actualRatio
+      : `Objetivo ${desiredRatio}`
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)}`
     : "-";
@@ -776,7 +830,7 @@ function paintSummary(summary, items = lastPositions) {
     ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones | ${Array.isArray(lastExecutions) ? lastExecutions.length : 0} movimientos`
     : isVidarxLab(summary)
     ? strategyWindowSeconds > 0
-      ? `${timing} | ${strategyWindowSeconds}s | ${strategyPlanLegs} compras | ${bracketPhase}`
+      ? `${timingInfo.elapsed}s transcurridos | restan ${timingInfo.remaining}s | ${bracketPhase}`
       : "-"
     : triggerOutcome
     ? `${triggerOutcome} @ ${fmt(triggerPrice, 3)}`
@@ -787,8 +841,8 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("heroFeedMeta").textContent = isPublicRuntime()
     ? `${runtimeMode === "public-fallback" ? "fallback publico" : "modo publico"} | backend NAS no conectado | wallet ${shortWallet(watchedWallet)}`
     : edgeInfo.pairSum !== null
-      ? `${edgeInfo.label} | pair sum ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.hasCurrent ? ` | BTC ${fmtBtcPrice(spotInfo.current)}` : ""}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ${feedInfo.meta}`
-      : `${spotInfo.hasCurrent ? `BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` vs beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}${spotInfo.available ? ` (${fmt(spotInfo.deltaBps, 1)}bps)` : ""} | ` : ""}${feedInfo.meta} | ${windowState.label.toLowerCase()}`;
+      ? `${feedInfo.meta} | backend ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${edgeInfo.label} ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${spotInfo.available ? ` | ${fmt(spotInfo.deltaBps, 1)}bps` : ""}`
+      : `${feedInfo.meta} | backend ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}${spotInfo.hasCurrent ? ` | BTC ${fmtBtcPrice(spotInfo.current)}` : ""}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
 
@@ -798,9 +852,8 @@ function paintSummary(summary, items = lastPositions) {
       : runtimeMode === "public-fallback"
       ? `public api fallback (${watchedWallet})`
       : `public api mode (${watchedWallet})`;
-  const nowText = new Date().toISOString().replace(".000Z", "Z");
-  document.getElementById("lastUpdated").textContent = `Ultima actualizacion: ${nowText} | ${modeText}`;
-  document.getElementById("headerTimestamp").textContent = nowText;
+  document.getElementById("lastUpdated").textContent = `Última actualización backend ${snapshotInfo.backendText} | snapshot ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | ${modeText}`;
+  document.getElementById("headerTimestamp").textContent = `snapshot backend ${snapshotInfo.backendText} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}`;
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const lastLiveExecution = Number(summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
@@ -809,8 +862,8 @@ function paintSummary(summary, items = lastPositions) {
     ? `Estas viendo solo datos publicos de ${shortWallet(watchedWallet)}: ${summary.open_positions ?? buckets.totalCount ?? 0} posiciones abiertas visibles, ${fmtUsdPlain(totalExposure, 2)} visibles en mercado y P&L realizado visible ${fmtUsd(realized, 2)}. Para la caja, capital y decisiones del bot del NAS necesitas que esta web conecte con su backend real.`
     : isVidarxLab(summary)
     ? currentMarketExposure > 0
-      ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, reparto por acciones ${actualRatio}, fase ${bracketPhase.toLowerCase()}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones totales. En total, el simulador lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
-      : `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, fase ${bracketPhase.toLowerCase()}. El simulador total lleva ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}. Ventanas cerradas hoy ${summary.strategy_resolution_count_today ?? 0}, resultado ${fmtUsd(Number(summary.strategy_resolution_pnl_today || 0), 2)}.`
+      ? `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, reparto real ${actualRatio}, restan ${timingInfo.remaining}s y el snapshot del motor tiene ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones. Total del simulador ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)}.`
+      : `${windowState.label}. ${windowState.detail} Objetivo ${desiredRatio}, restan ${timingInfo.remaining}s y el motor reporta ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} de antigüedad. Total del simulador ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
   document.getElementById("systemNotice").textContent = backendWarning
     ? `${backendWarning} ${strategySummary}`
@@ -836,8 +889,10 @@ function paintLabOverview(summary) {
       `Mostrando solo posiciones y actividad publicas de ${shortWallet(watchedWallet)}. Para BTC actual, price to beat y decisiones del bot necesitas conectar el backend del NAS.`;
     return;
   }
-  const windowSeconds = Math.max(Number(summary.strategy_window_seconds || 0), 0);
-  const windowPct = Math.min((windowSeconds / 300) * 100, 100);
+  const timingInfo = windowTiming(summary);
+  const snapshotInfo = snapshotTiming(summary);
+  const windowSeconds = timingInfo.elapsed;
+  const windowPct = timingInfo.pct;
   const deployed = Math.max(Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0), 0);
   const cycleBudget = Math.max(Number(summary.strategy_cycle_budget || 0), 0);
   const exposurePct = cycleBudget > 0 ? Math.min((deployed / cycleBudget) * 100, 100) : 0;
@@ -864,7 +919,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `ventana ${windowSeconds}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | compras ${summary.strategy_plan_legs || 0} | ${edgeInfo.label} ${edgeInfo.pairSum !== null ? fmt(edgeInfo.pairSum, 3) : "-"} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` | beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` | beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
@@ -1331,6 +1386,7 @@ async function refreshAll() {
 
     const realized = positions.reduce((acc, item) => acc + Number(item.realized_pnl || 0), 0);
     const summary = {
+      timestamp_utc: new Date().toISOString(),
       strategy_entry_mode: "",
       open_positions: positions.length,
       exposure: positions.reduce((acc, item) => acc + item.size * item.avg_price, 0),
