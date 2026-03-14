@@ -55,7 +55,7 @@ _VIDARX_ALLOWED_SETUPS = {
     ("tilted", "early-mid"),
     ("tilted", "mid-late"),
 }
-_ARB_PAIR_SUM_MAX = 0.985
+_ARB_PAIR_SUM_MAX = 0.992
 _ARB_CHEAP_SIDE_SUM_MAX = 1.03
 _ARB_FAIR_VALUE_EDGE_MIN = 0.025
 _ARB_SINGLE_SIDE_BUDGET_FRACTION = 0.035
@@ -87,11 +87,18 @@ _ARB_SPOT_ANCHOR_GRACE_SECONDS = 20
 _ARB_SPOT_ANCHOR_CAPTURE_WINDOW_SECONDS = 2.0
 _ARB_MAX_MARKET_EXPOSURE_FRACTION = 0.05
 _ARB_MAX_TOTAL_EXPOSURE_FRACTION = 0.20
-_ARB_BURST_COOLDOWN_SECONDS = 4.0
-_ARB_MAX_FILLS_PER_WINDOW = 24
 _ARB_CHEAP_SIDE_BASE_PAIR_MAX = 1.02
 _ARB_CHEAP_SIDE_MID_PAIR_MAX = 1.025
 _ARB_CHEAP_SIDE_HIGH_PAIR_MAX = 1.03
+_ARB_PAIR_RELAXED_SUM_MAX = 1.0
+_ARB_BIASED_BRACKET_SUM_MAX = 1.018
+_ARB_BIASED_BRACKET_NET_EDGE_MIN = 0.008
+_ARB_BIASED_BRACKET_HEDGE_TOLERANCE = -0.012
+_ARB_BRACKET_HEDGE_FLOOR_EARLY = 0.18
+_ARB_BRACKET_HEDGE_FLOOR_MID_LATE = 0.12
+_ARB_BURST_COOLDOWN_MIN_SECONDS = 0.8
+_ARB_BURST_COOLDOWN_MAX_SECONDS = 2.6
+_ARB_MAX_PLAN_INSTRUCTIONS = 72
 _MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
@@ -525,7 +532,7 @@ class BTC5mStrategyService:
             extra_state={
                 "strategy_target_outcome": plan.primary_target.label,
                 "strategy_target_price": f"{plan.primary_target.best_ask:.6f}",
-                "strategy_trigger_outcome": "pair_sum" if plan.price_mode == "underround" else f"cheap:{plan.primary_target.label}",
+                "strategy_trigger_outcome": self._arb_trigger_outcome(plan),
                 "strategy_trigger_price_seen": f"{plan.trigger_value:.6f}",
                 "strategy_market_bias": plan.market_bias,
                 "strategy_plan_legs": str(len(plan.instructions)),
@@ -606,7 +613,7 @@ class BTC5mStrategyService:
             extra_state={
                 "strategy_target_outcome": plan.primary_target.label,
                 "strategy_target_price": f"{plan.primary_target.best_ask:.6f}",
-                "strategy_trigger_outcome": "pair_sum" if plan.price_mode == "underround" else f"cheap:{plan.primary_target.label}",
+                "strategy_trigger_outcome": self._arb_trigger_outcome(plan),
                 "strategy_trigger_price_seen": f"{plan.trigger_value:.6f}",
                 "strategy_market_bias": plan.market_bias,
                 "strategy_plan_legs": str(len(plan.instructions)),
@@ -1158,45 +1165,6 @@ class BTC5mStrategyService:
             )
             return None
 
-        filled_orders = 0
-        remaining_instruction_capacity = _ARB_MAX_FILLS_PER_WINDOW
-        if window_state is not None:
-            last_trade_at = int(window_state["last_trade_at"] or 0)
-            if last_trade_at > 0:
-                seconds_since_last_trade = max(time.time() - last_trade_at, 0.0)
-                if seconds_since_last_trade < _ARB_BURST_COOLDOWN_SECONDS:
-                    self._record_strategy_snapshot(
-                        market=market,
-                        note=(
-                            f"arb_micro cooldown: {seconds_since_last_trade:.1f}s < "
-                            f"{_ARB_BURST_COOLDOWN_SECONDS:.1f}s"
-                        ),
-                        extra_state=self._arb_state_defaults(
-                            market=market,
-                            seconds_into_window=seconds_into_window,
-                            strategy_window_seconds=str(seconds_into_window),
-                            strategy_current_market_exposure=f"{existing_market_notional:.6f}",
-                        ),
-                    )
-                    return None
-            filled_orders = int(window_state["filled_orders"] or 0)
-            if filled_orders >= _ARB_MAX_FILLS_PER_WINDOW:
-                self._record_strategy_snapshot(
-                    market=market,
-                        note=(
-                            f"arb_micro max fills window reached: {filled_orders} >= "
-                            f"{_ARB_MAX_FILLS_PER_WINDOW}"
-                        ),
-                        extra_state=self._arb_state_defaults(
-                            market=market,
-                            seconds_into_window=seconds_into_window,
-                            strategy_window_seconds=str(seconds_into_window),
-                            strategy_current_market_exposure=f"{existing_market_notional:.6f}",
-                        ),
-                )
-                return None
-            remaining_instruction_capacity = max(_ARB_MAX_FILLS_PER_WINDOW - filled_orders, 0)
-
         up_outcome, down_outcome = priced_outcomes[0], priced_outcomes[1]
         if up_outcome.best_ask > down_outcome.best_ask:
             primary_target, secondary_target = down_outcome, up_outcome
@@ -1229,6 +1197,13 @@ class BTC5mStrategyService:
             max(total_cap - current_total_exposure, 0.0),
             cash_balance,
         )
+        remaining_instruction_capacity = self._arb_dynamic_instruction_capacity(
+            cycle_budget=cycle_budget,
+            timing_regime=timing_regime,
+            pair_sum=pair_sum,
+            delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+            ratio_gap=abs(desired_up_ratio - current_up_ratio),
+        )
         if cycle_budget < self._arb_min_notional():
             self._record_strategy_snapshot(
                 market=market,
@@ -1243,7 +1218,77 @@ class BTC5mStrategyService:
             )
             return None
 
-        if pair_sum < _ARB_PAIR_SUM_MAX:
+        up_net_edge = self._arb_estimated_single_side_net_edge(
+            target=up_outcome,
+            fair_value=fair_up,
+            pair_sum=pair_sum,
+            delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+        )
+        down_net_edge = self._arb_estimated_single_side_net_edge(
+            target=down_outcome,
+            fair_value=fair_down,
+            pair_sum=pair_sum,
+            delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+        )
+        pair_net_edge = self._arb_pair_net_edge(
+            pair_sum=pair_sum,
+            desired_up_ratio=desired_up_ratio,
+            up_net_edge=up_net_edge,
+            down_net_edge=down_net_edge,
+        )
+        pair_sum_cap = self._arb_effective_pair_sum_cap(
+            pair_sum=pair_sum,
+            pair_net_edge=pair_net_edge,
+            delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+        )
+        cycle_budget = self._arb_scaled_cycle_budget(
+            base_budget=cycle_budget,
+            max_budget=min(
+                max(market_cap - existing_market_notional, 0.0),
+                max(total_cap - current_total_exposure, 0.0),
+                cash_balance,
+            ),
+            timing_regime=timing_regime,
+            pair_sum=pair_sum,
+            pair_net_edge=pair_net_edge,
+            delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+            ratio_gap=abs(desired_up_ratio - current_up_ratio),
+        )
+        remaining_instruction_capacity = self._arb_dynamic_instruction_capacity(
+            cycle_budget=cycle_budget,
+            timing_regime=timing_regime,
+            pair_sum=pair_sum,
+            delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+            ratio_gap=abs(desired_up_ratio - current_up_ratio),
+        )
+        if window_state is not None:
+            last_trade_at = int(window_state["last_trade_at"] or 0)
+            if last_trade_at > 0:
+                seconds_since_last_trade = max(time.time() - last_trade_at, 0.0)
+                dynamic_cooldown = self._arb_dynamic_cooldown_seconds(
+                    timing_regime=timing_regime,
+                    pair_sum=pair_sum,
+                    pair_net_edge=pair_net_edge,
+                    delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+                    ratio_gap=abs(desired_up_ratio - current_up_ratio),
+                )
+                if seconds_since_last_trade < dynamic_cooldown:
+                    self._record_strategy_snapshot(
+                        market=market,
+                        note=(
+                            f"arb_micro cooldown: {seconds_since_last_trade:.1f}s < "
+                            f"{dynamic_cooldown:.1f}s"
+                        ),
+                        extra_state=self._arb_state_defaults(
+                            market=market,
+                            seconds_into_window=seconds_into_window,
+                            strategy_window_seconds=str(seconds_into_window),
+                            strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                        ),
+                    )
+                    return None
+
+        if pair_sum <= pair_sum_cap:
             overlay_reserve_fraction = 0.0
             if _ARB_ENABLE_PAIR_OVERLAY and abs(desired_up_ratio - 0.5) >= _ARB_REBALANCE_RATIO_TRIGGER:
                 overlay_reserve_fraction = _ARB_REBALANCE_BUDGET_FRACTION
@@ -1253,6 +1298,10 @@ class BTC5mStrategyService:
                 down_outcome=down_outcome,
                 budget=pair_core_budget,
                 timing_regime=timing_regime,
+                pair_sum_cap=pair_sum_cap,
+                net_edge=pair_net_edge,
+                delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+                ratio_gap=abs(desired_up_ratio - current_up_ratio),
             )
             if pair_levels:
                 instructions: list[CopyInstruction] = []
@@ -1334,6 +1383,9 @@ class BTC5mStrategyService:
                             fair_value=overlay_fair,
                             timing_regime=timing_regime,
                             relative_edge=overlay_edge,
+                            pair_sum=pair_sum,
+                            delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+                            ratio_gap=abs(desired_up_ratio - current_up_ratio),
                         )
                         base_index = len(instructions) + 1
                         for offset, level in enumerate(overlay_levels, start=0):
@@ -1357,7 +1409,7 @@ class BTC5mStrategyService:
 
                 if instructions:
                     total_pair_notional = up_notional + down_notional
-                    captured_edge_pct = max(1.0 - pair_levels[0].pair_sum, 0.0)
+                    captured_edge_pct = pair_net_edge
                     primary_target, secondary_target = self._ordered_targets_by_notional(
                         up_outcome=up_outcome,
                         down_outcome=down_outcome,
@@ -1379,7 +1431,7 @@ class BTC5mStrategyService:
                     if spot_context is not None:
                         bias_note += f" | delta {spot_context.delta_bps:+.1f}bps"
                     note = (
-                        f"underround {pair_levels[0].pair_sum:.3f} | edge {captured_edge_pct * 100:.2f}% | "
+                        f"underround {pair_levels[0].pair_sum:.3f} | net {captured_edge_pct * 100:.2f}% | "
                         f"{timing_regime} | niveles {len(pair_levels)} | patas {len(instructions)}{bias_note}"
                     )
                     return StrategyPlan(
@@ -1418,6 +1470,29 @@ class BTC5mStrategyService:
                         bracket_phase=bracket_phase,
                     )
 
+        bracket_plan = self._build_arb_biased_bracket_plan(
+            market=market,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            pair_sum=pair_sum,
+            fair_up=fair_up,
+            fair_down=fair_down,
+            up_net_edge=up_net_edge,
+            down_net_edge=down_net_edge,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_up_ratio,
+            timing_regime=timing_regime,
+            cycle_budget=cycle_budget,
+            cash_balance=cash_balance,
+            remaining_instruction_capacity=remaining_instruction_capacity,
+            current_up_notional=current_up_notional,
+            current_down_notional=current_down_notional,
+            spot_context=spot_context,
+            bracket_phase=bracket_phase,
+        )
+        if bracket_plan is not None:
+            return bracket_plan
+
         cheap_side = None
         if _ARB_ENABLE_CHEAP_SIDE:
             cheap_side = self._select_cheap_side_target(
@@ -1445,7 +1520,10 @@ class BTC5mStrategyService:
                 budget=single_budget,
                 fair_value=fair_value,
                 timing_regime=timing_regime,
-                relative_edge=relative_edge,
+                relative_edge=net_edge,
+                pair_sum=pair_sum,
+                delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+                ratio_gap=ratio_gap_abs,
             )
             if single_levels:
                 instructions = [
@@ -1596,6 +1674,10 @@ class BTC5mStrategyService:
         down_outcome: MarketOutcome,
         budget: float,
         timing_regime: str,
+        pair_sum_cap: float,
+        net_edge: float,
+        delta_bps: float,
+        ratio_gap: float,
     ) -> list[ArbPairLevel]:
         up_levels = [[level.price, level.size] for level in up_outcome.ask_levels[:_ARB_MAX_PAIR_LEVELS]]
         down_levels = [[level.price, level.size] for level in down_outcome.ask_levels[:_ARB_MAX_PAIR_LEVELS]]
@@ -1614,7 +1696,7 @@ class BTC5mStrategyService:
             up_price, up_size = float(up_levels[up_idx][0]), float(up_levels[up_idx][1])
             down_price, down_size = float(down_levels[down_idx][0]), float(down_levels[down_idx][1])
             pair_sum = up_price + down_price
-            if pair_sum >= _ARB_PAIR_SUM_MAX:
+            if pair_sum > pair_sum_cap:
                 break
 
             available_shares = min(up_size, down_size)
@@ -1626,7 +1708,14 @@ class BTC5mStrategyService:
                 continue
 
             edge_pct = max(1.0 - pair_sum, 0.0)
-            tranche_targets = self._arb_pair_tranche_targets(timing_regime=timing_regime, edge_pct=edge_pct)
+            tranche_targets = self._arb_pair_tranche_targets(
+                timing_regime=timing_regime,
+                edge_pct=edge_pct,
+                pair_sum=pair_sum,
+                net_edge=net_edge,
+                delta_bps=delta_bps,
+                ratio_gap=ratio_gap,
+            )
             level_consumed = False
             for tranche_target in tranche_targets:
                 if remaining_budget < min_notional * 2:
@@ -1823,12 +1912,21 @@ class BTC5mStrategyService:
         fair_value: float,
         timing_regime: str,
         relative_edge: float,
+        pair_sum: float = 1.0,
+        delta_bps: float = 0.0,
+        ratio_gap: float = 0.0,
     ) -> list[ArbSingleSideLevel]:
         remaining_budget = budget
         levels: list[ArbSingleSideLevel] = []
         max_price = fair_value - max(_ARB_FAIR_VALUE_EDGE_MIN / 2, 0.005)
         min_notional = self._arb_min_notional()
-        tranche_targets = self._arb_single_tranche_targets(timing_regime=timing_regime, edge_pct=relative_edge)
+        tranche_targets = self._arb_single_tranche_targets(
+            timing_regime=timing_regime,
+            edge_pct=relative_edge,
+            pair_sum=pair_sum,
+            delta_bps=delta_bps,
+            ratio_gap=ratio_gap,
+        )
 
         for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]:
             if remaining_budget < min_notional:
@@ -1966,22 +2064,197 @@ class BTC5mStrategyService:
     def _arb_ratio_label(self, *, up_ratio: float, down_ratio: float) -> str:
         return f"Sube {up_ratio * 100:.0f}% / Baja {down_ratio * 100:.0f}%"
 
-    def _arb_pair_tranche_targets(self, *, timing_regime: str, edge_pct: float) -> tuple[float, ...]:
+    def _arb_trigger_outcome(self, plan: StrategyPlan) -> str:
+        if plan.price_mode == "underround":
+            return "pair_sum"
+        if plan.price_mode == "biased-bracket":
+            return f"bracket:{plan.primary_target.label}"
+        return f"cheap:{plan.primary_target.label}"
+
+    def _arb_pair_net_edge(
+        self,
+        *,
+        pair_sum: float,
+        desired_up_ratio: float,
+        up_net_edge: float,
+        down_net_edge: float,
+    ) -> float:
+        weighted_edge = (desired_up_ratio * up_net_edge) + (max(1.0 - desired_up_ratio, 0.0) * down_net_edge)
+        imbalance_drag = abs(desired_up_ratio - 0.5) * max(pair_sum - 0.99, 0.0) * 0.35
+        return weighted_edge - imbalance_drag
+
+    def _arb_effective_pair_sum_cap(
+        self,
+        *,
+        pair_sum: float,
+        pair_net_edge: float,
+        delta_bps: float,
+    ) -> float:
+        cap = _ARB_PAIR_SUM_MAX
+        if pair_net_edge >= 0.010:
+            cap = max(cap, 0.996)
+        if pair_net_edge >= 0.015 and abs(delta_bps) >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS:
+            cap = max(cap, 0.998)
+        if pair_net_edge >= 0.020 and abs(delta_bps) >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
+            cap = max(cap, _ARB_PAIR_RELAXED_SUM_MAX)
+        return min(max(cap, _ARB_PAIR_SUM_MAX), _ARB_PAIR_RELAXED_SUM_MAX)
+
+    def _arb_scaled_cycle_budget(
+        self,
+        *,
+        base_budget: float,
+        max_budget: float,
+        timing_regime: str,
+        pair_sum: float,
+        pair_net_edge: float,
+        delta_bps: float,
+        ratio_gap: float,
+    ) -> float:
+        scale = 1.0
+        if timing_regime == "mid-late":
+            scale *= 1.10
+        if pair_net_edge >= 0.025:
+            scale *= 1.35
+        elif pair_net_edge >= 0.015:
+            scale *= 1.18
+        elif pair_net_edge <= 0.006:
+            scale *= 0.82
+        if pair_sum <= 0.985:
+            scale *= 1.12
+        elif pair_sum <= 0.992:
+            scale *= 1.06
+        elif pair_sum >= 1.01:
+            scale *= 0.92
+        if abs(delta_bps) >= 8:
+            scale *= 1.10
+        elif abs(delta_bps) >= 3:
+            scale *= 1.04
+        if ratio_gap >= 0.10:
+            scale *= 1.12
+        elif ratio_gap >= 0.06:
+            scale *= 1.06
+
+        desired = _round_down(min(base_budget * scale, max_budget), "0.01")
+        min_pair_budget = self._arb_min_notional() * 2
+        if max_budget < min_pair_budget:
+            return _round_down(max_budget, "0.01")
+        return max(desired, min_pair_budget)
+
+    def _arb_dynamic_cooldown_seconds(
+        self,
+        *,
+        timing_regime: str,
+        pair_sum: float,
+        pair_net_edge: float,
+        delta_bps: float,
+        ratio_gap: float,
+    ) -> float:
+        cooldown = 1.5 if timing_regime == "mid-late" else 2.0
+        if pair_net_edge >= 0.020:
+            cooldown -= 0.6
+        elif pair_net_edge >= 0.012:
+            cooldown -= 0.3
+        elif pair_net_edge <= 0.006:
+            cooldown += 0.4
+        if pair_sum <= 0.992:
+            cooldown -= 0.2
+        if abs(delta_bps) >= 8:
+            cooldown -= 0.25
+        elif abs(delta_bps) >= 3:
+            cooldown -= 0.1
+        if ratio_gap >= 0.10:
+            cooldown -= 0.2
+        return min(max(cooldown, _ARB_BURST_COOLDOWN_MIN_SECONDS), _ARB_BURST_COOLDOWN_MAX_SECONDS)
+
+    def _arb_dynamic_instruction_capacity(
+        self,
+        *,
+        cycle_budget: float,
+        timing_regime: str,
+        pair_sum: float,
+        delta_bps: float,
+        ratio_gap: float,
+    ) -> int:
+        capacity = 18 if timing_regime == "mid-late" else 14
+        if cycle_budget >= 25:
+            capacity += 4
+        if cycle_budget >= 60:
+            capacity += 8
+        if cycle_budget >= 120:
+            capacity += 12
+        if pair_sum <= 0.992:
+            capacity += 6
+        elif pair_sum >= 1.01:
+            capacity -= 2
+        if abs(delta_bps) >= 8:
+            capacity += 6
+        elif abs(delta_bps) >= 3:
+            capacity += 3
+        if ratio_gap >= 0.10:
+            capacity += 8
+        elif ratio_gap >= 0.06:
+            capacity += 4
+        return int(min(max(capacity, 8), _ARB_MAX_PLAN_INSTRUCTIONS))
+
+    def _arb_pair_tranche_targets(
+        self,
+        *,
+        timing_regime: str,
+        edge_pct: float,
+        pair_sum: float,
+        net_edge: float,
+        delta_bps: float,
+        ratio_gap: float,
+    ) -> tuple[float, ...]:
         base = _ARB_PAIR_BURST_MID_LATE if timing_regime == "mid-late" else _ARB_PAIR_BURST_BASE
         scale = 1.0
+        if net_edge >= 0.025:
+            scale *= 1.45
+        elif net_edge >= 0.015:
+            scale *= 1.25
+        elif net_edge <= 0.006:
+            scale *= 0.78
         if edge_pct >= 0.015:
-            scale = 1.25
+            scale *= 1.12
         elif edge_pct <= 0.007:
-            scale = 0.8
+            scale *= 0.92
+        if pair_sum <= 0.985:
+            scale *= 1.10
+        elif pair_sum >= 0.998:
+            scale *= 0.92
+        if abs(delta_bps) >= 8:
+            scale *= 1.12
+        elif abs(delta_bps) >= 3:
+            scale *= 1.05
+        if ratio_gap >= 0.10:
+            scale *= 1.10
         return tuple(_round_down(target * scale, "0.01") for target in base)
 
-    def _arb_single_tranche_targets(self, *, timing_regime: str, edge_pct: float) -> tuple[float, ...]:
+    def _arb_single_tranche_targets(
+        self,
+        *,
+        timing_regime: str,
+        edge_pct: float,
+        pair_sum: float = 1.0,
+        delta_bps: float = 0.0,
+        ratio_gap: float = 0.0,
+    ) -> tuple[float, ...]:
         base = _ARB_SINGLE_BURST_MID_LATE if timing_regime == "mid-late" else _ARB_SINGLE_BURST_BASE
         scale = 1.0
         if edge_pct >= 0.03:
-            scale = 1.35
+            scale *= 1.35
         elif edge_pct <= 0.015:
-            scale = 0.85
+            scale *= 0.85
+        if pair_sum <= 0.992:
+            scale *= 1.08
+        elif pair_sum >= 1.01:
+            scale *= 0.93
+        if abs(delta_bps) >= 8:
+            scale *= 1.10
+        elif abs(delta_bps) >= 3:
+            scale *= 1.04
+        if ratio_gap >= 0.10:
+            scale *= 1.08
         return tuple(_round_down(target * scale, "0.01") for target in base)
 
     def _arb_spot_overlay_target(
@@ -2000,6 +2273,211 @@ class BTC5mStrategyService:
         if down_edge > up_edge and down_edge >= _ARB_SPOT_EDGE_MIN:
             return down_outcome
         return None
+
+    def _build_arb_biased_bracket_plan(
+        self,
+        *,
+        market: dict,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        pair_sum: float,
+        fair_up: float,
+        fair_down: float,
+        up_net_edge: float,
+        down_net_edge: float,
+        desired_up_ratio: float,
+        current_up_ratio: float,
+        timing_regime: str,
+        cycle_budget: float,
+        cash_balance: float,
+        remaining_instruction_capacity: int,
+        current_up_notional: float,
+        current_down_notional: float,
+        spot_context: ArbSpotContext | None,
+        bracket_phase: str,
+    ) -> StrategyPlan | None:
+        if pair_sum > _ARB_BIASED_BRACKET_SUM_MAX:
+            return None
+
+        pair_net_edge = self._arb_pair_net_edge(
+            pair_sum=pair_sum,
+            desired_up_ratio=desired_up_ratio,
+            up_net_edge=up_net_edge,
+            down_net_edge=down_net_edge,
+        )
+        if pair_net_edge < _ARB_BIASED_BRACKET_NET_EDGE_MIN:
+            return None
+
+        ratio_gap_abs = abs(desired_up_ratio - current_up_ratio)
+        if desired_up_ratio >= 0.5:
+            primary_target = up_outcome
+            hedge_target = down_outcome
+            primary_fair = fair_up
+            hedge_fair = fair_down
+            primary_net_edge = up_net_edge
+            hedge_net_edge = down_net_edge
+            desired_primary_ratio = desired_up_ratio
+        else:
+            primary_target = down_outcome
+            hedge_target = up_outcome
+            primary_fair = fair_down
+            hedge_fair = fair_up
+            primary_net_edge = down_net_edge
+            hedge_net_edge = up_net_edge
+            desired_primary_ratio = 1.0 - desired_up_ratio
+
+        if primary_net_edge < max(_ARB_CHEAP_SIDE_NET_EDGE_MIN * 0.75, 0.01):
+            return None
+        if hedge_net_edge < _ARB_BIASED_BRACKET_HEDGE_TOLERANCE:
+            return None
+
+        hedge_floor = _ARB_BRACKET_HEDGE_FLOOR_MID_LATE if timing_regime == "mid-late" else _ARB_BRACKET_HEDGE_FLOOR_EARLY
+        desired_hedge_ratio = max(1.0 - desired_primary_ratio, 0.0)
+        hedge_ratio = max(desired_hedge_ratio, hedge_floor)
+        if hedge_net_edge < 0:
+            shrink = min(abs(hedge_net_edge) / abs(_ARB_BIASED_BRACKET_HEDGE_TOLERANCE), 1.0) * 0.65
+            hedge_ratio = max(hedge_floor, desired_hedge_ratio * (1.0 - shrink))
+        primary_ratio = min(max(1.0 - hedge_ratio, 0.52), 0.88)
+        hedge_ratio = max(1.0 - primary_ratio, hedge_floor)
+        total_ratio = primary_ratio + hedge_ratio
+        if total_ratio <= 0:
+            return None
+        primary_ratio /= total_ratio
+        hedge_ratio /= total_ratio
+
+        primary_budget = _round_down(cycle_budget * primary_ratio, "0.01")
+        hedge_budget = _round_down(min(cycle_budget - primary_budget, cash_balance - primary_budget), "0.01")
+        if primary_budget < self._arb_min_notional() or hedge_budget < self._arb_min_notional():
+            return None
+
+        primary_capacity = max(1, min(int(round(remaining_instruction_capacity * primary_ratio)), remaining_instruction_capacity - 1))
+        hedge_capacity = max(1, remaining_instruction_capacity - primary_capacity)
+        delta_bps = spot_context.delta_bps if spot_context is not None else 0.0
+
+        primary_levels = self._build_arb_single_side_levels(
+            target=primary_target,
+            budget=primary_budget,
+            fair_value=primary_fair,
+            timing_regime=timing_regime,
+            relative_edge=primary_net_edge,
+            pair_sum=pair_sum,
+            delta_bps=delta_bps,
+            ratio_gap=ratio_gap_abs,
+        )
+        hedge_levels = self._build_arb_single_side_levels(
+            target=hedge_target,
+            budget=hedge_budget,
+            fair_value=hedge_fair,
+            timing_regime=timing_regime,
+            relative_edge=max(hedge_net_edge, 0.0),
+            pair_sum=pair_sum,
+            delta_bps=delta_bps,
+            ratio_gap=ratio_gap_abs,
+        )
+        if not primary_levels or not hedge_levels:
+            return None
+
+        primary_instructions: list[CopyInstruction] = []
+        for idx, level in enumerate(primary_levels[:primary_capacity], start=1):
+            instruction = self._build_arb_instruction(
+                market=market,
+                target=primary_target,
+                shares=level.shares,
+                price=level.price,
+                pair_sum=pair_sum,
+                tranche_index=idx,
+            )
+            if instruction is not None:
+                primary_instructions.append(instruction)
+
+        hedge_instructions: list[CopyInstruction] = []
+        for idx, level in enumerate(hedge_levels[:hedge_capacity], start=1):
+            instruction = self._build_arb_instruction(
+                market=market,
+                target=hedge_target,
+                shares=level.shares,
+                price=level.price,
+                pair_sum=pair_sum,
+                tranche_index=primary_capacity + idx,
+            )
+            if instruction is not None:
+                hedge_instructions.append(instruction)
+
+        if not primary_instructions or not hedge_instructions:
+            return None
+
+        instructions: list[CopyInstruction] = []
+        max_len = max(len(primary_instructions), len(hedge_instructions))
+        for index in range(max_len):
+            if index < len(primary_instructions):
+                instructions.append(primary_instructions[index])
+            if index < len(hedge_instructions):
+                instructions.append(hedge_instructions[index])
+
+        primary_notional = sum(item.notional for item in primary_instructions)
+        hedge_notional = sum(item.notional for item in hedge_instructions)
+        if primary_notional < self._arb_min_notional() or hedge_notional < self._arb_min_notional():
+            return None
+
+        added_up_notional = primary_notional if primary_target.asset_id == up_outcome.asset_id else hedge_notional
+        added_down_notional = hedge_notional if primary_target.asset_id == up_outcome.asset_id else primary_notional
+        current_ratio_after = self._arb_current_up_ratio(
+            up_exposure=current_up_notional + added_up_notional,
+            down_exposure=current_down_notional + added_down_notional,
+        )
+        ordered_primary, ordered_secondary = self._ordered_targets_by_notional(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            up_notional=added_up_notional,
+            down_notional=added_down_notional,
+        )
+        ordered_primary_notional = added_up_notional if ordered_primary.asset_id == up_outcome.asset_id else added_down_notional
+        ordered_secondary_notional = added_down_notional if ordered_primary.asset_id == up_outcome.asset_id else added_up_notional
+        ordered_primary_ratio = ordered_primary_notional / max(ordered_primary_notional + ordered_secondary_notional, 1e-9)
+        note = (
+            f"biased bracket {pair_sum:.3f} | net {pair_net_edge * 100:.2f}% | "
+            f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=max(1.0 - desired_up_ratio, 0.0))} | "
+            f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
+            f"fase {bracket_phase}"
+        )
+        if spot_context is not None:
+            note += f" | delta {spot_context.delta_bps:+.1f}bps"
+
+        return StrategyPlan(
+            instructions=tuple(instructions),
+            note=note,
+            primary_target=ordered_primary,
+            secondary_target=ordered_secondary,
+            trigger=primary_target,
+            window_seconds=self._seconds_into_window(market),
+            cycle_budget=round(primary_notional + hedge_notional, 6),
+            market_bias=(
+                f"Bracket sesgado {ordered_primary.label} {ordered_primary_ratio * 100:.0f}% / "
+                f"{ordered_secondary.label} {max((1.0 - ordered_primary_ratio) * 100, 0.0):.0f}%"
+            ),
+            timing_regime=timing_regime,
+            price_mode="biased-bracket",
+            primary_ratio=ordered_primary_ratio,
+            primary_notional=ordered_primary_notional,
+            secondary_notional=ordered_secondary_notional,
+            replenishment_count=0,
+            trigger_value=pair_sum,
+            pair_sum=pair_sum,
+            edge_pct=pair_net_edge,
+            fair_value=max(fair_up, fair_down, 0.0),
+            spot_price=spot_context.current_price if spot_context is not None else 0.0,
+            spot_anchor=spot_context.anchor_price if spot_context is not None else 0.0,
+            spot_delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+            spot_fair_up=spot_context.fair_up if spot_context is not None else 0.0,
+            spot_fair_down=spot_context.fair_down if spot_context is not None else 0.0,
+            spot_source=spot_context.source if spot_context is not None else "",
+            spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
+            spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
+            spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_ratio_after,
+            bracket_phase=bracket_phase,
+        )
 
     def _ordered_targets_by_notional(
         self,

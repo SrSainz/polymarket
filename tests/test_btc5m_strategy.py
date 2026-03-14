@@ -1346,6 +1346,58 @@ def test_arb_micro_buys_both_sides_on_underround(tmp_path: Path) -> None:
     db.close()
 
 
+def test_arb_micro_relaxes_underround_gate_near_parity_when_net_edge_is_still_good(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Relaxed Underround",
+        "slug": "btc-updown-5m-relaxed-underround",
+        "conditionId": "cond-arb-relaxed-underround",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.47"}],
+                "asks": [{"price": "0.49", "size": "200"}, {"price": "0.495", "size": "200"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.49"}],
+                "asks": [{"price": "0.499", "size": "200"}, {"price": "0.50", "size": "200"}],
+            },
+        },
+        balance=1000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-relaxed-underround"),
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] > 0
+    positions = db.list_copy_positions()
+    assert len(positions) == 2
+    assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
+    assert db.get_bot_state("strategy_price_mode") == "underround"
+    assert "underround" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
 def test_arb_micro_does_not_buy_pair_above_one_without_edge(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -1735,11 +1787,11 @@ def test_arb_micro_caps_market_exposure_and_cools_down_same_window(tmp_path: Pat
     assert second["filled"] == 0
     assert second_exposure <= 50.0
     assert "underround" in first_note
-    assert "cooldown" in second_note or "market cap exhausted" in second_note
+    assert "cooldown" in second_note or "market cap exhausted" in second_note or "budget below minimum" in second_note
     db.close()
 
 
-def test_arb_micro_respects_remaining_fill_capacity_in_same_window(tmp_path: Path) -> None:
+def test_arb_micro_does_not_stop_only_because_window_already_has_many_fills(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=50)).isoformat().replace("+00:00", "Z")
@@ -1768,11 +1820,16 @@ def test_arb_micro_respects_remaining_fill_capacity_in_same_window(tmp_path: Pat
     )
     db.record_strategy_window_fills(
         slug=market["slug"],
-        fill_count=22,
+        fill_count=24,
         added_notional=0.0,
         replenishment_count=0,
         notes="seed fills",
     )
+    with db.conn:
+        db.conn.execute(
+            "UPDATE strategy_windows SET last_trade_at = 0, first_trade_at = 0 WHERE slug = ?",
+            (market["slug"],),
+        )
     clob = _FakeCLOBClient(
         books={
             "asset-up": {
@@ -1802,10 +1859,10 @@ def test_arb_micro_respects_remaining_fill_capacity_in_same_window(tmp_path: Pat
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] <= 2
+    assert stats["filled"] > 0
     row = db.get_strategy_window(market["slug"])
     assert row is not None
-    assert int(row["filled_orders"] or 0) <= 24
+    assert int(row["filled_orders"] or 0) > 24
     db.close()
 
 
@@ -1994,9 +2051,9 @@ def test_arb_micro_opens_single_side_on_small_delta_with_strong_edge(tmp_path: P
     assert stats["filled"] > 0
     positions = db.list_copy_positions()
     assert positions
-    assert {str(row["outcome"]) for row in positions} == {"Down"}
-    assert db.get_bot_state("strategy_price_mode") == "cheap-side"
-    assert "cheap Down" in str(db.get_bot_state("strategy_last_note") or "")
+    assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
+    assert db.get_bot_state("strategy_price_mode") == "biased-bracket"
+    assert "biased bracket" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
