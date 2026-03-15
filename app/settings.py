@@ -263,7 +263,7 @@ class EnvSettings(BaseModel):
     gamma_api_host: str = "https://gamma-api.polymarket.com"
     clob_host: str = "https://clob.polymarket.com"
     clob_ws_host: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
-    spot_ws_host: str = "wss://stream.binance.com:9443/ws/btcusdt@trade"
+    spot_ws_host: str = "wss://ws-live-data.polymarket.com"
 
     polymarket_private_key: str = ""
     polymarket_chain_id: int = 137
@@ -290,7 +290,7 @@ class EnvSettings(BaseModel):
             gamma_api_host=os.getenv("POLYMARKET_GAMMA_API_HOST", "https://gamma-api.polymarket.com"),
             clob_host=os.getenv("POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
             clob_ws_host=os.getenv("POLYMARKET_CLOB_WS_HOST", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
-            spot_ws_host=os.getenv("POLYMARKET_SPOT_WS_HOST", "wss://stream.binance.com:9443/ws/btcusdt@trade"),
+            spot_ws_host=os.getenv("POLYMARKET_SPOT_WS_HOST", "wss://ws-live-data.polymarket.com"),
             polymarket_private_key=os.getenv("POLYMARKET_PRIVATE_KEY", ""),
             polymarket_chain_id=int(os.getenv("POLYMARKET_CHAIN_ID", "137")),
             polymarket_funder=os.getenv("POLYMARKET_FUNDER", ""),

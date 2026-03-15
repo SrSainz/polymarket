@@ -4,6 +4,7 @@ import json
 import logging
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,6 +56,10 @@ class SpotFeed:
         self._ws_kind = self._detect_ws_kind(self.ws_url)
         self._warned_unavailable = False
         self._prices: dict[str, tuple[float, float]] = {}
+        self._history: dict[str, deque[tuple[float, float]]] = {
+            "btcusdt": deque(maxlen=512),
+            "btc/usd": deque(maxlen=512),
+        }
         self._basis = 0.0
         self._basis_updated_at = 0.0
         self._rest_snapshot: SpotSnapshot | None = None
@@ -109,12 +114,14 @@ class SpotFeed:
         if chainlink is not None:
             age_ms = self._age_ms_locked("btc/usd", now)
             return SpotSnapshot(
-                reference_price=binance or chainlink,
+                reference_price=chainlink,
                 lead_price=binance or chainlink,
                 binance_price=binance,
                 chainlink_price=chainlink,
                 basis=basis,
-                source="binance+chainlink" if binance is not None else "chainlink",
+                source="polymarket-rtds+binance" if binance is not None and self._ws_kind == "polymarket" else (
+                    "polymarket-rtds-chainlink" if self._ws_kind == "polymarket" else "chainlink"
+                ),
                 age_ms=age_ms,
                 connected=self._connected_event.is_set(),
             )
@@ -127,7 +134,7 @@ class SpotFeed:
                 binance_price=binance,
                 chainlink_price=None,
                 basis=basis,
-                source="binance-direct",
+                source="binance-direct" if self._ws_kind == "binance" else "binance-only",
                 age_ms=age_ms,
                 connected=self._connected_event.is_set(),
             )
@@ -155,17 +162,39 @@ class SpotFeed:
             return
 
         while not self._stop_event.is_set():
+            ping_stop = threading.Event()
+            ping_thread: threading.Thread | None = None
+
             def on_open(ws_app) -> None:  # noqa: ANN001
                 self._connected_event.set()
                 if self._ws_kind != "polymarket":
                     return
                 try:
-                    ws_app.send(json.dumps({"type": "subscribe", "topic": "crypto_prices", "filters": {"symbol": "btcusdt"}}))
+                    ws_app.send(json.dumps({"action": "subscribe", "subscriptions": [{"topic": "crypto_prices", "type": "update"}]}))
                     ws_app.send(
-                        json.dumps({"type": "subscribe", "topic": "crypto_prices_chainlink", "filters": {"symbol": "btc/usd"}})
+                        json.dumps(
+                            {
+                                "action": "subscribe",
+                                "subscriptions": [
+                                    {"topic": "crypto_prices_chainlink", "type": "*", "filters": json.dumps({"symbol": "btc/usd"})}
+                                ],
+                            }
+                        )
                     )
                 except Exception as error:  # noqa: BLE001
                     self.logger.warning("spot feed subscribe failed: %s", error)
+                    return
+
+                def ping_loop() -> None:
+                    while not ping_stop.wait(5.0):
+                        try:
+                            ws_app.send("PING")
+                        except Exception:  # noqa: BLE001
+                            return
+
+                nonlocal ping_thread
+                ping_thread = threading.Thread(target=ping_loop, name="polymarket-spot-ping", daemon=True)
+                ping_thread.start()
 
             def on_message(_ws_app, message: str) -> None:
                 self._handle_message(message)
@@ -176,6 +205,7 @@ class SpotFeed:
                 self.logger.debug("spot feed websocket error: %s", error)
 
             def on_close(_ws_app, _status_code, _msg) -> None:
+                ping_stop.set()
                 self._connected_event.clear()
 
             self._ws_app = websocket.WebSocketApp(
@@ -191,6 +221,9 @@ class SpotFeed:
                 if not self._stop_event.is_set():
                     self.logger.debug("spot feed websocket loop failed: %s", error)
             finally:
+                ping_stop.set()
+                if ping_thread is not None and ping_thread.is_alive():
+                    ping_thread.join(timeout=0.2)
                 self._connected_event.clear()
                 self._ws_app = None
 
@@ -216,6 +249,7 @@ class SpotFeed:
             now = time.time()
             with self._lock:
                 self._prices[symbol] = (price, now)
+                self._history.setdefault(symbol, deque(maxlen=512)).append((price, now))
                 if symbol == "btcusdt":
                     chainlink = self._fresh_price_locked("btc/usd", now)
                     if chainlink is not None:
@@ -245,6 +279,32 @@ class SpotFeed:
             return 0
         _, received_at = price_entry
         return int(max((now - received_at) * 1000, 0))
+
+    def get_anchor_price(self, *, symbol: str, target_ts: float, tolerance_seconds: float = 3.0) -> float | None:
+        with self._lock:
+            history = list(self._history.get(symbol, ()))
+            latest = self._prices.get(symbol)
+
+        if history:
+            candidates = [
+                (price, ts)
+                for price, ts in history
+                if abs(ts - target_ts) <= tolerance_seconds
+            ]
+            if candidates:
+                later = sorted((item for item in candidates if item[1] >= target_ts), key=lambda item: (item[1] - target_ts))
+                if later:
+                    return later[0][0]
+                earlier = sorted((item for item in candidates if item[1] < target_ts), key=lambda item: (target_ts - item[1]))
+                if earlier:
+                    return earlier[0][0]
+
+        if latest is None:
+            return None
+        price, ts = latest
+        if abs(ts - target_ts) <= tolerance_seconds:
+            return price
+        return None
 
     def _fetch_rest_snapshot(self) -> SpotSnapshot:
         prices: dict[str, float | None] = {"btcusdt": None, "btc/usd": None}
@@ -326,6 +386,16 @@ def _walk_price_points(payload: Any, sink: list[tuple[str, float]]) -> None:
         return
 
     symbol = _normalize_symbol(payload.get("symbol") or payload.get("pair") or payload.get("ticker") or payload.get("s"))
+    if symbol:
+        historical_points = payload.get("data")
+        if isinstance(historical_points, list):
+            for item in reversed(historical_points):
+                if not isinstance(item, dict):
+                    continue
+                historical_price = _extract_price(item)
+                if historical_price is not None:
+                    sink.append((symbol, historical_price))
+                    break
     price = _extract_price(payload)
     if symbol and price is not None:
         sink.append((symbol, price))

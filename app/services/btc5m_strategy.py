@@ -16,7 +16,7 @@ from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.clob_client import CLOBClient
 from app.polymarket.gamma_client import GammaClient
-from app.polymarket.spot_feed import SpotFeed
+from app.polymarket.spot_feed import SpotFeed, SpotSnapshot
 from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.settings import AppSettings
@@ -2797,13 +2797,17 @@ class BTC5mStrategyService:
         slug = str(market.get("slug") or "")
         anchor_key = f"arb_spot_anchor:{slug}"
         local_anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
+        local_anchor_source = str(self.db.get_bot_state(f"{anchor_key}:source") or self._arb_anchor_capture_source(snapshot=snapshot))
         if local_anchor_price <= 0 and seconds_into_window <= _ARB_SPOT_ANCHOR_GRACE_SECONDS:
-            local_anchor_price = snapshot.reference_price
-            self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
-            self.db.set_bot_state(f"{anchor_key}:source", snapshot.source)
+            captured_anchor = self._arb_anchor_capture_price(market=market, snapshot=snapshot)
+            if captured_anchor > 0:
+                local_anchor_price = captured_anchor
+                self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
+                local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
+                self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
         official_price_to_beat = self._market_official_price_to_beat(market)
         anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
-        anchor_source = "polymarket-official" if official_price_to_beat > 0 else "local-spot"
+        anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
         if anchor_price <= 0:
             return None
 
@@ -2851,8 +2855,11 @@ class BTC5mStrategyService:
         if _safe_float(self.db.get_bot_state(anchor_key)) > 0:
             return
 
-        self.db.set_bot_state(anchor_key, f"{snapshot.reference_price:.8f}")
-        self.db.set_bot_state(f"{anchor_key}:source", snapshot.source)
+        anchor_price = self._arb_anchor_capture_price_for_slug(slug=slug, snapshot=snapshot)
+        if anchor_price <= 0:
+            return
+        self.db.set_bot_state(anchor_key, f"{anchor_price:.8f}")
+        self.db.set_bot_state(f"{anchor_key}:source", self._arb_anchor_capture_source(snapshot=snapshot))
         self.db.set_bot_state(f"{anchor_key}:captured_at", str(int(now)))
 
     def _arb_spot_fair_up(self, *, anchor_price: float, current_price: float, seconds_remaining: int) -> float:
@@ -3861,11 +3868,17 @@ class BTC5mStrategyService:
             market_slug = f"btc-updown-5m-{base_start}"
         anchor_key = f"arb_spot_anchor:{market_slug}"
         local_anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
+        local_anchor_source = str(self.db.get_bot_state(f"{anchor_key}:source") or self._arb_anchor_capture_source(snapshot=snapshot))
+        if local_anchor_price <= 0 and current_window_seconds <= _ARB_SPOT_ANCHOR_GRACE_SECONDS:
+            captured_anchor = self._arb_anchor_capture_price_for_slug(slug=market_slug, snapshot=snapshot)
+            if captured_anchor > 0:
+                local_anchor_price = captured_anchor
+                local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
+                self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
+                self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
         official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
-        if official_price_to_beat <= 0:
-            official_price_to_beat = _safe_float(self.db.get_bot_state("strategy_official_price_to_beat"))
         anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
-        anchor_source = "polymarket-official" if official_price_to_beat > 0 else "local-spot"
+        anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
         if anchor_price <= 0:
             return state
 
@@ -3891,6 +3904,26 @@ class BTC5mStrategyService:
             }
         )
         return state
+
+    def _arb_anchor_capture_price(self, *, market: dict, snapshot: SpotSnapshot) -> float:
+        slug = str(market.get("slug") or "")
+        return self._arb_anchor_capture_price_for_slug(slug=slug, snapshot=snapshot)
+
+    def _arb_anchor_capture_price_for_slug(self, *, slug: str, snapshot: SpotSnapshot) -> float:
+        start_ts = self._btc5m_slug_start_ts(slug)
+        if start_ts > 0 and hasattr(self.spot_feed, "get_anchor_price"):
+            try:
+                chainlink_anchor = self.spot_feed.get_anchor_price(symbol="btc/usd", target_ts=float(start_ts))
+            except Exception:  # noqa: BLE001
+                chainlink_anchor = None
+            if chainlink_anchor is not None and chainlink_anchor > 0:
+                return float(chainlink_anchor)
+        return float(snapshot.chainlink_price or snapshot.reference_price or 0.0)
+
+    def _arb_anchor_capture_source(self, *, snapshot: SpotSnapshot) -> str:
+        if snapshot.chainlink_price and snapshot.chainlink_price > 0:
+            return "polymarket-chainlink"
+        return snapshot.source or "local-spot"
 
     def _arb_state_defaults(self, *, market: dict | None = None, seconds_into_window: int | None = None, **overrides: str) -> dict[str, str]:
         state = {
