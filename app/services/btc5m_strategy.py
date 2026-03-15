@@ -3532,11 +3532,11 @@ class BTC5mStrategyService:
         self.db.set_bot_state("strategy_last_note", note)
         self.db.set_bot_state("strategy_last_updated_at", str(int(datetime.now(timezone.utc).timestamp())))
         self._record_market_feed_state()
+        official_price_to_beat = 0.0
         if market is not None:
             self.db.set_bot_state("strategy_market_slug", str(market.get("slug") or ""))
             self.db.set_bot_state("strategy_market_title", str(market.get("question") or market.get("slug") or ""))
             official_price_to_beat = self._market_official_price_to_beat(market)
-            self.db.set_bot_state("strategy_official_price_to_beat", f"{official_price_to_beat:.6f}")
         if opportunity is not None:
             self.db.set_bot_state("strategy_target_outcome", opportunity.target.label)
             self.db.set_bot_state("strategy_target_price", f"{opportunity.target.best_ask:.6f}")
@@ -3546,6 +3546,8 @@ class BTC5mStrategyService:
             self.db.set_bot_state(key, value)
         for key, value in snapshot_state.items():
             self.db.set_bot_state(key, value)
+        if market is not None and official_price_to_beat > 0:
+            self.db.set_bot_state("strategy_official_price_to_beat", f"{official_price_to_beat:.6f}")
 
     def _derive_strategy_operability_state(
         self,
@@ -4170,10 +4172,22 @@ class BTC5mStrategyService:
 
         now = time.time()
         current_window_seconds = int(max(now % 300, 0))
-        market_slug = str(market.get("slug") or "") if market is not None else str(self.db.get_bot_state("strategy_market_slug") or "")
+        live_market = dict(market) if isinstance(market, dict) else None
+        market_slug = str(live_market.get("slug") or "") if live_market is not None else str(self.db.get_bot_state("strategy_market_slug") or "")
         if not market_slug.startswith("btc-updown-5m-"):
             base_start = int(now - current_window_seconds)
             market_slug = f"btc-updown-5m-{base_start}"
+        if live_market is None and market_slug.startswith("btc-updown-5m-"):
+            cached_slug = str((self._cached_market or {}).get("slug") or "")
+            if cached_slug == market_slug:
+                live_market = dict(self._cached_market or {})
+            else:
+                try:
+                    fetched_market = self.gamma_client.get_market_by_slug(market_slug)
+                except Exception:  # noqa: BLE001
+                    fetched_market = None
+                if isinstance(fetched_market, dict):
+                    live_market = fetched_market
         anchor_key = f"arb_spot_anchor:{market_slug}"
         local_anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
         local_anchor_source = str(self.db.get_bot_state(f"{anchor_key}:source") or self._arb_anchor_capture_source(snapshot=snapshot))
@@ -4184,7 +4198,7 @@ class BTC5mStrategyService:
                 local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
                 self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
                 self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
-        official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
+        official_price_to_beat = self._market_official_price_to_beat(live_market) if live_market is not None else 0.0
         anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
         anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
         reference_state = self._arb_reference_state(

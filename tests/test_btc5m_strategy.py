@@ -2410,6 +2410,103 @@ def test_arb_spot_context_prefers_official_price_to_beat_over_local_anchor(tmp_p
     db.close()
 
 
+def test_arb_live_spot_state_refetches_market_for_official_beat_from_slug(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-1773597300"
+    db.set_bot_state("strategy_market_slug", slug)
+    market = {
+        "question": "Bitcoin Up or Down - Refetched Official Beat",
+        "slug": slug,
+        "conditionId": "cond-refetch-official",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [
+            {
+                "startTime": "2026-03-15T17:55:00Z",
+                "eventMetadata": {"priceToBeat": 71982.15764705987},
+            }
+        ],
+    }
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=71840.04,
+            lead_price=71840.04,
+            binance_price=71840.04,
+            chainlink_price=71840.04,
+            basis=0.0,
+            source="polymarket-rtds-chainlink",
+            age_ms=25,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({slug: market}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-refetch-official"),
+        spot_feed=spot_feed,
+    )
+
+    state = service._arb_live_spot_state(market=None, seconds_into_window=20)
+
+    assert round(float(state["strategy_official_price_to_beat"]), 2) == 71982.16
+    assert state["strategy_anchor_source"] == "polymarket-official"
+    assert state["strategy_reference_quality"] == "official"
+    db.close()
+
+
+def test_record_strategy_snapshot_keeps_market_official_over_zero_snapshot(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-1773597300"
+    market = {
+        "question": "Bitcoin Up or Down - Snapshot Official Beat",
+        "slug": slug,
+        "conditionId": "cond-snapshot-official",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [
+            {
+                "startTime": "2026-03-15T17:55:00Z",
+                "eventMetadata": {"priceToBeat": 71982.15764705987},
+            }
+        ],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({slug: market}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-snapshot-official"),
+        spot_feed=None,
+    )
+
+    service._record_strategy_snapshot(
+        market=market,
+        note="arb_micro realism gate: fuente degradada: rest-coinbase",
+        extra_state={"strategy_official_price_to_beat": "0.000000"},
+    )
+
+    assert round(float(db.get_bot_state("strategy_official_price_to_beat") or 0.0), 2) == 71982.16
+    db.close()
+
+
 def test_arb_micro_strict_realism_skips_degraded_reference(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
