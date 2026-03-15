@@ -250,6 +250,8 @@ class BTC5mStrategyService:
         self._cached_market_expires_at = 0.0
         self._last_cycle_log_signature = ""
         self._last_cycle_log_at = 0.0
+        self._last_market_lookup_warning_signature = ""
+        self._last_market_lookup_warning_at = 0.0
 
     def run(self, mode: str = "paper") -> dict[str, int]:
         if self.settings.config.strategy_entry_mode == "arb_micro":
@@ -951,8 +953,14 @@ class BTC5mStrategyService:
             self._prime_market_feed(cached_market)
             return dict(cached_market)
 
+        lookup_failed = False
         for slug in candidate_slugs:
-            market = self.gamma_client.get_market_by_slug(slug)
+            try:
+                market = self.gamma_client.get_market_by_slug(slug)
+            except Exception as error:  # noqa: BLE001
+                lookup_failed = True
+                self._log_market_lookup_warning(slug=slug, error=error)
+                continue
             if not market:
                 continue
             if bool(market.get("closed")):
@@ -963,9 +971,27 @@ class BTC5mStrategyService:
             self._cached_market_expires_at = time.monotonic() + _MARKET_METADATA_CACHE_SECONDS
             self._prime_market_feed(market)
             return market
+        if (
+            lookup_failed
+            and cached_market is not None
+            and str(cached_market.get("slug") or "") in candidate_slugs
+            and not bool(cached_market.get("closed"))
+            and bool(cached_market.get("acceptingOrders", False))
+        ):
+            self._prime_market_feed(cached_market)
+            return dict(cached_market)
         self._cached_market = None
         self._cached_market_expires_at = 0.0
         return None
+
+    def _log_market_lookup_warning(self, *, slug: str, error: Exception) -> None:
+        signature = f"{slug}:{type(error).__name__}:{error}"
+        now = time.monotonic()
+        if signature == self._last_market_lookup_warning_signature and (now - self._last_market_lookup_warning_at) < 10.0:
+            return
+        self._last_market_lookup_warning_signature = signature
+        self._last_market_lookup_warning_at = now
+        self.logger.warning("market lookup failed slug=%s: %s", slug, error)
 
     def _prime_market_feed(self, market: dict) -> None:
         token_ids = _parse_json_list(market.get("clobTokenIds"))

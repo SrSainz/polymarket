@@ -2116,6 +2116,31 @@ def test_arb_micro_does_not_keep_buying_same_cheap_side_when_bracket_is_far_off_
     db.close()
 
 
+def test_arb_micro_market_discovery_network_error_does_not_crash(tmp_path: Path, caplog) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FailingGammaClient(),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0),
+        logger=logging.getLogger("test-btc5m-arb-discovery-dns"),
+    )
+
+    caplog.set_level(logging.WARNING)
+    stats = service.run(mode="paper")
+
+    assert stats["skipped"] == 1
+    assert "no active btc5m market" in str(db.get_bot_state("strategy_last_note") or "")
+    assert "market lookup failed" in caplog.text
+    db.close()
+
+
 def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
