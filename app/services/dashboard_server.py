@@ -250,6 +250,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_reference_quality = _bot_state_text(conn, "strategy_reference_quality")
         strategy_reference_comparable = _bot_state_int(conn, "strategy_reference_comparable")
         strategy_reference_note = _bot_state_text(conn, "strategy_reference_note")
+        strategy_operability_state = _bot_state_text(conn, "strategy_operability_state")
+        strategy_operability_label = _bot_state_text(conn, "strategy_operability_label")
+        strategy_operability_reason = _bot_state_text(conn, "strategy_operability_reason")
+        strategy_operability_blocking = _bot_state_int(conn, "strategy_operability_blocking")
         strategy_spot_delta_bps = _bot_state_float(conn, "strategy_spot_delta_bps")
         strategy_spot_fair_up = _bot_state_float(conn, "strategy_spot_fair_up")
         strategy_spot_fair_down = _bot_state_float(conn, "strategy_spot_fair_down")
@@ -448,6 +452,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_reference_quality": strategy_reference_quality,
         "strategy_reference_comparable": bool(strategy_reference_comparable),
         "strategy_reference_note": strategy_reference_note,
+        "strategy_operability_state": strategy_operability_state,
+        "strategy_operability_label": strategy_operability_label,
+        "strategy_operability_reason": strategy_operability_reason,
+        "strategy_operability_blocking": bool(strategy_operability_blocking),
         "strategy_spot_delta_bps": round(strategy_spot_delta_bps, 2),
         "strategy_spot_fair_up": round(strategy_spot_fair_up, 4),
         "strategy_spot_fair_down": round(strategy_spot_fair_down, 4),

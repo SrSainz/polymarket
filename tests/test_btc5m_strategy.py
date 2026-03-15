@@ -2481,6 +2481,9 @@ def test_arb_micro_strict_realism_skips_degraded_reference(tmp_path: Path) -> No
     assert not db.list_copy_positions()
     assert db.get_bot_state("strategy_reference_comparable") == "0"
     assert db.get_bot_state("strategy_reference_quality") == "degraded"
+    assert db.get_bot_state("strategy_operability_state") == "degraded_reference"
+    assert db.get_bot_state("strategy_operability_label") == "Referencia degradada"
+    assert db.get_bot_state("strategy_operability_blocking") == "1"
     assert "realism gate" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 

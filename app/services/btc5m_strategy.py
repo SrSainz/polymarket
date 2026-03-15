@@ -239,6 +239,14 @@ class ArbReferenceState:
     budget_scale: float = 1.0
 
 
+@dataclass(frozen=True)
+class StrategyOperabilityState:
+    state: str
+    label: str
+    reason: str
+    blocking: bool = False
+
+
 class BTC5mStrategyService:
     def __init__(
         self,
@@ -3517,6 +3525,8 @@ class BTC5mStrategyService:
         note: str = "",
         extra_state: dict[str, str] | None = None,
     ) -> None:
+        snapshot_state = dict(extra_state or {})
+        operability_state = self._derive_strategy_operability_state(note=note, extra_state=snapshot_state)
         self.db.set_bot_state("strategy_mode", self.settings.config.strategy_mode)
         self.db.set_bot_state("strategy_entry_mode", self.settings.config.strategy_entry_mode)
         self.db.set_bot_state("strategy_last_note", note)
@@ -3532,8 +3542,148 @@ class BTC5mStrategyService:
             self.db.set_bot_state("strategy_target_price", f"{opportunity.target.best_ask:.6f}")
             self.db.set_bot_state("strategy_trigger_outcome", opportunity.trigger.label)
             self.db.set_bot_state("strategy_trigger_price_seen", f"{opportunity.trigger.best_ask:.6f}")
-        for key, value in (extra_state or {}).items():
+        for key, value in self._strategy_operability_entries(operability_state).items():
             self.db.set_bot_state(key, value)
+        for key, value in snapshot_state.items():
+            self.db.set_bot_state(key, value)
+
+    def _derive_strategy_operability_state(
+        self,
+        *,
+        note: str,
+        extra_state: dict[str, str],
+    ) -> StrategyOperabilityState:
+        note_text = str(note or "").strip()
+        note_lower = note_text.lower()
+        current_exposure = _safe_float(
+            extra_state.get("strategy_current_market_exposure") or self.db.get_bot_state("strategy_current_market_exposure")
+        )
+        plan_legs = int(
+            _safe_float(extra_state.get("strategy_plan_legs") or self.db.get_bot_state("strategy_plan_legs"))
+        )
+        bracket_phase = str(
+            extra_state.get("strategy_bracket_phase") or self.db.get_bot_state("strategy_bracket_phase") or ""
+        ).strip()
+
+        if "drawdown stop" in note_lower:
+            return StrategyOperabilityState(
+                state="stopped",
+                label="Parado",
+                reason="Proteccion de drawdown activada; el simulador no debe abrir nuevas compras.",
+                blocking=True,
+            )
+        if "realism gate" in note_lower:
+            return StrategyOperabilityState(
+                state="degraded_reference",
+                label="Referencia degradada",
+                reason=note_text.split(":", 1)[-1].strip() or "La referencia no es comparable a Polymarket.",
+                blocking=True,
+            )
+        if "no active btc5m market" in note_lower:
+            return StrategyOperabilityState(
+                state="no_market",
+                label="Sin mercado",
+                reason="Todavia no hay una ventana BTC 5m activa y operable.",
+                blocking=True,
+            )
+        if "too early" in note_lower or "demasiado pronto" in note_lower:
+            return StrategyOperabilityState(
+                state="waiting_window",
+                label="Esperando ventana",
+                reason=note_text or "Aun es pronto para abrir el bracket con criterio.",
+                blocking=True,
+            )
+        if "too late" in note_lower or " tarde" in note_lower:
+            return StrategyOperabilityState(
+                state="late_window",
+                label="Ventana avanzada",
+                reason=note_text or "La ventana ya esta demasiado avanzada para abrir con cabeza.",
+                blocking=True,
+            )
+        if "incomplete book" in note_lower or "no orderbook" in note_lower:
+            return StrategyOperabilityState(
+                state="waiting_book",
+                label="Esperando libro",
+                reason="Falta liquidez visible o el libro viene incompleto en una de las patas.",
+                blocking=True,
+            )
+        if "cooldown" in note_lower:
+            return StrategyOperabilityState(
+                state="cooldown",
+                label="Cooldown",
+                reason="Acaba de ejecutar y deja una pausa muy corta para no sobrerreaccionar.",
+                blocking=True,
+            )
+        if "no locked edge" in note_lower:
+            return StrategyOperabilityState(
+                state="waiting_edge",
+                label="Esperando edge",
+                reason="La ventana esta viva, pero el margen neto aun no justifica abrir o sesgar el bracket.",
+                blocking=True,
+            )
+        if "concurrent market limit reached" in note_lower or "open market limit reached" in note_lower:
+            return StrategyOperabilityState(
+                state="carry_open",
+                label="Carry abierto",
+                reason="Todavia queda otra ventana viva y el motor no quiere mezclar dos brackets a la vez.",
+                blocking=True,
+            )
+        if "market cap exhausted" in note_lower or "total cap exhausted" in note_lower:
+            return StrategyOperabilityState(
+                state="cap_reached",
+                label="Capacidad agotada",
+                reason="Ya hay bastante dinero metido y el motor prefiere no seguir cargando.",
+                blocking=True,
+            )
+        if "budget below minimum" in note_lower or "cash below min_trade_amount" in note_lower or "bankroll exhausted" in note_lower:
+            return StrategyOperabilityState(
+                state="budget_limited",
+                label="Sin tamano",
+                reason="El presupuesto util del ciclo se ha quedado por debajo del minimo operativo.",
+                blocking=True,
+            )
+        if current_exposure > 0 and plan_legs > 0:
+            return StrategyOperabilityState(
+                state="executing",
+                label="Comprando",
+                reason="Hay plan activo y el motor esta ejecutando o acompanando el bracket actual.",
+                blocking=False,
+            )
+        if current_exposure > 0 and bracket_phase == "redistribuir":
+            return StrategyOperabilityState(
+                state="rebalancing",
+                label="Rebalanceando",
+                reason="Hay exposicion abierta y el motor intenta recomponer el reparto sin empeorarlo.",
+                blocking=False,
+            )
+        if current_exposure > 0:
+            return StrategyOperabilityState(
+                state="monitoring",
+                label="Observando",
+                reason="Hay una ventana abierta, pero ahora mismo no hay una nueva compra valida.",
+                blocking=False,
+            )
+        if plan_legs > 0:
+            return StrategyOperabilityState(
+                state="ready",
+                label="Listo para ejecutar",
+                reason="Hay un plan valido preparado para este ciclo.",
+                blocking=False,
+            )
+        return StrategyOperabilityState(
+            state="observing",
+            label="Observando",
+            reason=note_text or "Esperando una oportunidad clara y datos comparables.",
+            blocking=False,
+        )
+
+    def _strategy_operability_entries(self, operability_state: StrategyOperabilityState) -> dict[str, str]:
+        return {
+            "strategy_operability_state": operability_state.state,
+            "strategy_operability_label": operability_state.label,
+            "strategy_operability_reason": operability_state.reason,
+            "strategy_operability_blocking": "1" if operability_state.blocking else "0",
+        }
 
     def _market_feed_status(self) -> dict[str, object]:
         status_fn = getattr(self.clob_client, "market_feed_status", None)

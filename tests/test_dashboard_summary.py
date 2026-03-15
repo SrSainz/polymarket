@@ -38,6 +38,10 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_target_outcome", "Down")
     db.set_bot_state("strategy_target_price", "0.02")
     db.set_bot_state("strategy_last_note", "buy_opposite trigger Up ask=0.99 -> buy Down ask=0.02")
+    db.set_bot_state("strategy_operability_state", "executing")
+    db.set_bot_state("strategy_operability_label", "Comprando")
+    db.set_bot_state("strategy_operability_reason", "Hay plan activo y el motor esta ejecutando o acompanando el bracket actual.")
+    db.set_bot_state("strategy_operability_blocking", "0")
     db.close()
 
     summary = _summary_payload(
@@ -59,6 +63,10 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     assert summary["strategy_mode"] == "btc5m_orderbook"
     assert summary["strategy_entry_mode"] == "buy_opposite"
     assert summary["strategy_target_outcome"] == "Down"
+    assert summary["strategy_operability_state"] == "executing"
+    assert summary["strategy_operability_label"] == "Comprando"
+    assert summary["strategy_operability_reason"].startswith("Hay plan activo")
+    assert summary["strategy_operability_blocking"] is False
 
 
 def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
@@ -89,6 +97,10 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_reference_quality", "official")
     db.set_bot_state("strategy_reference_comparable", "1")
     db.set_bot_state("strategy_reference_note", "referencia oficial Polymarket + Chainlink RTDS")
+    db.set_bot_state("strategy_operability_state", "ready")
+    db.set_bot_state("strategy_operability_label", "Listo para ejecutar")
+    db.set_bot_state("strategy_operability_reason", "Hay un plan valido preparado para este ciclo.")
+    db.set_bot_state("strategy_operability_blocking", "0")
     db.set_bot_state("strategy_spot_delta_bps", "3.60")
     db.set_bot_state("strategy_spot_fair_up", "0.559")
     db.set_bot_state("strategy_spot_fair_down", "0.441")
@@ -163,6 +175,10 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     assert summary["strategy_reference_quality"] == "official"
     assert summary["strategy_reference_comparable"] is True
     assert summary["strategy_reference_note"] == "referencia oficial Polymarket + Chainlink RTDS"
+    assert summary["strategy_operability_state"] == "ready"
+    assert summary["strategy_operability_label"] == "Listo para ejecutar"
+    assert summary["strategy_operability_reason"] == "Hay un plan valido preparado para este ciclo."
+    assert summary["strategy_operability_blocking"] is False
     assert summary["strategy_primary_ratio"] == 0.8
     assert summary["strategy_primary_outcome"] == "Up"
     assert summary["strategy_hedge_outcome"] == "Down"
