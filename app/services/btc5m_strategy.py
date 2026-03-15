@@ -96,6 +96,12 @@ _ARB_BIASED_BRACKET_NET_EDGE_MIN = 0.008
 _ARB_BIASED_BRACKET_HEDGE_TOLERANCE = -0.012
 _ARB_BRACKET_HEDGE_FLOOR_EARLY = 0.18
 _ARB_BRACKET_HEDGE_FLOOR_MID_LATE = 0.12
+_ARB_REPAIR_RATIO_TRIGGER = 0.14
+_ARB_REPAIR_SUM_MAX = 1.04
+_ARB_REPAIR_NET_EDGE_FLOOR = -0.03
+_ARB_REPAIR_FAIR_SLACK = 0.02
+_ARB_REPAIR_PROGRESS_FRACTION = 0.65
+_ARB_REPAIR_BUDGET_FRACTION = 0.45
 _ARB_BURST_COOLDOWN_MIN_SECONDS = 0.8
 _ARB_BURST_COOLDOWN_MAX_SECONDS = 2.6
 _ARB_MAX_PLAN_INSTRUCTIONS = 72
@@ -1645,6 +1651,29 @@ class BTC5mStrategyService:
                         current_up_ratio=current_ratio_after,
                         bracket_phase=bracket_phase,
                     )
+        repair_plan = self._build_arb_repair_plan(
+            market=market,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            pair_sum=pair_sum,
+            fair_up=fair_up,
+            fair_down=fair_down,
+            up_net_edge=up_net_edge,
+            down_net_edge=down_net_edge,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_up_ratio,
+            timing_regime=timing_regime,
+            cycle_budget=cycle_budget,
+            cash_balance=cash_balance,
+            remaining_instruction_capacity=remaining_instruction_capacity,
+            current_up_notional=current_up_notional,
+            current_down_notional=current_down_notional,
+            spot_context=spot_context,
+            bracket_phase=bracket_phase,
+            carry_note=carry_note,
+        )
+        if repair_plan is not None:
+            return repair_plan
         delta_note = f" | delta {spot_context.delta_bps:+.1f}bps" if spot_context is not None else ""
         self._record_strategy_snapshot(
             market=market,
@@ -2028,6 +2057,40 @@ class BTC5mStrategyService:
 
             if not level_used:
                 continue
+
+        return levels
+
+    def _build_arb_repair_levels(
+        self,
+        *,
+        target: MarketOutcome,
+        budget: float,
+        fair_value: float,
+    ) -> list[ArbSingleSideLevel]:
+        remaining_budget = budget
+        levels: list[ArbSingleSideLevel] = []
+        max_price = fair_value + _ARB_REPAIR_FAIR_SLACK
+        min_notional = self._arb_min_notional()
+
+        for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]:
+            if remaining_budget < min_notional:
+                break
+            price = float(level.price)
+            size = float(level.size)
+            if price > max_price:
+                break
+            if size <= 0:
+                continue
+
+            shares = _round_down(min(size, remaining_budget / max(price, 1e-9)), "0.0001")
+            if shares <= 0:
+                continue
+            notional = _round_down(shares * price, "0.01")
+            if notional < min_notional:
+                continue
+
+            levels.append(ArbSingleSideLevel(price=price, shares=shares, notional=notional))
+            remaining_budget -= notional
 
         return levels
 
@@ -2544,6 +2607,154 @@ class BTC5mStrategyService:
             pair_sum=pair_sum,
             edge_pct=pair_net_edge,
             fair_value=max(fair_up, fair_down, 0.0),
+            spot_price=spot_context.current_price if spot_context is not None else 0.0,
+            spot_anchor=spot_context.anchor_price if spot_context is not None else 0.0,
+            spot_delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+            spot_fair_up=spot_context.fair_up if spot_context is not None else 0.0,
+            spot_fair_down=spot_context.fair_down if spot_context is not None else 0.0,
+            spot_source=spot_context.source if spot_context is not None else "",
+            spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
+            spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
+            spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_ratio_after,
+            bracket_phase=bracket_phase,
+        )
+
+    def _build_arb_repair_plan(
+        self,
+        *,
+        market: dict,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        pair_sum: float,
+        fair_up: float,
+        fair_down: float,
+        up_net_edge: float,
+        down_net_edge: float,
+        desired_up_ratio: float,
+        current_up_ratio: float,
+        timing_regime: str,
+        cycle_budget: float,
+        cash_balance: float,
+        remaining_instruction_capacity: int,
+        current_up_notional: float,
+        current_down_notional: float,
+        spot_context: ArbSpotContext | None,
+        bracket_phase: str,
+        carry_note: str = "",
+    ) -> StrategyPlan | None:
+        if bracket_phase != "redistribuir":
+            return None
+
+        ratio_gap = desired_up_ratio - current_up_ratio
+        ratio_gap_abs = abs(ratio_gap)
+        if ratio_gap_abs < _ARB_REPAIR_RATIO_TRIGGER:
+            return None
+        if pair_sum > _ARB_REPAIR_SUM_MAX:
+            return None
+
+        desired_down_ratio = max(1.0 - desired_up_ratio, 0.0)
+        if ratio_gap > 0:
+            target = up_outcome
+            fair_value = fair_up
+            net_edge = up_net_edge
+            desired_target_ratio = desired_up_ratio
+            current_target_notional = current_up_notional
+            other_notional = current_down_notional
+        else:
+            target = down_outcome
+            fair_value = fair_down
+            net_edge = down_net_edge
+            desired_target_ratio = desired_down_ratio
+            current_target_notional = current_down_notional
+            other_notional = current_up_notional
+
+        if desired_target_ratio <= 0 or desired_target_ratio >= 0.999:
+            return None
+        if target.best_ask > fair_value + _ARB_REPAIR_FAIR_SLACK:
+            return None
+        if net_edge < _ARB_REPAIR_NET_EDGE_FLOOR:
+            return None
+
+        numerator = (desired_target_ratio * (current_target_notional + other_notional)) - current_target_notional
+        needed_notional = numerator / max(1.0 - desired_target_ratio, 1e-9)
+        if needed_notional <= 0:
+            return None
+
+        repair_budget = _round_down(
+            min(
+                needed_notional * _ARB_REPAIR_PROGRESS_FRACTION,
+                cycle_budget * _ARB_REPAIR_BUDGET_FRACTION,
+                cash_balance,
+            ),
+            "0.01",
+        )
+        if repair_budget < self._arb_min_notional():
+            return None
+
+        repair_levels = self._build_arb_repair_levels(
+            target=target,
+            budget=repair_budget,
+            fair_value=fair_value,
+        )
+        if not repair_levels:
+            return None
+
+        instructions = [
+            instruction
+            for idx, level in enumerate(repair_levels[:remaining_instruction_capacity], start=1)
+            if (
+                instruction := self._build_arb_instruction(
+                    market=market,
+                    target=target,
+                    shares=level.shares,
+                    price=level.price,
+                    pair_sum=pair_sum,
+                    tranche_index=idx,
+                )
+            )
+            is not None
+        ]
+        if not instructions:
+            return None
+
+        primary_notional = sum(item.notional for item in instructions)
+        projected_up_notional = current_up_notional + (primary_notional if target.asset_id == up_outcome.asset_id else 0.0)
+        projected_down_notional = current_down_notional + (primary_notional if target.asset_id == down_outcome.asset_id else 0.0)
+        current_ratio_after = self._arb_current_up_ratio(
+            up_exposure=projected_up_notional,
+            down_exposure=projected_down_notional,
+        )
+        note = (
+            f"repair {target.label} ask {target.best_ask:.3f} ~ fair {fair_value:.3f} | "
+            f"net {net_edge * 100:.2f}% | {timing_regime} | compras {len(instructions)} | "
+            f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
+            f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
+            f"fase {bracket_phase}{carry_note}"
+        )
+        if spot_context is not None:
+            note += f" | delta {spot_context.delta_bps:+.1f}bps"
+
+        return StrategyPlan(
+            instructions=tuple(instructions),
+            note=note,
+            primary_target=target,
+            secondary_target=None,
+            trigger=target,
+            window_seconds=self._seconds_into_window(market),
+            cycle_budget=round(primary_notional, 6),
+            market_bias=f"Repair {target.label}",
+            timing_regime=timing_regime,
+            price_mode="repair-bracket",
+            primary_ratio=1.0,
+            primary_notional=primary_notional,
+            secondary_notional=0.0,
+            replenishment_count=0,
+            trigger_value=target.best_ask,
+            pair_sum=pair_sum,
+            edge_pct=max(net_edge, 0.0),
+            fair_value=fair_value,
             spot_price=spot_context.current_price if spot_context is not None else 0.0,
             spot_anchor=spot_context.anchor_price if spot_context is not None else 0.0,
             spot_delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,

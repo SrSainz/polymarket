@@ -249,6 +249,8 @@ function currentEdgeInfo(summary) {
   const label =
     priceMode === "cheap-side"
       ? "lado barato"
+      : priceMode === "repair-bracket"
+      ? "repair"
       : priceMode === "biased-bracket"
       ? "bracket sesgado"
       : priceMode === "underround"
@@ -439,6 +441,9 @@ function simplifiedStrategyReason(summary) {
 function friendlyWindowState(summary) {
   const openExposure = Number(summary?.strategy_current_market_total_exposure || 0);
   const currentLivePnl = Number(summary?.strategy_current_market_live_pnl || 0);
+  const strategyPlanLegs = Number(summary?.strategy_plan_legs || 0);
+  const priceMode = String(summary?.strategy_price_mode || "").toLowerCase();
+  const bracketPhase = String(summary?.strategy_bracket_phase || "").toLowerCase();
   const lastExecution = latestStrategyExecution();
   const lastAction = String(lastExecution?.action || "").toLowerCase();
   const lastExecutionAgeSeconds = lastExecution ? Math.max((Date.now() / 1000) - Number(lastExecution.ts || 0), 0) : Infinity;
@@ -451,6 +456,18 @@ function friendlyWindowState(summary) {
     return { label: "Bloqueado por bracket abierto", detail: simplifiedStrategyReason(summary) };
   }
   if (openExposure > 0) {
+    if (priceMode === "repair-bracket" || (bracketPhase === "redistribuir" && strategyPlanLegs > 0 && note.includes("repair "))) {
+      return {
+        label: "Reparando",
+        detail: `El bot esta cubriendo la pata infraponderada. Quedan ${fmtUsdPlain(openExposure, 2)} abiertos y va ${fmtUsd(currentLivePnl, 2)} en vivo.`,
+      };
+    }
+    if (bracketPhase === "redistribuir" && strategyPlanLegs <= 0) {
+      return {
+        label: "Rebalanceando",
+        detail: `Hay ${fmtUsdPlain(openExposure, 2)} abiertos en esta ventana, pero el bot no ve precio suficiente para recomponer el reparto sin empeorarlo.`,
+      };
+    }
     if (lastAction === "close" && lastExecutionAgeSeconds <= 90) {
       return {
         label: "Cerrando",
