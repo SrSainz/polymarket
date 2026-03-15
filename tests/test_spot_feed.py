@@ -65,6 +65,21 @@ def test_spot_feed_snapshot_prefers_chainlink_reference_when_available() -> None
     assert snapshot.source == "polymarket-rtds+binance"
 
 
+def test_spot_feed_keeps_chainlink_reference_alive_longer_than_binance() -> None:
+    feed = SpotFeed("wss://ws-live-data.polymarket.com", logging.getLogger("test-spot-feed"))
+    now = time.time()
+    with feed._lock:
+        feed._prices["btcusdt"] = (70045.57, now - 2.0)
+        feed._prices["btc/usd"] = (70062.12, now - 2.0)
+
+    snapshot = feed.get_snapshot()
+
+    assert snapshot.reference_price == 70062.12
+    assert snapshot.chainlink_price == 70062.12
+    assert snapshot.binance_price is None
+    assert snapshot.source == "polymarket-rtds-chainlink"
+
+
 def test_spot_feed_anchor_price_prefers_chainlink_sample_near_window_start() -> None:
     feed = SpotFeed("wss://ws-live-data.polymarket.com", logging.getLogger("test-spot-feed"))
     target = time.time()

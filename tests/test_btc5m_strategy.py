@@ -2507,6 +2507,46 @@ def test_record_strategy_snapshot_keeps_market_official_over_zero_snapshot(tmp_p
     db.close()
 
 
+def test_market_official_price_to_beat_refetches_partial_market_by_slug(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-1773598800"
+    partial_market = {
+        "question": "Bitcoin Up or Down - Partial",
+        "slug": slug,
+        "conditionId": "cond-partial-market",
+        "closed": False,
+        "acceptingOrders": True,
+        "events": [{"startTime": "2026-03-15T18:20:00Z", "eventMetadata": None}],
+    }
+    refreshed_market = {
+        "question": "Bitcoin Up or Down - Refreshed",
+        "slug": slug,
+        "conditionId": "cond-refreshed-market",
+        "closed": False,
+        "acceptingOrders": True,
+        "events": [{"startTime": "2026-03-15T18:20:00Z", "eventMetadata": {"priceToBeat": 71771.64821}}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({slug: refreshed_market}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-refetch-partial-market"),
+        spot_feed=None,
+    )
+
+    official = service._market_official_price_to_beat(partial_market)
+
+    assert round(official, 2) == 71771.65
+    db.close()
+
+
 def test_arb_micro_strict_realism_skips_degraded_reference(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

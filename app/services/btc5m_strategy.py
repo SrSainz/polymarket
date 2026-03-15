@@ -276,6 +276,7 @@ class BTC5mStrategyService:
         self.risk = RiskManager(settings.config)
         self._cached_market: dict | None = None
         self._cached_market_expires_at = 0.0
+        self._official_price_cache: dict[str, tuple[float, float]] = {}
         self._last_cycle_log_signature = ""
         self._last_cycle_log_at = 0.0
         self._last_market_lookup_warning_signature = ""
@@ -3760,6 +3761,58 @@ class BTC5mStrategyService:
         if not isinstance(market, dict):
             return 0.0
 
+        slug = str(market.get("slug") or "").strip()
+        if slug:
+            cached = self._official_price_cache.get(slug)
+            if cached is not None:
+                cached_price, cached_expires_at = cached
+                if time.monotonic() < cached_expires_at and cached_price > 0:
+                    return cached_price
+
+        events = market.get("events") or []
+        if isinstance(events, list):
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                metadata = event.get("eventMetadata") or {}
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except json.JSONDecodeError:
+                        metadata = {}
+                if isinstance(metadata, dict):
+                    official = _safe_float(metadata.get("priceToBeat"))
+                    if official > 0:
+                        if slug:
+                            self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
+                        return official
+
+        metadata = market.get("eventMetadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                metadata = {}
+        if isinstance(metadata, dict):
+            official = _safe_float(metadata.get("priceToBeat"))
+            if official > 0:
+                if slug:
+                    self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
+                return official
+
+        if slug:
+            try:
+                refreshed_market = self.gamma_client.get_market_by_slug(slug)
+            except Exception:  # noqa: BLE001
+                refreshed_market = None
+            if isinstance(refreshed_market, dict) and refreshed_market is not market:
+                refreshed_official = self._market_official_price_to_beat_from_payload(refreshed_market)
+                if refreshed_official > 0:
+                    self._official_price_cache[slug] = (refreshed_official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
+                    return refreshed_official
+        return 0.0
+
+    def _market_official_price_to_beat_from_payload(self, market: dict) -> float:
         events = market.get("events") or []
         if isinstance(events, list):
             for event in events:

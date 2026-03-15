@@ -38,6 +38,7 @@ class SpotFeed:
         *,
         enabled: bool = True,
         stale_after_seconds: float = 1.5,
+        chainlink_stale_after_seconds: float = 8.0,
         reconnect_delay_seconds: float = 1.0,
         rest_cache_seconds: float = 0.5,
     ) -> None:
@@ -45,6 +46,7 @@ class SpotFeed:
         self.logger = logger
         self.enabled = enabled and bool(self.ws_url)
         self.stale_after_seconds = max(float(stale_after_seconds), 0.25)
+        self.chainlink_stale_after_seconds = max(float(chainlink_stale_after_seconds), self.stale_after_seconds)
         self.reconnect_delay_seconds = max(float(reconnect_delay_seconds), 0.25)
         self.rest_cache_seconds = max(float(rest_cache_seconds), 0.1)
         self._lock = threading.Lock()
@@ -170,25 +172,22 @@ class SpotFeed:
                 if self._ws_kind != "polymarket":
                     return
                 try:
-                    ws_app.send(json.dumps({"action": "subscribe", "subscriptions": [{"topic": "crypto_prices", "type": "update"}]}))
-                    ws_app.send(
-                        json.dumps(
-                            {
-                                "action": "subscribe",
-                                "subscriptions": [
-                                    {"topic": "crypto_prices_chainlink", "type": "*", "filters": json.dumps({"symbol": "btc/usd"})}
-                                ],
-                            }
-                        )
-                    )
+                    ws_app.send(_polymarket_prices_subscription_message())
+                    ws_app.send(_polymarket_chainlink_subscription_message())
                 except Exception as error:  # noqa: BLE001
                     self.logger.warning("spot feed subscribe failed: %s", error)
                     return
 
                 def ping_loop() -> None:
-                    while not ping_stop.wait(5.0):
+                    refresh_counter = 0
+                    while not ping_stop.wait(2.0):
                         try:
-                            ws_app.send("PING")
+                            if self._ws_kind == "polymarket":
+                                ws_app.send(_polymarket_chainlink_subscription_message())
+                            refresh_counter += 2
+                            if refresh_counter >= 6:
+                                ws_app.send("PING")
+                                refresh_counter = 0
                         except Exception:  # noqa: BLE001
                             return
 
@@ -269,7 +268,8 @@ class SpotFeed:
         if price_entry is None:
             return None
         price, received_at = price_entry
-        if now - received_at > self.stale_after_seconds:
+        max_age_seconds = self.chainlink_stale_after_seconds if symbol == "btc/usd" else self.stale_after_seconds
+        if now - received_at > max_age_seconds:
             return None
         return price
 
@@ -374,6 +374,21 @@ def _iter_price_points(payload: Any) -> list[tuple[str, float]]:
     for symbol, price in points:
         deduped[symbol] = price
     return list(deduped.items())
+
+
+def _polymarket_prices_subscription_message() -> str:
+    return json.dumps({"action": "subscribe", "subscriptions": [{"topic": "crypto_prices", "type": "update"}]})
+
+
+def _polymarket_chainlink_subscription_message() -> str:
+    return json.dumps(
+        {
+            "action": "subscribe",
+            "subscriptions": [
+                {"topic": "crypto_prices_chainlink", "type": "*", "filters": json.dumps({"symbol": "btc/usd"})}
+            ],
+        }
+    )
 
 
 def _walk_price_points(payload: Any, sink: list[tuple[str, float]]) -> None:
