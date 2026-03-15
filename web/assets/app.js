@@ -840,6 +840,19 @@ function paintSummary(summary, items = lastPositions) {
   const feedInfo = feedModeInfo(summary);
   const edgeInfo = currentEdgeInfo(summary);
   const spotInfo = currentSpotInfo(summary);
+  const visibleMarketPrice = spotInfo.hasChainlink ? spotInfo.chainlink : spotInfo.current;
+  const visibleDeltaUsd =
+    spotInfo.hasChainlink && spotInfo.hasOfficialBeat
+      ? spotInfo.chainlinkDeltaUsd
+      : spotInfo.available
+      ? spotInfo.deltaUsd
+      : 0;
+  const visibleDeltaBps =
+    spotInfo.hasChainlink && spotInfo.hasOfficialBeat
+      ? spotInfo.chainlinkDeltaBps
+      : spotInfo.available
+      ? spotInfo.deltaMarketBps
+      : 0;
   const strategySpeedLabel = feedInfo.summaryLabel;
   const currentMarketLivePnl = Number(summary.strategy_current_market_live_pnl || buckets.currentSummary.unrealized || 0);
   const currentMarketExposure = Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || buckets.currentSummary.exposure || 0);
@@ -949,23 +962,24 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowValue").textContent =
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labFeedValue").textContent = feedInfo.label;
-  document.getElementById("labSpotCurrent").textContent = spotInfo.hasCurrent ? fmtBtcPrice(spotInfo.current) : "-";
-  document.getElementById("labChainlinkPrice").textContent = spotInfo.hasChainlink ? fmtBtcPrice(spotInfo.chainlink) : "-";
+  document.getElementById("labSpotCurrent").textContent =
+    visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-";
+  document.getElementById("labChainlinkPrice").textContent = spotInfo.hasCurrent ? fmtBtcPrice(spotInfo.current) : "-";
   document.getElementById("labSpotAnchor").textContent = spotInfo.hasOfficialBeat
     ? fmtBtcPrice(spotInfo.officialBeat)
     : spotInfo.hasAnchor
     ? `${fmtBtcPrice(spotInfo.anchor)} (sin oficial)`
     : "-";
   document.getElementById("labSpotDelta").textContent =
-    spotInfo.available
-      ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaMarketBps, 1)}bps`
-      : spotInfo.hasCurrent
+    visibleMarketPrice > 0 && spotInfo.hasAnchor
+      ? `${fmtUsd(visibleDeltaUsd, 2)} | ${fmt(visibleDeltaBps, 1)}bps`
+      : spotInfo.hasCurrent || spotInfo.hasChainlink
       ? "esperando beat oficial"
       : "-";
   document.getElementById("labChainlinkDelta").textContent =
-    spotInfo.hasChainlink && spotInfo.hasOfficialBeat
-      ? `${fmtUsd(spotInfo.chainlinkDeltaUsd, 2)} | ${fmt(spotInfo.chainlinkDeltaBps, 1)}bps`
-      : spotInfo.hasChainlink
+    spotInfo.available
+      ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaMarketBps, 1)}bps`
+      : spotInfo.hasCurrent
       ? "esperando beat oficial"
       : "-";
   document.getElementById("labAnchorDrift").textContent =
@@ -987,7 +1001,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | spot ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasChainlink ? ` | chainlink ${fmtBtcPrice(spotInfo.chainlink)}` : ""}${spotInfo.hasOfficialBeat ? ` | beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasOfficialBeat && spotInfo.hasLocalAnchor ? ` | desvio ${fmtUsd(spotInfo.anchorDriftUsd, 2)} / ${fmt(spotInfo.anchorDriftBps, 1)}bps` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.hasCurrent || spotInfo.hasChainlink ? `${spotInfo.source} ${spotInfo.ageMs}ms | polymarket ${visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-"}${spotInfo.hasCurrent ? ` | spot rapido ${fmtBtcPrice(spotInfo.current)}` : ""}${spotInfo.hasOfficialBeat ? ` | beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasOfficialBeat && spotInfo.hasLocalAnchor ? ` | desvio ${fmtUsd(spotInfo.anchorDriftUsd, 2)} / ${fmt(spotInfo.anchorDriftBps, 1)}bps` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
