@@ -100,6 +100,7 @@ def _settings(**overrides) -> AppSettings:
             "min_trade_amount": 1.0,
             "btc5m_reserve_enabled": True,
             "btc5m_relaxed_risk": True,
+            "btc5m_strict_realism_mode": False,
             **overrides,
         }
     )
@@ -2406,6 +2407,81 @@ def test_arb_spot_context_prefers_official_price_to_beat_over_local_anchor(tmp_p
     assert round(context.anchor_price, 2) == 71775.07
     assert context.anchor_source == "polymarket-official"
     assert context.delta_bps > 0
+    db.close()
+
+
+def test_arb_micro_strict_realism_skips_degraded_reference(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-strict-realism"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=80)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Strict Realism",
+        "slug": slug,
+        "conditionId": "cond-arb-strict-realism",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [
+            {
+                "startTime": start_time,
+                "eventMetadata": {"priceToBeat": 71775.07326019551},
+            }
+        ],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.70"}],
+                "asks": [{"price": "0.74", "size": "200"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.24"}],
+                "asks": [{"price": "0.26", "size": "200"}],
+            },
+        },
+        balance=1000.0,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=71750.0,
+            lead_price=71750.0,
+            binance_price=71750.0,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=12,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=1000.0,
+            strategy_trade_allocation_pct=0.05,
+            btc5m_strict_realism_mode=True,
+        ),
+        logger=logging.getLogger("test-btc5m-strict-realism"),
+        spot_feed=spot_feed,
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] == 0
+    assert not db.list_copy_positions()
+    assert db.get_bot_state("strategy_reference_comparable") == "0"
+    assert db.get_bot_state("strategy_reference_quality") == "degraded"
+    assert "realism gate" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 

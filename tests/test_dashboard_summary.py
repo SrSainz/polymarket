@@ -86,6 +86,9 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_spot_local_anchor", "71761.47")
     db.set_bot_state("strategy_official_price_to_beat", "71775.07")
     db.set_bot_state("strategy_anchor_source", "polymarket-official")
+    db.set_bot_state("strategy_reference_quality", "official")
+    db.set_bot_state("strategy_reference_comparable", "1")
+    db.set_bot_state("strategy_reference_note", "referencia oficial Polymarket + Chainlink RTDS")
     db.set_bot_state("strategy_spot_delta_bps", "3.60")
     db.set_bot_state("strategy_spot_fair_up", "0.559")
     db.set_bot_state("strategy_spot_fair_down", "0.441")
@@ -157,6 +160,9 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     assert summary["strategy_spot_local_anchor"] == 71761.47
     assert summary["strategy_official_price_to_beat"] == 71775.07
     assert summary["strategy_anchor_source"] == "polymarket-official"
+    assert summary["strategy_reference_quality"] == "official"
+    assert summary["strategy_reference_comparable"] is True
+    assert summary["strategy_reference_note"] == "referencia oficial Polymarket + Chainlink RTDS"
     assert summary["strategy_primary_ratio"] == 0.8
     assert summary["strategy_primary_outcome"] == "Up"
     assert summary["strategy_hedge_outcome"] == "Down"

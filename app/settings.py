@@ -91,6 +91,9 @@ class BotConfig(BaseModel):
     btc5m_reserve_protected_pct: float = 0.35
     btc5m_ignore_global_exposure_limit: bool = True
     btc5m_relaxed_risk: bool = True
+    btc5m_strict_realism_mode: bool = True
+    btc5m_reference_max_age_ms: int = 1200
+    btc5m_allow_rtds_anchor_fallback: bool = True
     live_only_btc5m: bool = False
     live_btc5m_ticket_allocation_pct: float = 0.10
     live_btc5m_max_open_positions: int = 3
@@ -218,6 +221,8 @@ class BotConfig(BaseModel):
             raise ValueError("btc5m_reserved_allocation_pct must be between 0 and 1")
         if self.btc5m_reserve_protected_pct < 0 or self.btc5m_reserve_protected_pct > 1:
             raise ValueError("btc5m_reserve_protected_pct must be between 0 and 1")
+        if self.btc5m_reference_max_age_ms < 100:
+            raise ValueError("btc5m_reference_max_age_ms must be >= 100")
         if self.live_btc5m_ticket_allocation_pct <= 0 or self.live_btc5m_ticket_allocation_pct > 1:
             raise ValueError("live_btc5m_ticket_allocation_pct must be in (0, 1]")
         if self.live_btc5m_max_open_positions < 1:

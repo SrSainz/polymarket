@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 
@@ -168,6 +168,9 @@ class StrategyPlan:
     desired_up_ratio: float = 0.5
     current_up_ratio: float = 0.5
     bracket_phase: str = ""
+    reference_quality: str = ""
+    reference_comparable: bool = False
+    reference_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -226,6 +229,14 @@ class ArbCarryState:
     previous_open_windows: int
     carry_exposure: float
     current_market_exposure: float
+
+
+@dataclass(frozen=True)
+class ArbReferenceState:
+    comparable: bool
+    quality: str
+    note: str
+    budget_scale: float = 1.0
 
 
 class BTC5mStrategyService:
@@ -580,6 +591,22 @@ class BTC5mStrategyService:
                 "strategy_pair_sum": f"{plan.pair_sum:.6f}",
                 "strategy_edge_pct": f"{plan.edge_pct:.6f}",
                 "strategy_fair_value": f"{plan.fair_value:.6f}",
+                "strategy_spot_price": f"{plan.spot_price:.6f}",
+                "strategy_spot_anchor": f"{plan.spot_anchor:.6f}",
+                "strategy_spot_delta_bps": f"{plan.spot_delta_bps:.4f}",
+                "strategy_spot_fair_up": f"{plan.spot_fair_up:.6f}",
+                "strategy_spot_fair_down": f"{plan.spot_fair_down:.6f}",
+                "strategy_spot_source": plan.spot_source,
+                "strategy_spot_age_ms": str(plan.spot_age_ms),
+                "strategy_spot_binance": f"{plan.spot_binance_price:.6f}",
+                "strategy_spot_chainlink": f"{plan.spot_chainlink_price:.6f}",
+                "strategy_desired_up_ratio": f"{plan.desired_up_ratio:.6f}",
+                "strategy_desired_down_ratio": f"{max(1.0 - plan.desired_up_ratio, 0.0):.6f}",
+                "strategy_current_up_ratio": f"{plan.current_up_ratio:.6f}",
+                "strategy_bracket_phase": plan.bracket_phase or "observando",
+                "strategy_reference_quality": plan.reference_quality,
+                "strategy_reference_comparable": "1" if plan.reference_comparable else "0",
+                "strategy_reference_note": plan.reference_note,
             },
         )
         self.db.upsert_strategy_window(
@@ -674,6 +701,9 @@ class BTC5mStrategyService:
                 "strategy_desired_down_ratio": f"{max(1.0 - plan.desired_up_ratio, 0.0):.6f}",
                 "strategy_current_up_ratio": f"{plan.current_up_ratio:.6f}",
                 "strategy_bracket_phase": plan.bracket_phase or "observando",
+                "strategy_reference_quality": plan.reference_quality,
+                "strategy_reference_comparable": "1" if plan.reference_comparable else "0",
+                "strategy_reference_note": plan.reference_note,
             },
         )
         return self._complete_cycle(
@@ -1176,6 +1206,27 @@ class BTC5mStrategyService:
             return None
 
         spot_context = self._arb_spot_context(market=market, seconds_into_window=seconds_into_window)
+        reference_state = self._arb_reference_state(
+            source=spot_context.source if spot_context is not None else "",
+            age_ms=spot_context.age_ms if spot_context is not None else 0,
+            chainlink_price=float(spot_context.chainlink_price or 0.0) if spot_context is not None else 0.0,
+            official_price_to_beat=spot_context.official_price_to_beat if spot_context is not None else 0.0,
+            local_anchor_price=spot_context.local_anchor_price if spot_context is not None else 0.0,
+            anchor_source=spot_context.anchor_source if spot_context is not None else "",
+        )
+        if self.settings.config.btc5m_strict_realism_mode and not reference_state.comparable:
+            self._record_strategy_snapshot(
+                market=market,
+                note=f"arb_micro realism gate: {reference_state.note}",
+                extra_state=self._arb_state_defaults(
+                    market=market,
+                    seconds_into_window=seconds_into_window,
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_timing_regime=timing_regime,
+                    **self._arb_reference_state_entries(reference_state),
+                ),
+            )
+            return None
         slug = str(market.get("slug") or "")
         condition_id = str(market.get("conditionId") or "")
         existing_market_notional = self._get_condition_exposure(condition_id)
@@ -1316,6 +1367,7 @@ class BTC5mStrategyService:
             ratio_gap=abs(desired_up_ratio - current_up_ratio),
             carry_exposure=carry_exposure,
         )
+        cycle_budget = _round_down(cycle_budget * reference_state.budget_scale, "0.01")
         remaining_instruction_capacity = self._arb_dynamic_instruction_capacity(
             cycle_budget=cycle_budget,
             timing_regime=timing_regime,
@@ -1324,6 +1376,20 @@ class BTC5mStrategyService:
             ratio_gap=abs(desired_up_ratio - current_up_ratio),
             carry_exposure=carry_exposure,
         )
+        if cycle_budget < self._arb_min_notional():
+            self._record_strategy_snapshot(
+                market=market,
+                note=f"arb_micro budget below minimum after reference gate ({reference_state.quality})",
+                extra_state=self._arb_state_defaults(
+                    market=market,
+                    seconds_into_window=seconds_into_window,
+                    strategy_window_seconds=str(seconds_into_window),
+                    strategy_timing_regime=timing_regime,
+                    strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                    **self._arb_reference_state_entries(reference_state),
+                ),
+            )
+            return None
         if window_state is not None:
             last_trade_at = int(window_state["last_trade_at"] or 0)
             if last_trade_at > 0:
@@ -1498,7 +1564,8 @@ class BTC5mStrategyService:
                         f"underround {pair_levels[0].pair_sum:.3f} | net {captured_edge_pct * 100:.2f}% | "
                         f"{timing_regime} | niveles {len(pair_levels)} | patas {len(instructions)}{bias_note}{carry_note}"
                     )
-                    return StrategyPlan(
+                    return self._with_arb_reference_state(
+                        StrategyPlan(
                         instructions=tuple(instructions),
                         note=note,
                         primary_target=primary_target,
@@ -1532,6 +1599,8 @@ class BTC5mStrategyService:
                         desired_up_ratio=desired_up_ratio,
                         current_up_ratio=current_ratio_after,
                         bracket_phase=bracket_phase,
+                        ),
+                        reference_state,
                     )
 
         bracket_plan = self._build_arb_biased_bracket_plan(
@@ -1556,7 +1625,7 @@ class BTC5mStrategyService:
             carry_note=carry_note,
         )
         if bracket_plan is not None:
-            return bracket_plan
+            return self._with_arb_reference_state(bracket_plan, reference_state)
 
         cheap_side = None
         if _ARB_ENABLE_CHEAP_SIDE:
@@ -1622,7 +1691,8 @@ class BTC5mStrategyService:
                         f"compras {len(instructions)} | objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
                         f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | fase {bracket_phase}{carry_note}"
                     )
-                    return StrategyPlan(
+                    return self._with_arb_reference_state(
+                        StrategyPlan(
                         instructions=tuple(instructions),
                         note=note,
                         primary_target=target,
@@ -1653,6 +1723,8 @@ class BTC5mStrategyService:
                         desired_up_ratio=desired_up_ratio,
                         current_up_ratio=current_ratio_after,
                         bracket_phase=bracket_phase,
+                        ),
+                        reference_state,
                     )
         repair_plan = self._build_arb_repair_plan(
             market=market,
@@ -1676,7 +1748,7 @@ class BTC5mStrategyService:
             carry_note=carry_note,
         )
         if repair_plan is not None:
-            return repair_plan
+            return self._with_arb_reference_state(repair_plan, reference_state)
         delta_note = f" | delta {spot_context.delta_bps:+.1f}bps" if spot_context is not None else ""
         self._record_strategy_snapshot(
             market=market,
@@ -3564,6 +3636,89 @@ class BTC5mStrategyService:
                 return official
         return 0.0
 
+    def _arb_reference_state(
+        self,
+        *,
+        source: str,
+        age_ms: int,
+        chainlink_price: float,
+        official_price_to_beat: float,
+        local_anchor_price: float,
+        anchor_source: str,
+    ) -> ArbReferenceState:
+        source_text = str(source or "").strip()
+        anchor_source_text = str(anchor_source or "").strip()
+        has_rtds = source_text.startswith("polymarket-rtds")
+        has_chainlink = chainlink_price > 0
+        has_official = official_price_to_beat > 0
+        has_local_anchor = local_anchor_price > 0
+        age_limit = max(int(self.settings.config.btc5m_reference_max_age_ms), 100)
+
+        if not source_text:
+            return ArbReferenceState(comparable=False, quality="missing", note="sin spot de referencia")
+        if age_ms > age_limit:
+            return ArbReferenceState(
+                comparable=False,
+                quality="stale",
+                note=f"referencia vieja: {age_ms}ms > {age_limit}ms",
+            )
+        if not has_rtds:
+            return ArbReferenceState(
+                comparable=False,
+                quality="degraded",
+                note=f"fuente degradada: {source_text}",
+            )
+        if not has_chainlink:
+            return ArbReferenceState(
+                comparable=False,
+                quality="degraded",
+                note="sin precio Chainlink RTDS",
+            )
+        if has_official:
+            return ArbReferenceState(
+                comparable=True,
+                quality="official",
+                note="referencia oficial Polymarket + Chainlink RTDS",
+                budget_scale=1.0,
+            )
+        if (
+            self.settings.config.btc5m_allow_rtds_anchor_fallback
+            and has_local_anchor
+            and anchor_source_text.startswith("polymarket")
+        ):
+            return ArbReferenceState(
+                comparable=True,
+                quality="rtds-derived",
+                note=f"sin beat oficial; usando ancla RTDS ({anchor_source_text})",
+                budget_scale=0.65,
+            )
+        if has_local_anchor:
+            return ArbReferenceState(
+                comparable=False,
+                quality="degraded",
+                note=f"ancla no comparable: {anchor_source_text or 'desconocida'}",
+            )
+        return ArbReferenceState(
+            comparable=False,
+            quality="missing",
+            note="sin beat oficial ni ancla RTDS",
+        )
+
+    def _arb_reference_state_entries(self, reference_state: ArbReferenceState) -> dict[str, str]:
+        return {
+            "strategy_reference_quality": reference_state.quality,
+            "strategy_reference_comparable": "1" if reference_state.comparable else "0",
+            "strategy_reference_note": reference_state.note,
+        }
+
+    def _with_arb_reference_state(self, plan: StrategyPlan, reference_state: ArbReferenceState) -> StrategyPlan:
+        return replace(
+            plan,
+            reference_quality=reference_state.quality,
+            reference_comparable=reference_state.comparable,
+            reference_note=reference_state.note,
+        )
+
     def _arb_carry_state(self, *, current_condition_id: str, current_market_start_ts: int) -> ArbCarryState:
         open_condition_ids: set[str] = set()
         active_condition_ids: set[str] = set()
@@ -3830,6 +3985,9 @@ class BTC5mStrategyService:
             "strategy_spot_local_anchor": "0.000000",
             "strategy_official_price_to_beat": "0.000000",
             "strategy_anchor_source": "",
+            "strategy_reference_quality": "missing",
+            "strategy_reference_comparable": "0",
+            "strategy_reference_note": "sin spot de referencia",
             "strategy_spot_delta_bps": "0.0000",
             "strategy_spot_fair_up": "0.000000",
             "strategy_spot_fair_down": "0.000000",
@@ -3879,6 +4037,15 @@ class BTC5mStrategyService:
         official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
         anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
         anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
+        reference_state = self._arb_reference_state(
+            source=snapshot.source,
+            age_ms=int(snapshot.age_ms),
+            chainlink_price=float(snapshot.chainlink_price or 0.0),
+            official_price_to_beat=official_price_to_beat,
+            local_anchor_price=local_anchor_price,
+            anchor_source=anchor_source,
+        )
+        state.update(self._arb_reference_state_entries(reference_state))
         if anchor_price <= 0:
             return state
 

@@ -269,6 +269,9 @@ function currentSpotInfo(summary) {
   const anchor = Number(summary?.strategy_spot_anchor || 0);
   const localAnchor = Number(summary?.strategy_spot_local_anchor || 0);
   const officialBeat = Number(summary?.strategy_official_price_to_beat || 0);
+  const referenceQuality = String(summary?.strategy_reference_quality || "").trim();
+  const referenceComparable = Boolean(summary?.strategy_reference_comparable);
+  const referenceNote = String(summary?.strategy_reference_note || "").trim();
   const chainlink = Number(summary?.strategy_spot_chainlink || 0);
   const anchorSource = String(summary?.strategy_anchor_source || "").trim();
   const deltaBps = Number(summary?.strategy_spot_delta_bps || 0);
@@ -278,6 +281,8 @@ function currentSpotInfo(summary) {
   const source = String(summary?.strategy_spot_source || "").trim();
   const binance = Number(summary?.strategy_spot_binance || 0);
   const beatReference = officialBeat > 0 ? officialBeat : anchor;
+  const polymarketCurrent = chainlink > 0 ? chainlink : 0;
+  const fallbackCurrent = current > 0 && chainlink <= 0 ? current : 0;
   const deltaUsd = current > 0 && beatReference > 0 ? current - beatReference : 0;
   const deltaMarketBps = current > 0 && beatReference > 0 ? ((current / beatReference) - 1) * 10000 : 0;
   const anchorDriftUsd = localAnchor > 0 && officialBeat > 0 ? localAnchor - officialBeat : 0;
@@ -287,17 +292,22 @@ function currentSpotInfo(summary) {
   const binanceDeltaUsd = binance > 0 && beatReference > 0 ? binance - beatReference : 0;
   const binanceDeltaBps = binance > 0 && beatReference > 0 ? ((binance / beatReference) - 1) * 10000 : 0;
   return {
-    available: current > 0 && beatReference > 0,
+    available: referenceComparable && polymarketCurrent > 0 && beatReference > 0,
     hasCurrent: current > 0,
     hasAnchor: anchor > 0,
     hasLocalAnchor: localAnchor > 0,
     hasOfficialBeat: officialBeat > 0,
     hasChainlink: chainlink > 0,
     hasBinance: binance > 0,
+    referenceQuality: referenceQuality || "missing",
+    referenceComparable,
+    referenceNote: referenceNote || "sin referencia comparable",
     current,
     anchor,
     localAnchor,
     officialBeat,
+    polymarketCurrent,
+    fallbackCurrent,
     anchorSource: anchorSource || "-",
     deltaBps,
     deltaUsd,
@@ -697,6 +707,9 @@ function disconnectedSummary() {
     strategy_spot_local_anchor: 0,
     strategy_official_price_to_beat: 0,
     strategy_anchor_source: "",
+    strategy_reference_quality: "",
+    strategy_reference_comparable: false,
+    strategy_reference_note: "",
     strategy_window_seconds: 0,
     strategy_plan_legs: 0,
     strategy_current_market_total_exposure: 0,
@@ -947,40 +960,30 @@ function paintLabOverview(summary) {
   const feedInfo = feedModeInfo(summary);
   const edgeInfo = currentEdgeInfo(summary);
   const spotInfo = currentSpotInfo(summary);
-  const visibleMarketPrice = spotInfo.hasChainlink ? spotInfo.chainlink : spotInfo.current;
-  const visibleDeltaUsd =
-    spotInfo.hasChainlink && spotInfo.hasOfficialBeat
-      ? spotInfo.chainlinkDeltaUsd
-      : spotInfo.available
-      ? spotInfo.deltaUsd
-      : 0;
-  const visibleDeltaBps =
-    spotInfo.hasChainlink && spotInfo.hasOfficialBeat
-      ? spotInfo.chainlinkDeltaBps
-      : spotInfo.available
-      ? spotInfo.deltaMarketBps
-      : 0;
-  const fastSpotPrice = spotInfo.hasBinance ? spotInfo.binance : spotInfo.hasCurrent && !spotInfo.hasChainlink ? spotInfo.current : 0;
+  const visibleMarketPrice = spotInfo.referenceComparable ? spotInfo.polymarketCurrent : 0;
+  const visibleDeltaUsd = spotInfo.referenceComparable && spotInfo.hasOfficialBeat ? spotInfo.chainlinkDeltaUsd : 0;
+  const visibleDeltaBps = spotInfo.referenceComparable && spotInfo.hasOfficialBeat ? spotInfo.chainlinkDeltaBps : 0;
+  const fastSpotPrice = spotInfo.hasBinance ? spotInfo.binance : spotInfo.fallbackCurrent;
 
   document.getElementById("labModeValue").textContent = isVidarxLab(summary)
     ? `${timingLabel(summary)} / ${String(summary.strategy_price_mode || "sin banda").replaceAll("-", " ")}`
     : strategyLabel(summary);
   document.getElementById("labWindowValue").textContent =
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
-  document.getElementById("labFeedValue").textContent = feedInfo.label;
+  document.getElementById("labFeedValue").textContent = spotInfo.referenceComparable ? feedInfo.label : `${feedInfo.label} · degradado`;
   document.getElementById("labSpotCurrent").textContent =
     visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-";
   document.getElementById("labChainlinkPrice").textContent = fastSpotPrice > 0 ? fmtBtcPrice(fastSpotPrice) : "-";
   document.getElementById("labSpotAnchor").textContent = spotInfo.hasOfficialBeat
     ? fmtBtcPrice(spotInfo.officialBeat)
     : spotInfo.hasAnchor
-    ? `${fmtBtcPrice(spotInfo.anchor)} (sin oficial)`
+    ? `${fmtBtcPrice(spotInfo.anchor)} (${spotInfo.referenceQuality === "rtds-derived" ? "RTDS" : "sin oficial"})`
     : "-";
   document.getElementById("labSpotDelta").textContent =
-    visibleMarketPrice > 0 && spotInfo.hasAnchor
+    spotInfo.referenceComparable && visibleMarketPrice > 0 && spotInfo.hasAnchor
       ? `${fmtUsd(visibleDeltaUsd, 2)} | ${fmt(visibleDeltaBps, 1)}bps`
       : spotInfo.hasCurrent || spotInfo.hasChainlink
-      ? "esperando beat oficial"
+      ? `degradado: ${spotInfo.referenceNote}`
       : "-";
   document.getElementById("labChainlinkDelta").textContent =
     fastSpotPrice > 0 && spotInfo.hasAnchor
@@ -997,17 +1000,17 @@ function paintLabOverview(summary) {
   document.getElementById("labSpotFair").textContent =
     spotInfo.available
       ? `Sube ${fmtPct(spotInfo.fairUp * 100, 1)} / Baja ${fmtPct(spotInfo.fairDown * 100, 1)}`
-      : spotInfo.hasCurrent
-      ? "esperando ancla del modelo"
+      : spotInfo.hasCurrent || spotInfo.hasChainlink
+      ? `degradado: ${spotInfo.referenceNote}`
       : "-";
   document.getElementById("labEdgeValue").textContent =
     edgeInfo.edgePct !== null
-      ? `${edgeInfo.label} | ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.anchorSource !== "-" ? ` | ancla ${spotInfo.anchorSource}` : ""}`
+      ? `${edgeInfo.label} | ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.anchorSource !== "-" ? ` | ancla ${spotInfo.anchorSource}` : ""}${spotInfo.referenceQuality ? ` | ref ${spotInfo.referenceQuality}` : ""}`
       : "-";
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.hasCurrent || spotInfo.hasChainlink ? `${spotInfo.source} ${spotInfo.ageMs}ms | polymarket ${visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-"}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${spotInfo.hasOfficialBeat ? ` | beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasOfficialBeat && spotInfo.hasLocalAnchor ? ` | desvio ${fmtUsd(spotInfo.anchorDriftUsd, 2)} / ${fmt(spotInfo.anchorDriftBps, 1)}bps` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.referenceComparable ? `${spotInfo.source} ${spotInfo.ageMs}ms | ref ${spotInfo.referenceQuality} | polymarket ${visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-"}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${spotInfo.hasOfficialBeat ? ` | beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasOfficialBeat && spotInfo.hasLocalAnchor ? ` | desvio ${fmtUsd(spotInfo.anchorDriftUsd, 2)} / ${fmt(spotInfo.anchorDriftBps, 1)}bps` : ""}` : `degradado | ${spotInfo.referenceNote} | ${spotInfo.source !== "-" ? `${spotInfo.source} ${spotInfo.ageMs}ms` : feedInfo.summaryLabel}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${spotInfo.hasOfficialBeat ? ` | beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}` : spotInfo.hasAnchor ? ` | ancla ${fmtBtcPrice(spotInfo.anchor)}` : ""}`} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
