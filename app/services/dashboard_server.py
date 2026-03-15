@@ -244,6 +244,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_fair_value = _bot_state_float(conn, "strategy_fair_value")
         strategy_spot_price = _bot_state_float(conn, "strategy_spot_price")
         strategy_spot_anchor = _bot_state_float(conn, "strategy_spot_anchor")
+        strategy_spot_local_anchor = _bot_state_float(conn, "strategy_spot_local_anchor")
+        strategy_official_price_to_beat = _bot_state_float(conn, "strategy_official_price_to_beat")
+        strategy_anchor_source = _bot_state_text(conn, "strategy_anchor_source")
         strategy_spot_delta_bps = _bot_state_float(conn, "strategy_spot_delta_bps")
         strategy_spot_fair_up = _bot_state_float(conn, "strategy_spot_fair_up")
         strategy_spot_fair_down = _bot_state_float(conn, "strategy_spot_fair_down")
@@ -436,6 +439,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_fair_value": round(strategy_fair_value, 4),
         "strategy_spot_price": round(strategy_spot_price, 4),
         "strategy_spot_anchor": round(strategy_spot_anchor, 4),
+        "strategy_spot_local_anchor": round(strategy_spot_local_anchor, 4),
+        "strategy_official_price_to_beat": round(strategy_official_price_to_beat, 4),
+        "strategy_anchor_source": strategy_anchor_source,
         "strategy_spot_delta_bps": round(strategy_spot_delta_bps, 2),
         "strategy_spot_fair_up": round(strategy_spot_fair_up, 4),
         "strategy_spot_fair_down": round(strategy_spot_fair_down, 4),

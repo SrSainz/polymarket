@@ -2351,6 +2351,64 @@ def test_arb_micro_uses_spot_context_to_open_controlled_single_side_trade(tmp_pa
     db.close()
 
 
+def test_arb_spot_context_prefers_official_price_to_beat_over_local_anchor(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-official-beat"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=75)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Official Beat",
+        "slug": slug,
+        "conditionId": "cond-arb-official-beat",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [
+            {
+                "startTime": start_time,
+                "eventMetadata": {"priceToBeat": 71775.07326019551},
+            }
+        ],
+    }
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "71761.47000000")
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=71787.28,
+            lead_price=71787.28,
+            binance_price=71787.28,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=15,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0),
+        logger=logging.getLogger("test-btc5m-official-beat"),
+        spot_feed=spot_feed,
+    )
+
+    context = service._arb_spot_context(market=market, seconds_into_window=75)
+
+    assert context is not None
+    assert round(context.official_price_to_beat, 2) == 71775.07
+    assert round(context.local_anchor_price, 2) == 71761.47
+    assert round(context.anchor_price, 2) == 71775.07
+    assert context.anchor_source == "polymarket-official"
+    assert context.delta_bps > 0
+    db.close()
+
+
 def test_arb_micro_opens_single_side_on_small_delta_with_strong_edge(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

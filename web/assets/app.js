@@ -267,6 +267,9 @@ function currentEdgeInfo(summary) {
 function currentSpotInfo(summary) {
   const current = Number(summary?.strategy_spot_price || 0);
   const anchor = Number(summary?.strategy_spot_anchor || 0);
+  const localAnchor = Number(summary?.strategy_spot_local_anchor || 0);
+  const officialBeat = Number(summary?.strategy_official_price_to_beat || 0);
+  const anchorSource = String(summary?.strategy_anchor_source || "").trim();
   const deltaBps = Number(summary?.strategy_spot_delta_bps || 0);
   const fairUp = Number(summary?.strategy_spot_fair_up || 0);
   const fairDown = Number(summary?.strategy_spot_fair_down || 0);
@@ -274,15 +277,27 @@ function currentSpotInfo(summary) {
   const source = String(summary?.strategy_spot_source || "").trim();
   const binance = Number(summary?.strategy_spot_binance || 0);
   const chainlink = Number(summary?.strategy_spot_chainlink || 0);
-  const deltaUsd = current > 0 && anchor > 0 ? current - anchor : 0;
+  const beatReference = officialBeat > 0 ? officialBeat : anchor;
+  const deltaUsd = current > 0 && beatReference > 0 ? current - beatReference : 0;
+  const deltaMarketBps = current > 0 && beatReference > 0 ? ((current / beatReference) - 1) * 10000 : 0;
+  const anchorDriftUsd = localAnchor > 0 && officialBeat > 0 ? localAnchor - officialBeat : 0;
+  const anchorDriftBps = localAnchor > 0 && officialBeat > 0 ? ((localAnchor / officialBeat) - 1) * 10000 : 0;
   return {
-    available: current > 0 && anchor > 0,
+    available: current > 0 && beatReference > 0,
     hasCurrent: current > 0,
     hasAnchor: anchor > 0,
+    hasLocalAnchor: localAnchor > 0,
+    hasOfficialBeat: officialBeat > 0,
     current,
     anchor,
+    localAnchor,
+    officialBeat,
+    anchorSource: anchorSource || "-",
     deltaBps,
     deltaUsd,
+    deltaMarketBps,
+    anchorDriftUsd,
+    anchorDriftBps,
     fairUp,
     fairDown,
     ageMs,
@@ -669,6 +684,9 @@ function disconnectedSummary() {
     strategy_fair_value: 0,
     strategy_spot_price: 0,
     strategy_spot_anchor: 0,
+    strategy_spot_local_anchor: 0,
+    strategy_official_price_to_beat: 0,
+    strategy_anchor_source: "",
     strategy_window_seconds: 0,
     strategy_plan_legs: 0,
     strategy_current_market_total_exposure: 0,
@@ -924,19 +942,37 @@ function paintLabOverview(summary) {
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labFeedValue").textContent = feedInfo.label;
   document.getElementById("labSpotCurrent").textContent = spotInfo.hasCurrent ? fmtBtcPrice(spotInfo.current) : "-";
-  document.getElementById("labSpotAnchor").textContent = spotInfo.hasAnchor ? fmtBtcPrice(spotInfo.anchor) : "-";
+  document.getElementById("labSpotAnchor").textContent = spotInfo.hasOfficialBeat
+    ? fmtBtcPrice(spotInfo.officialBeat)
+    : spotInfo.hasAnchor
+    ? `${fmtBtcPrice(spotInfo.anchor)} (sin oficial)`
+    : "-";
   document.getElementById("labSpotDelta").textContent =
-    spotInfo.available ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaBps, 1)}bps` : spotInfo.hasCurrent ? "esperando ancla" : "-";
+    spotInfo.available
+      ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaMarketBps, 1)}bps`
+      : spotInfo.hasCurrent
+      ? "esperando beat oficial"
+      : "-";
+  document.getElementById("labAnchorDrift").textContent =
+    spotInfo.hasOfficialBeat && spotInfo.hasLocalAnchor
+      ? `${fmtUsd(spotInfo.anchorDriftUsd, 2)} | ${fmt(spotInfo.anchorDriftBps, 1)}bps`
+      : spotInfo.hasLocalAnchor
+      ? `${fmtBtcPrice(spotInfo.localAnchor)} (sin oficial)`
+      : "-";
   document.getElementById("labSpotFair").textContent =
-    spotInfo.available ? `Sube ${fmtPct(spotInfo.fairUp * 100, 1)} / Baja ${fmtPct(spotInfo.fairDown * 100, 1)}` : spotInfo.hasCurrent ? "esperando ancla" : "-";
+    spotInfo.available
+      ? `Sube ${fmtPct(spotInfo.fairUp * 100, 1)} / Baja ${fmtPct(spotInfo.fairDown * 100, 1)}`
+      : spotInfo.hasCurrent
+      ? "esperando ancla del modelo"
+      : "-";
   document.getElementById("labEdgeValue").textContent =
     edgeInfo.edgePct !== null
-      ? `${edgeInfo.label} | ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}`
+      ? `${edgeInfo.label} | ${fmt(edgeInfo.edgePct, 2)}%${edgeInfo.fairValue ? ` | fair ${fmt(edgeInfo.fairValue, 3)}` : ""}${spotInfo.anchorSource !== "-" ? ` | ancla ${spotInfo.anchorSource}` : ""}`
       : "-";
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | BTC ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasAnchor ? ` | beat ${fmtBtcPrice(spotInfo.anchor)}` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | spot ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasOfficialBeat ? ` | beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasOfficialBeat && spotInfo.hasLocalAnchor ? ` | desvio ${fmtUsd(spotInfo.anchorDriftUsd, 2)} / ${fmt(spotInfo.anchorDriftBps, 1)}bps` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 

@@ -81,6 +81,14 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_resolution_mode", "paper-settle-at-close")
     db.set_bot_state("strategy_timing_regime", "mid-late")
     db.set_bot_state("strategy_price_mode", "extreme")
+    db.set_bot_state("strategy_spot_price", "71787.28")
+    db.set_bot_state("strategy_spot_anchor", "71775.07")
+    db.set_bot_state("strategy_spot_local_anchor", "71761.47")
+    db.set_bot_state("strategy_official_price_to_beat", "71775.07")
+    db.set_bot_state("strategy_anchor_source", "polymarket-official")
+    db.set_bot_state("strategy_spot_delta_bps", "3.60")
+    db.set_bot_state("strategy_spot_fair_up", "0.559")
+    db.set_bot_state("strategy_spot_fair_down", "0.441")
     db.set_bot_state("strategy_primary_ratio", "0.80")
     db.set_bot_state("strategy_primary_outcome", "Up")
     db.set_bot_state("strategy_hedge_outcome", "Down")
@@ -145,6 +153,10 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     assert summary["strategy_resolution_mode"] == "paper-settle-at-close"
     assert summary["strategy_timing_regime"] == "mid-late"
     assert summary["strategy_price_mode"] == "extreme"
+    assert summary["strategy_spot_anchor"] == 71775.07
+    assert summary["strategy_spot_local_anchor"] == 71761.47
+    assert summary["strategy_official_price_to_beat"] == 71775.07
+    assert summary["strategy_anchor_source"] == "polymarket-official"
     assert summary["strategy_primary_ratio"] == 0.8
     assert summary["strategy_primary_outcome"] == "Up"
     assert summary["strategy_hedge_outcome"] == "Down"

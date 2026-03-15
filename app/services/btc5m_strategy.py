@@ -207,6 +207,9 @@ class ArbSingleSideSignal:
 class ArbSpotContext:
     current_price: float
     anchor_price: float
+    local_anchor_price: float
+    official_price_to_beat: float
+    anchor_source: str
     fair_up: float
     fair_down: float
     delta_bps: float
@@ -2793,11 +2796,14 @@ class BTC5mStrategyService:
 
         slug = str(market.get("slug") or "")
         anchor_key = f"arb_spot_anchor:{slug}"
-        anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
-        if anchor_price <= 0 and seconds_into_window <= _ARB_SPOT_ANCHOR_GRACE_SECONDS:
-            anchor_price = snapshot.reference_price
-            self.db.set_bot_state(anchor_key, f"{anchor_price:.8f}")
+        local_anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
+        if local_anchor_price <= 0 and seconds_into_window <= _ARB_SPOT_ANCHOR_GRACE_SECONDS:
+            local_anchor_price = snapshot.reference_price
+            self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
             self.db.set_bot_state(f"{anchor_key}:source", snapshot.source)
+        official_price_to_beat = self._market_official_price_to_beat(market)
+        anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
+        anchor_source = "polymarket-official" if official_price_to_beat > 0 else "local-spot"
         if anchor_price <= 0:
             return None
 
@@ -2812,6 +2818,9 @@ class BTC5mStrategyService:
         return ArbSpotContext(
             current_price=snapshot.reference_price,
             anchor_price=anchor_price,
+            local_anchor_price=local_anchor_price,
+            official_price_to_beat=official_price_to_beat,
+            anchor_source=anchor_source,
             fair_up=fair_up,
             fair_down=fair_down,
             delta_bps=delta_bps,
@@ -3437,6 +3446,8 @@ class BTC5mStrategyService:
         if market is not None:
             self.db.set_bot_state("strategy_market_slug", str(market.get("slug") or ""))
             self.db.set_bot_state("strategy_market_title", str(market.get("question") or market.get("slug") or ""))
+            official_price_to_beat = self._market_official_price_to_beat(market)
+            self.db.set_bot_state("strategy_official_price_to_beat", f"{official_price_to_beat:.6f}")
         if opportunity is not None:
             self.db.set_bot_state("strategy_target_outcome", opportunity.target.label)
             self.db.set_bot_state("strategy_target_price", f"{opportunity.target.best_ask:.6f}")
@@ -3513,6 +3524,38 @@ class BTC5mStrategyService:
         if start_ts > 0:
             return start_ts
         return self._btc5m_slug_start_ts(str(market.get("slug") or ""))
+
+    def _market_official_price_to_beat(self, market: dict | None) -> float:
+        if not isinstance(market, dict):
+            return 0.0
+
+        events = market.get("events") or []
+        if isinstance(events, list):
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                metadata = event.get("eventMetadata") or {}
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except json.JSONDecodeError:
+                        metadata = {}
+                if isinstance(metadata, dict):
+                    official = _safe_float(metadata.get("priceToBeat"))
+                    if official > 0:
+                        return official
+
+        metadata = market.get("eventMetadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                metadata = {}
+        if isinstance(metadata, dict):
+            official = _safe_float(metadata.get("priceToBeat"))
+            if official > 0:
+                return official
+        return 0.0
 
     def _arb_carry_state(self, *, current_condition_id: str, current_market_start_ts: int) -> ArbCarryState:
         open_condition_ids: set[str] = set()
@@ -3777,6 +3820,9 @@ class BTC5mStrategyService:
         state = {
             "strategy_spot_price": "0.000000",
             "strategy_spot_anchor": "0.000000",
+            "strategy_spot_local_anchor": "0.000000",
+            "strategy_official_price_to_beat": "0.000000",
+            "strategy_anchor_source": "",
             "strategy_spot_delta_bps": "0.0000",
             "strategy_spot_fair_up": "0.000000",
             "strategy_spot_fair_down": "0.000000",
@@ -3814,7 +3860,12 @@ class BTC5mStrategyService:
             base_start = int(now - current_window_seconds)
             market_slug = f"btc-updown-5m-{base_start}"
         anchor_key = f"arb_spot_anchor:{market_slug}"
-        anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
+        local_anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
+        official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
+        if official_price_to_beat <= 0:
+            official_price_to_beat = _safe_float(self.db.get_bot_state("strategy_official_price_to_beat"))
+        anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
+        anchor_source = "polymarket-official" if official_price_to_beat > 0 else "local-spot"
         if anchor_price <= 0:
             return state
 
@@ -3831,6 +3882,9 @@ class BTC5mStrategyService:
         state.update(
             {
                 "strategy_spot_anchor": f"{anchor_price:.6f}",
+                "strategy_spot_local_anchor": f"{local_anchor_price:.6f}",
+                "strategy_official_price_to_beat": f"{official_price_to_beat:.6f}",
+                "strategy_anchor_source": anchor_source,
                 "strategy_spot_delta_bps": f"{delta_bps:.4f}",
                 "strategy_spot_fair_up": f"{fair_up:.6f}",
                 "strategy_spot_fair_down": f"{fair_down:.6f}",
