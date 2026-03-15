@@ -4,6 +4,7 @@ __pycache__/
 .env
 tmp/
 data/bot.db
+data/research/
 data/logs/*.log
 data/reports/*.md
 !data/reports/example_report.md

@@ -1,0 +1,162 @@
+{
+  "meta": {
+    "market_id": "SAMPLE_BTC_5M",
+    "slug": "btc-updown-5m-sample",
+    "title": "Bitcoin Up or Down - Sample 5m",
+    "token_yes": "TOKEN_YES",
+    "token_no": "TOKEN_NO",
+    "fees_enabled": true,
+    "fee_rate_bps": 15.6
+  },
+  "events": [
+    {
+      "ts_ms": 1710500000000,
+      "event": "book",
+      "token_id": "TOKEN_YES",
+      "bids": [[0.49, 1200.0], [0.48, 3500.0]],
+      "asks": [[0.51, 900.0], [0.52, 2800.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710500000000,
+      "event": "book",
+      "token_id": "TOKEN_NO",
+      "bids": [[0.45, 1500.0], [0.44, 3000.0]],
+      "asks": [[0.47, 1200.0], [0.48, 2600.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710500000200,
+      "event": "delta",
+      "token_id": "TOKEN_YES",
+      "bids": [[0.49, 800.0]],
+      "asks": [],
+      "extra": {"reason": "price_change"}
+    },
+    {
+      "ts_ms": 1710500000300,
+      "event": "delta",
+      "token_id": "TOKEN_NO",
+      "bids": [],
+      "asks": [[0.47, 1000.0]],
+      "extra": {"reason": "price_change"}
+    },
+    {
+      "ts_ms": 1710500000500,
+      "event": "trade",
+      "token_id": "TOKEN_YES",
+      "bids": [],
+      "asks": [],
+      "extra": {"price": 0.51, "size": 200.0}
+    },
+    {
+      "ts_ms": 1710500000550,
+      "event": "trade",
+      "token_id": "TOKEN_NO",
+      "bids": [],
+      "asks": [],
+      "extra": {"price": 0.47, "size": 140.0}
+    },
+    {
+      "ts_ms": 1710500305000,
+      "event": "book",
+      "token_id": "TOKEN_YES",
+      "bids": [[0.57, 800.0], [0.56, 2200.0]],
+      "asks": [[0.59, 700.0], [0.60, 2500.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710500305000,
+      "event": "book",
+      "token_id": "TOKEN_NO",
+      "bids": [[0.39, 1000.0], [0.38, 2200.0]],
+      "asks": [[0.41, 900.0], [0.42, 2400.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710500305400,
+      "event": "trade",
+      "token_id": "TOKEN_YES",
+      "bids": [],
+      "asks": [],
+      "extra": {"price": 0.59, "size": 150.0}
+    },
+    {
+      "ts_ms": 1710500610000,
+      "event": "book",
+      "token_id": "TOKEN_YES",
+      "bids": [[0.46, 1300.0], [0.45, 2600.0]],
+      "asks": [[0.48, 1000.0], [0.49, 2800.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710500610000,
+      "event": "book",
+      "token_id": "TOKEN_NO",
+      "bids": [[0.46, 1300.0], [0.45, 2600.0]],
+      "asks": [[0.49, 900.0], [0.50, 2400.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710500610250,
+      "event": "delta",
+      "token_id": "TOKEN_NO",
+      "bids": [],
+      "asks": [[0.49, 800.0]],
+      "extra": {"reason": "price_change"}
+    },
+    {
+      "ts_ms": 1710500915000,
+      "event": "book",
+      "token_id": "TOKEN_YES",
+      "bids": [[0.63, 700.0], [0.62, 1800.0]],
+      "asks": [[0.65, 600.0], [0.66, 2300.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710500915000,
+      "event": "book",
+      "token_id": "TOKEN_NO",
+      "bids": [[0.29, 1000.0], [0.28, 2800.0]],
+      "asks": [[0.31, 900.0], [0.32, 2400.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710500915400,
+      "event": "trade",
+      "token_id": "TOKEN_NO",
+      "bids": [],
+      "asks": [],
+      "extra": {"price": 0.31, "size": 220.0}
+    },
+    {
+      "ts_ms": 1710501220000,
+      "event": "book",
+      "token_id": "TOKEN_YES",
+      "bids": [[0.51, 900.0], [0.50, 2000.0]],
+      "asks": [[0.53, 850.0], [0.54, 2100.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710501220000,
+      "event": "book",
+      "token_id": "TOKEN_NO",
+      "bids": [[0.44, 1200.0], [0.43, 2300.0]],
+      "asks": [[0.46, 1100.0], [0.47, 2500.0]],
+      "extra": {"tick_size": 0.001}
+    },
+    {
+      "ts_ms": 1710501220400,
+      "event": "delta",
+      "token_id": "TOKEN_YES",
+      "bids": [[0.51, 700.0]],
+      "asks": [],
+      "extra": {"reason": "price_change"}
+    }
+  ],
+  "trades": [
+    {"ts_ms": 1710500000600, "side": "BUY", "token_id": "TOKEN_YES", "price": 0.51, "size": 100.0},
+    {"ts_ms": 1710500305600, "side": "BUY", "token_id": "TOKEN_YES", "price": 0.59, "size": 80.0},
+    {"ts_ms": 1710500915600, "side": "BUY", "token_id": "TOKEN_NO", "price": 0.31, "size": 120.0}
+  ]
+}

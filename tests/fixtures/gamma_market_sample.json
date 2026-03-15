@@ -1,0 +1,14 @@
+[
+  {
+    "id": "12345",
+    "slug": "btc-updown-5m-1710500100",
+    "question": "Bitcoin Up or Down - March 15, 6:35AM-6:40AM ET",
+    "conditionId": "COND_1",
+    "feesEnabled": true,
+    "tokens": [
+      {"outcome": "Yes", "token_id": "TOKEN_YES"},
+      {"outcome": "No", "token_id": "TOKEN_NO"}
+    ],
+    "endDate": "2026-03-15T10:40:00Z"
+  }
+]
