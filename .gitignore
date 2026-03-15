@@ -8,3 +8,9 @@ data/research/
 data/logs/*.log
 data/reports/*.md
 !data/reports/example_report.md
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
