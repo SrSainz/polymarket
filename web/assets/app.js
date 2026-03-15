@@ -269,6 +269,7 @@ function currentSpotInfo(summary) {
   const anchor = Number(summary?.strategy_spot_anchor || 0);
   const localAnchor = Number(summary?.strategy_spot_local_anchor || 0);
   const officialBeat = Number(summary?.strategy_official_price_to_beat || 0);
+  const chainlink = Number(summary?.strategy_spot_chainlink || 0);
   const anchorSource = String(summary?.strategy_anchor_source || "").trim();
   const deltaBps = Number(summary?.strategy_spot_delta_bps || 0);
   const fairUp = Number(summary?.strategy_spot_fair_up || 0);
@@ -276,18 +277,20 @@ function currentSpotInfo(summary) {
   const ageMs = Number(summary?.strategy_spot_age_ms || 0);
   const source = String(summary?.strategy_spot_source || "").trim();
   const binance = Number(summary?.strategy_spot_binance || 0);
-  const chainlink = Number(summary?.strategy_spot_chainlink || 0);
   const beatReference = officialBeat > 0 ? officialBeat : anchor;
   const deltaUsd = current > 0 && beatReference > 0 ? current - beatReference : 0;
   const deltaMarketBps = current > 0 && beatReference > 0 ? ((current / beatReference) - 1) * 10000 : 0;
   const anchorDriftUsd = localAnchor > 0 && officialBeat > 0 ? localAnchor - officialBeat : 0;
   const anchorDriftBps = localAnchor > 0 && officialBeat > 0 ? ((localAnchor / officialBeat) - 1) * 10000 : 0;
+  const chainlinkDeltaUsd = chainlink > 0 && beatReference > 0 ? chainlink - beatReference : 0;
+  const chainlinkDeltaBps = chainlink > 0 && beatReference > 0 ? ((chainlink / beatReference) - 1) * 10000 : 0;
   return {
     available: current > 0 && beatReference > 0,
     hasCurrent: current > 0,
     hasAnchor: anchor > 0,
     hasLocalAnchor: localAnchor > 0,
     hasOfficialBeat: officialBeat > 0,
+    hasChainlink: chainlink > 0,
     current,
     anchor,
     localAnchor,
@@ -298,6 +301,8 @@ function currentSpotInfo(summary) {
     deltaMarketBps,
     anchorDriftUsd,
     anchorDriftBps,
+    chainlinkDeltaUsd,
+    chainlinkDeltaBps,
     fairUp,
     fairDown,
     ageMs,
@@ -914,8 +919,11 @@ function paintLabOverview(summary) {
     document.getElementById("labWindowValue").textContent = String(latestObservedExecution()?.title || lastPositions[0]?.title || "-");
     document.getElementById("labFeedValue").textContent = "Data API publica";
     document.getElementById("labSpotCurrent").textContent = "-";
+    document.getElementById("labChainlinkPrice").textContent = "-";
     document.getElementById("labSpotAnchor").textContent = "-";
     document.getElementById("labSpotDelta").textContent = "requiere backend del NAS";
+    document.getElementById("labChainlinkDelta").textContent = "requiere backend del NAS";
+    document.getElementById("labAnchorDrift").textContent = "-";
     document.getElementById("labSpotFair").textContent = "no disponible en fallback";
     document.getElementById("labEdgeValue").textContent = "no disponible";
     document.getElementById("labWindowFill").style.width = "0%";
@@ -942,6 +950,7 @@ function paintLabOverview(summary) {
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labFeedValue").textContent = feedInfo.label;
   document.getElementById("labSpotCurrent").textContent = spotInfo.hasCurrent ? fmtBtcPrice(spotInfo.current) : "-";
+  document.getElementById("labChainlinkPrice").textContent = spotInfo.hasChainlink ? fmtBtcPrice(spotInfo.chainlink) : "-";
   document.getElementById("labSpotAnchor").textContent = spotInfo.hasOfficialBeat
     ? fmtBtcPrice(spotInfo.officialBeat)
     : spotInfo.hasAnchor
@@ -951,6 +960,12 @@ function paintLabOverview(summary) {
     spotInfo.available
       ? `${fmtUsd(spotInfo.deltaUsd, 2)} | ${fmt(spotInfo.deltaMarketBps, 1)}bps`
       : spotInfo.hasCurrent
+      ? "esperando beat oficial"
+      : "-";
+  document.getElementById("labChainlinkDelta").textContent =
+    spotInfo.hasChainlink && spotInfo.hasOfficialBeat
+      ? `${fmtUsd(spotInfo.chainlinkDeltaUsd, 2)} | ${fmt(spotInfo.chainlinkDeltaBps, 1)}bps`
+      : spotInfo.hasChainlink
       ? "esperando beat oficial"
       : "-";
   document.getElementById("labAnchorDrift").textContent =
@@ -972,7 +987,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | spot ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasOfficialBeat ? ` | beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasOfficialBeat && spotInfo.hasLocalAnchor ? ` | desvio ${fmtUsd(spotInfo.anchorDriftUsd, 2)} / ${fmt(spotInfo.anchorDriftBps, 1)}bps` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.hasCurrent ? `${spotInfo.source} ${spotInfo.ageMs}ms | spot ${fmtBtcPrice(spotInfo.current)}${spotInfo.hasChainlink ? ` | chainlink ${fmtBtcPrice(spotInfo.chainlink)}` : ""}${spotInfo.hasOfficialBeat ? ` | beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasOfficialBeat && spotInfo.hasLocalAnchor ? ` | desvio ${fmtUsd(spotInfo.anchorDriftUsd, 2)} / ${fmt(spotInfo.anchorDriftBps, 1)}bps` : ""}` : feedInfo.summaryLabel} | dinero metido ${fmtUsdPlain(deployed, 2)}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
@@ -1098,7 +1113,7 @@ function paintRiskBlocks(payload) {
         (item) => `
       <li class="mini-item">
         <strong>${escapeHtml(shortSlug(item.slug))}</strong>
-        <span>${escapeHtml(item.winning_outcome || "sin ganador")} | ${fmtUsdPlain(Number(item.notional || 0), 2)}</span>
+        <span>${escapeHtml(item.winning_outcome || "sin ganador")} | desplegado ${fmtUsdPlain(Number(item.deployed_notional || item.notional || 0), 2)}${Number(item.planned_budget || 0) > 0 ? ` | plan ${fmtUsdPlain(Number(item.planned_budget || 0), 2)}` : ""}</span>
         <span class="${Number(item.pnl || 0) > 0 ? "pnl-pos" : Number(item.pnl || 0) < 0 ? "pnl-neg" : "pnl-flat"}">${fmtUsd(Number(item.pnl || 0), 2)}</span>
       </li>
     `
@@ -1301,7 +1316,7 @@ function paintPositions(items) {
     document.getElementById("generalBucketPnl").textContent = "-";
   } else if (isVidarxLab()) {
     const resolvedNotional = (Array.isArray(lastSummary?.strategy_recent_resolutions) ? lastSummary.strategy_recent_resolutions : []).reduce(
-      (acc, item) => acc + Number(item.notional || 0),
+      (acc, item) => acc + Number(item.deployed_notional || item.notional || 0),
       0
     );
     document.getElementById("generalBucketCount").textContent = `${Number(lastSummary?.strategy_resolution_count_today || 0)} ventanas`;

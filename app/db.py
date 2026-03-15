@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS strategy_windows (
     hedge_outcome TEXT NOT NULL DEFAULT '',
     primary_ratio REAL NOT NULL DEFAULT 0,
     planned_budget REAL NOT NULL DEFAULT 0,
+    deployed_notional REAL NOT NULL DEFAULT 0,
     current_exposure REAL NOT NULL DEFAULT 0,
     filled_orders INTEGER NOT NULL DEFAULT 0,
     replenishment_count INTEGER NOT NULL DEFAULT 0,
@@ -183,9 +184,20 @@ class Database:
     def init_schema(self) -> None:
         with self.conn:
             self.conn.executescript(SCHEMA_SQL)
+            self._migrate_schema()
 
     def close(self) -> None:
         self.conn.close()
+
+    def _migrate_schema(self) -> None:
+        strategy_window_columns = {
+            str(row["name"]): str(row["type"] or "")
+            for row in self.conn.execute("PRAGMA table_info(strategy_windows)").fetchall()
+        }
+        if "deployed_notional" not in strategy_window_columns:
+            self.conn.execute(
+                "ALTER TABLE strategy_windows ADD COLUMN deployed_notional REAL NOT NULL DEFAULT 0"
+            )
 
     def get_source_positions(self, wallet: str) -> dict[str, SourcePosition]:
         rows = self.conn.execute(
@@ -820,6 +832,7 @@ class Database:
                     first_trade_at = CASE WHEN first_trade_at = 0 THEN ? ELSE first_trade_at END,
                     last_trade_at = ?,
                     filled_orders = filled_orders + ?,
+                    deployed_notional = deployed_notional + ?,
                     current_exposure = current_exposure + ?,
                     replenishment_count = replenishment_count + ?,
                     notes = ?
@@ -829,6 +842,7 @@ class Database:
                     now_ts,
                     now_ts,
                     fill_count,
+                    added_notional,
                     added_notional,
                     replenishment_count,
                     notes,

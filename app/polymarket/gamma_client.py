@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import requests
@@ -13,6 +14,7 @@ class GammaClient:
         self.timeout = timeout
         self.session = requests.Session()
         self._category_cache: dict[str, str] = {}
+        self._event_cache: dict[str, dict[str, Any]] = {}
 
         retries = Retry(
             total=3,
@@ -27,16 +29,29 @@ class GammaClient:
     def get_market_by_slug(self, slug: str) -> dict[str, Any] | None:
         if not slug:
             return None
+        market = self._get_market_by_slug_direct(slug)
+        if market is None:
+            market = self._get_market_by_slug_list(slug)
+        if market is None:
+            return None
+        return self._hydrate_market_event(market)
+
+    def get_event_by_id(self, event_id: str) -> dict[str, Any] | None:
+        event_key = str(event_id or "").strip()
+        if not event_key:
+            return None
+        if event_key in self._event_cache:
+            return dict(self._event_cache[event_key])
         response = self.session.get(
-            f"{self.base_url}/markets",
-            params={"slug": slug, "limit": 1},
+            f"{self.base_url}/events/{event_key}",
             timeout=self.timeout,
         )
         response.raise_for_status()
         payload = response.json()
-        if not payload:
+        if not isinstance(payload, dict):
             return None
-        return payload[0]
+        self._event_cache[event_key] = dict(payload)
+        return dict(payload)
 
     def get_category(self, slug: str) -> str:
         if not slug:
@@ -64,3 +79,85 @@ class GammaClient:
             return []
         parts = [item for item in category.replace("_", "-").split("-") if item]
         return list(dict.fromkeys([category, *parts]))
+
+    def _get_market_by_slug_direct(self, slug: str) -> dict[str, Any] | None:
+        try:
+            response = self.session.get(
+                f"{self.base_url}/markets/slug/{slug}",
+                timeout=self.timeout,
+            )
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+        except requests.HTTPError:
+            raise
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    def _get_market_by_slug_list(self, slug: str) -> dict[str, Any] | None:
+        response = self.session.get(
+            f"{self.base_url}/markets",
+            params={"slug": slug, "limit": 1},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload:
+            return None
+        return payload[0]
+
+    def _hydrate_market_event(self, market: dict[str, Any]) -> dict[str, Any]:
+        hydrated_market = dict(market)
+        raw_events = hydrated_market.get("events") or []
+        if not isinstance(raw_events, list) or not raw_events:
+            return hydrated_market
+
+        hydrated_events: list[Any] = []
+        changed = False
+        for raw_event in raw_events:
+            if not isinstance(raw_event, dict):
+                hydrated_events.append(raw_event)
+                continue
+            event_copy = dict(raw_event)
+            if self._event_has_official_metadata(event_copy):
+                hydrated_events.append(event_copy)
+                continue
+            event_id = str(event_copy.get("id") or "").strip()
+            if not event_id:
+                hydrated_events.append(event_copy)
+                continue
+            try:
+                event_payload = self.get_event_by_id(event_id)
+            except requests.HTTPError:
+                hydrated_events.append(event_copy)
+                continue
+            if not isinstance(event_payload, dict):
+                hydrated_events.append(event_copy)
+                continue
+            if event_payload.get("eventMetadata") not in (None, "", {}):
+                event_copy["eventMetadata"] = event_payload.get("eventMetadata")
+                changed = True
+            if not event_copy.get("resolutionSource") and event_payload.get("resolutionSource"):
+                event_copy["resolutionSource"] = event_payload.get("resolutionSource")
+                changed = True
+            hydrated_events.append(event_copy)
+
+        if changed:
+            hydrated_market["events"] = hydrated_events
+        return hydrated_market
+
+    def _event_has_official_metadata(self, event_payload: dict[str, Any]) -> bool:
+        metadata = event_payload.get("eventMetadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                metadata = {}
+        if not isinstance(metadata, dict):
+            return False
+        try:
+            return float(metadata.get("priceToBeat") or 0.0) > 0
+        except (TypeError, ValueError):
+            return False

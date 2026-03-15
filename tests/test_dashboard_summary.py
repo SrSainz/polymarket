@@ -235,3 +235,49 @@ def test_summary_payload_exposes_setup_performance(tmp_path: Path) -> None:
     assert summary["strategy_setup_performance"][0]["price_mode"] == "extreme"
     assert summary["strategy_setup_performance"][0]["timing_regime"] == "second-wave"
     assert summary["strategy_setup_performance"][0]["pnl_total"] == 32.5
+
+
+def test_summary_payload_recent_windows_use_deployed_notional(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-100",
+        condition_id="cond-100",
+        title="Bitcoin Up or Down - 100",
+        price_mode="underround",
+        timing_regime="early-mid",
+        primary_outcome="Down",
+        hedge_outcome="Up",
+        primary_ratio=0.52,
+        planned_budget=3.5,
+        current_exposure=0.0,
+        notes="window open",
+    )
+    db.record_strategy_window_fills(
+        slug="btc-updown-5m-100",
+        fill_count=4,
+        added_notional=28.75,
+        replenishment_count=1,
+        notes="window fills",
+    )
+    db.close_strategy_window(
+        slug="btc-updown-5m-100",
+        realized_pnl=7.25,
+        winning_outcome="Down",
+        current_exposure=0.0,
+        notes="window closed",
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    assert summary["strategy_recent_resolutions"][0]["slug"] == "btc-updown-5m-100"
+    assert summary["strategy_recent_resolutions"][0]["notional"] == 28.75
+    assert summary["strategy_recent_resolutions"][0]["deployed_notional"] == 28.75
+    assert summary["strategy_recent_resolutions"][0]["planned_budget"] == 3.5

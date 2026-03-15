@@ -667,7 +667,7 @@ def _single_float(conn: sqlite3.Connection, query: str, params: tuple = ()) -> f
 def _recent_vidarx_resolution_windows(conn: sqlite3.Connection, *, limit: int) -> list[dict]:
     strategy_rows = conn.execute(
         """
-        SELECT slug, closed_at, realized_pnl, planned_budget, filled_orders, winning_outcome
+        SELECT slug, closed_at, realized_pnl, planned_budget, deployed_notional, filled_orders, winning_outcome
         FROM strategy_windows
         WHERE status = 'closed'
         ORDER BY COALESCE(closed_at, 0) DESC
@@ -681,7 +681,12 @@ def _recent_vidarx_resolution_windows(conn: sqlite3.Connection, *, limit: int) -
                 "slug": str(row["slug"] or ""),
                 "resolved_at": int(row["closed_at"] or 0),
                 "pnl": round(float(row["realized_pnl"] or 0.0), 4),
-                "notional": round(float(row["planned_budget"] or 0.0), 4),
+                "notional": round(
+                    float(row["deployed_notional"] or 0.0) if float(row["deployed_notional"] or 0.0) > 0 else float(row["planned_budget"] or 0.0),
+                    4,
+                ),
+                "deployed_notional": round(float(row["deployed_notional"] or 0.0), 4),
+                "planned_budget": round(float(row["planned_budget"] or 0.0), 4),
                 "legs": int(row["filled_orders"] or 0),
                 "winning_outcome": str(row["winning_outcome"] or ""),
             }
@@ -732,6 +737,8 @@ def _recent_vidarx_resolution_windows(conn: sqlite3.Connection, *, limit: int) -
             "resolved_at": int(item["resolved_at"]),
             "pnl": round(float(item["pnl"]), 4),
             "notional": round(float(item["notional"]), 4),
+            "deployed_notional": round(float(item["notional"]), 4),
+            "planned_budget": 0.0,
             "legs": int(item["legs"]),
             "winning_outcome": str(item["winning_outcome"] or ""),
         }
@@ -749,6 +756,10 @@ def _vidarx_setup_performance(conn: sqlite3.Connection, *, limit: int) -> list[d
             COALESCE(SUM(realized_pnl), 0) AS pnl_total,
             COALESCE(AVG(realized_pnl), 0) AS pnl_avg,
             COALESCE(SUM(planned_budget), 0) AS budget_total,
+            COALESCE(
+                SUM(CASE WHEN deployed_notional > 0 THEN deployed_notional ELSE planned_budget END),
+                0
+            ) AS deployed_total,
             COALESCE(AVG(primary_ratio), 0) AS primary_ratio_avg,
             SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS wins
         FROM strategy_windows
@@ -775,6 +786,7 @@ def _vidarx_setup_performance(conn: sqlite3.Connection, *, limit: int) -> list[d
                 "pnl_total": round(float(row["pnl_total"] or 0.0), 4),
                 "pnl_avg": round(float(row["pnl_avg"] or 0.0), 4),
                 "budget_total": round(float(row["budget_total"] or 0.0), 4),
+                "deployed_total": round(float(row["deployed_total"] or 0.0), 4),
                 "primary_ratio_avg": round(float(row["primary_ratio_avg"] or 0.0), 4),
             }
         )
