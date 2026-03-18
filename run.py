@@ -56,7 +56,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyS
     clob_client = CLOBClient(settings.env.clob_host, settings.env, market_feed=market_feed)
 
     paper_broker = PaperBroker(db)
-    live_broker = LiveBroker(db, clob_client, settings.env)
+    live_broker = LiveBroker(db, clob_client, settings.env, slippage_limit=settings.config.slippage_limit)
     autonomous_decider = AutonomousDecider(settings.config, db)
     daily_summary = TelegramDailySummaryService(db, settings.config, settings.env, logger)
     trade_notifier = TelegramTradeNotifierService(settings.config, settings.env, logger)

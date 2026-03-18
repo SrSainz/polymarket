@@ -106,6 +106,7 @@ def _settings(**overrides) -> AppSettings:
             "btc5m_reserve_enabled": True,
             "btc5m_relaxed_risk": True,
             "btc5m_strict_realism_mode": False,
+            "profit_keep_ratio": 0.0,
             **overrides,
         }
     )
@@ -2115,11 +2116,94 @@ def test_arb_micro_does_not_keep_buying_same_cheap_side_when_bracket_is_far_off_
     stats = service.run(mode="paper")
 
     assert seeded.status == "filled"
+    assert stats["filled"] == 0
+    positions = db.list_copy_positions()
+    assert {str(row["outcome"]) for row in positions} == {"Up"}
+    assert "repair Down" not in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_late_directional_regime_does_not_repair_wrong_side(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-late-directional"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=240)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Late Directional",
+        "slug": slug,
+        "conditionId": "cond-arb-late-directional",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.92"}],
+                "asks": [{"price": "0.94", "size": "300"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.05"}],
+                "asks": [{"price": "0.06", "size": "300"}],
+            },
+        },
+        balance=1000.0,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70120.0,
+            lead_price=70120.0,
+            binance_price=70120.0,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=10,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-late-directional"),
+        spot_feed=spot_feed,
+    )
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "70000.00000000")
+    seeded = service.paper_broker.execute(
+        CopyInstruction(
+            action=SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset="asset-up",
+            condition_id=market["conditionId"],
+            size=10.6382,
+            price=0.94,
+            notional=9.999908,
+            source_wallet="strategy:test-seed",
+            source_signal_id=0,
+            title=market["question"],
+            slug=slug,
+            outcome="Up",
+            category="crypto",
+            reason="test-seed",
+        )
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert seeded.status == "filled"
     assert stats["filled"] > 0
     positions = db.list_copy_positions()
-    assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
-    assert db.get_bot_state("strategy_price_mode") == "repair-bracket"
-    assert "repair Down" in str(db.get_bot_state("strategy_last_note") or "")
+    assert {str(row["outcome"]) for row in positions} == {"Up"}
+    assert "repair Down" not in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -2148,7 +2232,7 @@ def test_arb_micro_market_discovery_network_error_does_not_crash(tmp_path: Path,
     db.close()
 
 
-def test_arb_micro_repairs_underweight_leg_when_bracket_is_far_from_target(tmp_path: Path) -> None:
+def test_arb_micro_does_not_repair_underweight_leg_without_positive_edge(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     slug = "btc-updown-5m-repair"
@@ -2225,11 +2309,53 @@ def test_arb_micro_repairs_underweight_leg_when_bracket_is_far_from_target(tmp_p
     stats = service.run(mode="paper")
 
     assert seeded.status == "filled"
-    assert stats["filled"] > 0
+    assert stats["filled"] == 0
     positions = db.list_copy_positions()
-    assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
-    assert db.get_bot_state("strategy_price_mode") == "repair-bracket"
-    assert "repair Down" in str(db.get_bot_state("strategy_last_note") or "")
+    assert {str(row["outcome"]) for row in positions} == {"Up"}
+    assert "repair Down" not in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_btc5m_operating_bankroll_keeps_reserved_profit_out_of_reinvestment(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, profit_keep_ratio=0.5),
+        logger=logging.getLogger("test-btc5m-bankroll-vault"),
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    db.add_daily_pnl(today, 200.0)
+    db.record_execution(
+        result=ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.CLOSE,
+            asset="asset-up",
+            size=10.0,
+            price=0.60,
+            notional=6.0,
+            pnl_delta=200.0,
+            message="paper fill",
+        ),
+        side=TradeSide.SELL.value,
+        condition_id="cond-pnl",
+        source_wallet="strategy:test",
+        source_signal_id=0,
+        notes="profit test",
+    )
+
+    operating_bankroll, reserved_profit = service._operating_bankroll_snapshot(live_total_capital=1200.0)  # noqa: SLF001
+
+    assert reserved_profit == 100.0
+    assert operating_bankroll == 1100.0
     db.close()
 
 

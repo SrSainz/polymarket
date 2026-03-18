@@ -8,11 +8,12 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 
+from app.core.autonomous_decider import AutonomousDecider
+from app.core.bankroll import calculate_effective_bankroll, calculate_reserved_profit
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
 from app.core.risk import RiskManager
 from app.core.strategy_registry import active_variant_metadata
-from app.core.autonomous_decider import AutonomousDecider
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.clob_client import CLOBClient
@@ -67,7 +68,7 @@ _ARB_MID_LATE_START = 151
 _ARB_ENABLE_CHEAP_SIDE = True
 _ARB_ENABLE_PAIR_OVERLAY = False
 _ARB_MIN_SECONDS = 10
-_ARB_MAX_SECONDS = 290
+_ARB_MAX_SECONDS = 275
 _ARB_MIN_NOTIONAL = 1.00
 _ARB_CHEAP_SIDE_MIN_DELTA_BPS = 2.5
 _ARB_CHEAP_SIDE_STRONG_EDGE_MIN = 0.11
@@ -99,13 +100,19 @@ _ARB_BRACKET_HEDGE_FLOOR_EARLY = 0.18
 _ARB_BRACKET_HEDGE_FLOOR_MID_LATE = 0.12
 _ARB_REPAIR_RATIO_TRIGGER = 0.14
 _ARB_REPAIR_SUM_MAX = 1.04
-_ARB_REPAIR_NET_EDGE_FLOOR = -0.03
+_ARB_REPAIR_NET_EDGE_FLOOR = 0.005
 _ARB_REPAIR_FAIR_SLACK = 0.02
 _ARB_REPAIR_PROGRESS_FRACTION = 0.65
 _ARB_REPAIR_BUDGET_FRACTION = 0.45
 _ARB_BURST_COOLDOWN_MIN_SECONDS = 0.8
 _ARB_BURST_COOLDOWN_MAX_SECONDS = 2.6
 _ARB_MAX_PLAN_INSTRUCTIONS = 72
+_ARB_NO_NEW_ENTRY_SECONDS_REMAINING = 25
+_ARB_LATE_DIRECTIONAL_SECONDS_REMAINING = 90
+_ARB_LATE_DIRECTIONAL_MAX_SPOT_AGE_MS = 600
+_ARB_LATE_DIRECTIONAL_MIN_DELTA_BPS = 5.0
+_ARB_LATE_DIRECTIONAL_MIN_EDGE = 0.015
+_ARB_LATE_DIRECTIONAL_MIN_FAIR = 0.82
 _MARKET_METADATA_CACHE_SECONDS = 10.0
 
 
@@ -312,12 +319,17 @@ class BTC5mStrategyService:
         total_exposure = self.db.get_total_exposure()
         cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         live_total_capital = cash_balance + total_exposure
+        operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
+            live_total_capital=live_total_capital
+        )
         self._record_balance_snapshot(
             mode=mode,
             cash_balance=cash_balance,
             allowance=allowance,
             total_exposure=total_exposure,
             live_total_capital=live_total_capital,
+            operating_bankroll=operating_bankroll,
+            reserved_profit=reserved_profit,
         )
         live_allowed, live_control_note = self._live_control_can_execute(mode=mode)
         if not live_allowed:
@@ -401,7 +413,7 @@ class BTC5mStrategyService:
             instruction = self._build_instruction(
                 opportunity=opportunity,
                 current_total_exposure=total_exposure,
-                effective_bankroll=live_total_capital,
+                effective_bankroll=operating_bankroll,
                 cash_balance=cash_balance,
                 mode=mode,
             )
@@ -497,6 +509,9 @@ class BTC5mStrategyService:
         cash_balance, allowance = self._live_cash_snapshot(mode="paper")
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
         live_total_capital = cash_balance + marked_exposure
+        operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
+            live_total_capital=live_total_capital
+        )
         self._record_balance_snapshot(
             mode="paper",
             cash_balance=cash_balance,
@@ -505,6 +520,8 @@ class BTC5mStrategyService:
             live_total_capital=live_total_capital,
             marked_exposure=marked_exposure,
             unrealized_pnl=unrealized_pnl,
+            operating_bankroll=operating_bankroll,
+            reserved_profit=reserved_profit,
         )
         self._maybe_prime_arb_spot_anchor()
 
@@ -582,7 +599,7 @@ class BTC5mStrategyService:
         plan = self._build_arb_micro_plan(
             market=market,
             cash_balance=cash_balance,
-            effective_bankroll=live_total_capital,
+            effective_bankroll=operating_bankroll,
             current_total_exposure=total_exposure,
             carry_exposure=carry_state.carry_exposure,
             carry_window_count=carry_state.previous_open_windows,
@@ -690,6 +707,9 @@ class BTC5mStrategyService:
         cash_balance, allowance = self._live_cash_snapshot(mode="paper")
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
         live_total_capital = cash_balance + marked_exposure
+        operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
+            live_total_capital=live_total_capital
+        )
         self._record_balance_snapshot(
             mode="paper",
             cash_balance=cash_balance,
@@ -698,6 +718,8 @@ class BTC5mStrategyService:
             live_total_capital=live_total_capital,
             marked_exposure=marked_exposure,
             unrealized_pnl=unrealized_pnl,
+            operating_bankroll=operating_bankroll,
+            reserved_profit=reserved_profit,
         )
         self._record_strategy_snapshot(
             market=market,
@@ -796,6 +818,9 @@ class BTC5mStrategyService:
         cash_balance, allowance = self._live_cash_snapshot(mode="paper")
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
         live_total_capital = cash_balance + marked_exposure
+        operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
+            live_total_capital=live_total_capital
+        )
         self._record_balance_snapshot(
             mode="paper",
             cash_balance=cash_balance,
@@ -804,6 +829,8 @@ class BTC5mStrategyService:
             live_total_capital=live_total_capital,
             marked_exposure=marked_exposure,
             unrealized_pnl=unrealized_pnl,
+            operating_bankroll=operating_bankroll,
+            reserved_profit=reserved_profit,
         )
 
         drawdown_floor = self.settings.config.bankroll * (1.0 - _VIDARX_MAX_DRAWDOWN_PCT)
@@ -852,7 +879,7 @@ class BTC5mStrategyService:
         plan = self._build_vidarx_plan(
             market=market,
             cash_balance=cash_balance,
-            effective_bankroll=live_total_capital,
+            effective_bankroll=operating_bankroll,
             current_total_exposure=total_exposure,
         )
         if plan is None:
@@ -996,6 +1023,9 @@ class BTC5mStrategyService:
         cash_balance, allowance = self._live_cash_snapshot(mode="paper")
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
         live_total_capital = cash_balance + marked_exposure
+        operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
+            live_total_capital=live_total_capital
+        )
         self._record_balance_snapshot(
             mode="paper",
             cash_balance=cash_balance,
@@ -1004,6 +1034,8 @@ class BTC5mStrategyService:
             live_total_capital=live_total_capital,
             marked_exposure=marked_exposure,
             unrealized_pnl=unrealized_pnl,
+            operating_bankroll=operating_bankroll,
+            reserved_profit=reserved_profit,
         )
         return self._complete_cycle(
             mode="paper",
@@ -1317,11 +1349,18 @@ class BTC5mStrategyService:
             primary_target, secondary_target = up_outcome, down_outcome
 
         pair_sum = up_outcome.best_ask + down_outcome.best_ask
+        directional_target = self._arb_directional_target(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            spot_context=spot_context,
+            seconds_remaining=max(300 - seconds_into_window, 0),
+        )
         desired_up_ratio, fair_up, fair_down, edge_up, edge_down = self._arb_desired_up_ratio(
             up_outcome=up_outcome,
             down_outcome=down_outcome,
             timing_regime=timing_regime,
             spot_context=spot_context,
+            seconds_remaining=max(300 - seconds_into_window, 0),
         )
         desired_down_ratio = max(1.0 - desired_up_ratio, 0.0)
         bracket_phase = self._arb_bracket_phase(
@@ -1457,7 +1496,8 @@ class BTC5mStrategyService:
                     )
                     return None
 
-        if pair_sum <= pair_sum_cap:
+        late_directional_pair_block = directional_target is not None and pair_sum >= 0.998
+        if pair_sum <= pair_sum_cap and not late_directional_pair_block:
             overlay_reserve_fraction = 0.0
             if _ARB_ENABLE_PAIR_OVERLAY and abs(desired_up_ratio - 0.5) >= _ARB_REBALANCE_RATIO_TRIGGER:
                 overlay_reserve_fraction = _ARB_REBALANCE_BUDGET_FRACTION
@@ -1842,7 +1882,10 @@ class BTC5mStrategyService:
                 f"arb_micro fuera de banda temporal: {seconds_into_window}s fuera de "
                 f"{_ARB_MIN_SECONDS}-{_ARB_EARLY_MID_END}s y {_ARB_MID_LATE_START}-{_ARB_MAX_SECONDS}s"
             )
-        return None, f"arb_micro tarde: {seconds_into_window}s > {_ARB_MAX_SECONDS}s"
+        return None, (
+            f"arb_micro demasiado tarde para nueva entrada: {seconds_into_window}s > "
+            f"{_ARB_MAX_SECONDS}s"
+        )
 
     def _target_arb_cycle_budget(
         self,
@@ -2262,7 +2305,17 @@ class BTC5mStrategyService:
             return 0.5
         return up_exposure / total
 
-    def _arb_ratio_bounds(self, *, timing_regime: str) -> tuple[float, float]:
+    def _arb_ratio_bounds(
+        self,
+        *,
+        timing_regime: str,
+        seconds_remaining: int,
+        directional_target: MarketOutcome | None,
+    ) -> tuple[float, float]:
+        if directional_target is not None and seconds_remaining <= _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING:
+            if directional_target.label.strip().lower() == "up":
+                return 0.55, 0.95
+            return 0.05, 0.45
         if timing_regime == "mid-late":
             return 0.30, 0.70
         return 0.38, 0.62
@@ -2274,6 +2327,7 @@ class BTC5mStrategyService:
         down_outcome: MarketOutcome,
         timing_regime: str,
         spot_context: ArbSpotContext | None,
+        seconds_remaining: int,
     ) -> tuple[float, float, float, float, float]:
         fair_up = max(1.0 - down_outcome.best_bid, 0.0)
         fair_down = max(1.0 - up_outcome.best_bid, 0.0)
@@ -2287,10 +2341,22 @@ class BTC5mStrategyService:
         down_edge = fair_down - down_outcome.best_ask
         edge_bias = max(min((up_edge - down_edge) * 1.75, 0.16), -0.16)
         ratio = base_ratio + edge_bias
+        directional_target = self._arb_directional_target(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            spot_context=spot_context,
+            seconds_remaining=seconds_remaining,
+        )
+        if directional_target is not None:
+            ratio = 0.95 if directional_target.asset_id == up_outcome.asset_id else 0.05
         if spot_context is not None:
             spot_bias = max(min(spot_context.delta_bps / 400.0, 0.12), -0.12)
             ratio += spot_bias * (0.45 if timing_regime == "mid-late" else 0.30)
-        min_ratio, max_ratio = self._arb_ratio_bounds(timing_regime=timing_regime)
+        min_ratio, max_ratio = self._arb_ratio_bounds(
+            timing_regime=timing_regime,
+            seconds_remaining=seconds_remaining,
+            directional_target=directional_target,
+        )
         ratio = min(max(ratio, min_ratio), max_ratio)
         return ratio, fair_up, fair_down, up_edge, down_edge
 
@@ -2555,6 +2621,17 @@ class BTC5mStrategyService:
         bracket_phase: str,
         carry_note: str = "",
     ) -> StrategyPlan | None:
+        seconds_remaining = max(300 - self._seconds_into_window(market), 0)
+        directional_target = self._arb_directional_target(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            spot_context=spot_context,
+            seconds_remaining=seconds_remaining,
+        )
+        if directional_target is not None:
+            return None
+        if seconds_remaining <= _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING and spot_context is None:
+            return None
         if pair_sum > _ARB_BIASED_BRACKET_SUM_MAX:
             return None
 
@@ -2764,6 +2841,15 @@ class BTC5mStrategyService:
     ) -> StrategyPlan | None:
         if bracket_phase != "redistribuir":
             return None
+        seconds_remaining = max(300 - self._seconds_into_window(market), 0)
+        directional_target = self._arb_directional_target(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            spot_context=spot_context,
+            seconds_remaining=seconds_remaining,
+        )
+        if seconds_remaining <= _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING and spot_context is None:
+            return None
 
         ratio_gap = desired_up_ratio - current_up_ratio
         ratio_gap_abs = abs(ratio_gap)
@@ -2787,6 +2873,9 @@ class BTC5mStrategyService:
             desired_target_ratio = desired_down_ratio
             current_target_notional = current_down_notional
             other_notional = current_up_notional
+
+        if directional_target is not None and target.asset_id != directional_target.asset_id:
+            return None
 
         if desired_target_ratio <= 0 or desired_target_ratio >= 0.999:
             return None
@@ -2988,11 +3077,50 @@ class BTC5mStrategyService:
         if anchor_price <= 0 or current_price <= 0:
             return 0.5
         delta_bps = ((current_price / anchor_price) - 1.0) * 10000
-        remaining_fraction = max(seconds_remaining / 300, 0.05)
-        scale_bps = 3.5 + 18.0 * math.sqrt(remaining_fraction)
+        remaining_fraction = min(max(seconds_remaining / 300, 0.0), 1.0)
+        scale_bps = 2.5 + (13.5 * remaining_fraction)
+        if seconds_remaining <= _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING:
+            scale_bps *= 0.85
+        elif seconds_remaining <= 150:
+            scale_bps *= 0.92
+        if abs(delta_bps) >= 12:
+            scale_bps *= 0.92
         z_score = delta_bps / scale_bps
         probability = 1.0 / (1.0 + math.exp(-z_score))
         return min(max(probability, 0.02), 0.98)
+
+    def _arb_directional_target(
+        self,
+        *,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        spot_context: ArbSpotContext | None,
+        seconds_remaining: int,
+    ) -> MarketOutcome | None:
+        if spot_context is None:
+            return None
+        if seconds_remaining > _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING:
+            return None
+        if spot_context.age_ms > _ARB_LATE_DIRECTIONAL_MAX_SPOT_AGE_MS:
+            return None
+
+        up_edge = spot_context.fair_up - up_outcome.best_ask
+        down_edge = spot_context.fair_down - down_outcome.best_ask
+        if (
+            spot_context.delta_bps >= _ARB_LATE_DIRECTIONAL_MIN_DELTA_BPS
+            and spot_context.fair_up >= _ARB_LATE_DIRECTIONAL_MIN_FAIR
+            and up_edge >= _ARB_LATE_DIRECTIONAL_MIN_EDGE
+            and up_edge >= down_edge
+        ):
+            return up_outcome
+        if (
+            spot_context.delta_bps <= -_ARB_LATE_DIRECTIONAL_MIN_DELTA_BPS
+            and spot_context.fair_down >= _ARB_LATE_DIRECTIONAL_MIN_FAIR
+            and down_edge >= _ARB_LATE_DIRECTIONAL_MIN_EDGE
+            and down_edge >= up_edge
+        ):
+            return down_outcome
+        return None
 
     def _build_arb_instruction(
         self,
@@ -3514,6 +3642,22 @@ class BTC5mStrategyService:
             self.logger.warning("live balance snapshot failed: %s", error)
             return 0.0, 0.0
 
+    def _operating_bankroll_snapshot(self, *, live_total_capital: float) -> tuple[float, float]:
+        today = datetime.now(timezone.utc).date().isoformat()
+        realized_pnl = self.db.get_cumulative_pnl()
+        realized_profit_gross = self.db.get_cumulative_profit_gross_before(today) + self.db.get_daily_profit_gross(today)
+        reserved_profit = calculate_reserved_profit(
+            profit_gross=realized_profit_gross,
+            profit_keep_ratio=self.settings.config.profit_keep_ratio,
+        )
+        effective_bankroll = calculate_effective_bankroll(
+            base_bankroll=self.settings.config.bankroll,
+            realized_pnl=realized_pnl,
+            profit_gross=realized_profit_gross,
+            profit_keep_ratio=self.settings.config.profit_keep_ratio,
+        )
+        return min(effective_bankroll, max(live_total_capital, 0.0)), reserved_profit
+
     def _record_balance_snapshot(
         self,
         *,
@@ -3524,6 +3668,8 @@ class BTC5mStrategyService:
         live_total_capital: float,
         marked_exposure: float | None = None,
         unrealized_pnl: float | None = None,
+        operating_bankroll: float | None = None,
+        reserved_profit: float | None = None,
     ) -> None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
         self.db.set_bot_state("live_cash_balance", f"{cash_balance:.8f}")
@@ -3536,6 +3682,10 @@ class BTC5mStrategyService:
             self.db.set_bot_state("live_marked_exposure", f"{marked_exposure:.8f}")
         if unrealized_pnl is not None:
             self.db.set_bot_state("live_unrealized_pnl", f"{unrealized_pnl:.8f}")
+        if operating_bankroll is not None:
+            self.db.set_bot_state("strategy_operating_bankroll", f"{operating_bankroll:.8f}")
+        if reserved_profit is not None:
+            self.db.set_bot_state("strategy_reserved_profit", f"{reserved_profit:.8f}")
         self._record_market_feed_state()
 
     def _paper_mark_to_market_snapshot(self) -> tuple[float, float]:

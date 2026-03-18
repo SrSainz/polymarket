@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.core.autonomous_decider import AutonomousDecider
+from app.core.bankroll import calculate_effective_bankroll as _calculate_effective_bankroll
 from app.core.copier import Copier
 from app.core.market_classifier import is_btc5m_market
 from app.core.live_broker import LiveBroker
@@ -26,8 +27,12 @@ def calculate_effective_bankroll(
     prior_profit_gross: float,
     profit_keep_ratio: float,
 ) -> float:
-    reserved_profit = max(prior_profit_gross, 0.0) * max(min(profit_keep_ratio, 1.0), 0.0)
-    return max(base_bankroll + prior_realized_pnl - reserved_profit, 0.0)
+    return _calculate_effective_bankroll(
+        base_bankroll=base_bankroll,
+        realized_pnl=prior_realized_pnl,
+        profit_gross=prior_profit_gross,
+        profit_keep_ratio=profit_keep_ratio,
+    )
 
 
 class ExecuteCopyService:

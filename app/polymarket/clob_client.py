@@ -100,7 +100,16 @@ class CLOBClient:
             "allowance": _extract_balance_value(response, "allowance"),
         }
 
-    def place_market_order(self, token_id: str, side: str, size: float, *, notional: float | None = None) -> dict[str, Any]:
+    def place_market_order(
+        self,
+        token_id: str,
+        side: str,
+        size: float,
+        *,
+        notional: float | None = None,
+        limit_price: float | None = None,
+        order_type: str = "FOK",
+    ) -> dict[str, Any]:
         if not self.env.live_trading:
             raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to enable order placement.")
 
@@ -117,16 +126,26 @@ class CLOBClient:
             if side_upper not in {"BUY", "SELL"}:
                 raise RuntimeError(f"Unsupported side: {side}")
             side_const = BUY if side_upper == "BUY" else SELL
+            order_type_name = str(order_type or "FOK").upper().strip()
+            order_type_value = getattr(OrderType, order_type_name, None)
+            if order_type_value is None:
+                raise RuntimeError(f"Unsupported order type: {order_type}")
 
             # py-clob-client expects amount in USDC for BUY market orders.
             amount = float(notional) if side_upper == "BUY" and notional and notional > 0 else float(size)
             if amount <= 0:
                 raise RuntimeError("Order amount must be > 0.")
 
-            order_args = MarketOrderArgs(token_id=token_id, amount=amount, side=side_const)
+            order_args = MarketOrderArgs(
+                token_id=token_id,
+                amount=amount,
+                side=side_const,
+                price=float(limit_price) if limit_price and limit_price > 0 else 0.0,
+                order_type=order_type_value,
+            )
             try:
                 signed_order = client.create_market_order(order_args)
-                return client.post_order(signed_order, orderType=OrderType.FOK)
+                return client.post_order(signed_order, orderType=order_type_value)
             except Exception as error:  # noqa: BLE001
                 message = str(error or "")
                 lower_message = message.lower()

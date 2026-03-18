@@ -8,8 +8,8 @@ dry_run: true
 
 strategy_mode: "btc5m_orderbook"
 strategy_entry_mode: "arb_micro"
-strategy_variant: "arb-micro-v1"
-strategy_notes: "Baseline arb micro bot under incubation."
+strategy_variant: "arb-micro-balanced-v1"
+strategy_notes: "Conservative arb micro with late directional gates and profit protection."
 incubation_stage: "paper"
 incubation_auto_promote: false
 incubation_min_days: 14
@@ -35,7 +35,7 @@ max_position_per_market: 10000.0
 max_total_exposure: 10000.0
 max_daily_loss: 2500.0
 max_daily_loss_pct: 0.25
-profit_keep_ratio: 0.0
+profit_keep_ratio: 0.35
 
 btc5m_reserve_enabled: false
 btc5m_reserved_notional: 0.0
