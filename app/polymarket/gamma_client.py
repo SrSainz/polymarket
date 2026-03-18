@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+_EVENT_CACHE_TTL_SECONDS = 300.0
+_INCOMPLETE_EVENT_CACHE_TTL_SECONDS = 2.0
 
 
 class GammaClient:
@@ -14,7 +18,7 @@ class GammaClient:
         self.timeout = timeout
         self.session = requests.Session()
         self._category_cache: dict[str, str] = {}
-        self._event_cache: dict[str, dict[str, Any]] = {}
+        self._event_cache: dict[str, tuple[dict[str, Any], float]] = {}
 
         retries = Retry(
             total=3,
@@ -40,8 +44,11 @@ class GammaClient:
         event_key = str(event_id or "").strip()
         if not event_key:
             return None
-        if event_key in self._event_cache:
-            return dict(self._event_cache[event_key])
+        cached_entry = self._event_cache.get(event_key)
+        if cached_entry is not None:
+            cached_payload, cached_expires_at = cached_entry
+            if cached_expires_at > time.time():
+                return dict(cached_payload)
         response = self.session.get(
             f"{self.base_url}/events/{event_key}",
             timeout=self.timeout,
@@ -50,8 +57,14 @@ class GammaClient:
         payload = response.json()
         if not isinstance(payload, dict):
             return None
-        self._event_cache[event_key] = dict(payload)
-        return dict(payload)
+        event_payload = dict(payload)
+        ttl_seconds = (
+            _EVENT_CACHE_TTL_SECONDS
+            if self._event_has_official_metadata(event_payload)
+            else _INCOMPLETE_EVENT_CACHE_TTL_SECONDS
+        )
+        self._event_cache[event_key] = (event_payload, time.time() + ttl_seconds)
+        return dict(event_payload)
 
     def get_category(self, slug: str) -> str:
         if not slug:
