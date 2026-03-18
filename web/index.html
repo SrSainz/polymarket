@@ -51,6 +51,19 @@
               <button id="refreshBtn" type="button">Refrescar</button>
               <button id="resetBtn" type="button" class="danger-btn">Limpiar y reiniciar</button>
             </div>
+            <div class="toolbar-field toolbar-field-wide control-status">
+              <span class="refresh-label">Live Control Center</span>
+              <div class="control-badges">
+                <span id="liveControlBadge" class="soft-badge">SOLO PAPER</span>
+                <span id="liveSummaryBadge" class="soft-badge">Resumen Telegram: --</span>
+              </div>
+              <div class="toolbar-actions">
+                <button id="armLiveBtn" type="button">Armar live</button>
+                <button id="pauseLiveBtn" type="button" class="danger-btn">Pausar live</button>
+                <button id="summaryNowBtn" type="button" class="secondary-btn">Resumen ahora</button>
+              </div>
+              <p id="liveControlMeta" class="control-note">Sin control runtime aun.</p>
+            </div>
           </div>
         </details>
       </header>

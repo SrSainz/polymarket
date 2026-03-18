@@ -724,6 +724,40 @@ class Database:
             (limit,),
         ).fetchall()
 
+    def get_recent_executions_since(self, cutoff_ts: int, limit: int = 25) -> list[sqlite3.Row]:
+        return self.conn.execute(
+            """
+            SELECT *
+            FROM executions
+            WHERE ts >= ?
+            ORDER BY ts DESC
+            LIMIT ?
+            """,
+            (cutoff_ts, limit),
+        ).fetchall()
+
+    def get_execution_stats_since(self, cutoff_ts: int) -> dict[str, float | int]:
+        row = self.conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN side = 'buy' THEN 1 ELSE 0 END) AS buys,
+                SUM(CASE WHEN side = 'sell' THEN 1 ELSE 0 END) AS sells,
+                COALESCE(SUM(pnl_delta), 0) AS pnl
+            FROM executions
+            WHERE ts >= ?
+            """,
+            (cutoff_ts,),
+        ).fetchone()
+        if row is None:
+            return {"total": 0, "buys": 0, "sells": 0, "pnl": 0.0}
+        return {
+            "total": int(row["total"] or 0),
+            "buys": int(row["buys"] or 0),
+            "sells": int(row["sells"] or 0),
+            "pnl": float(row["pnl"] or 0.0),
+        }
+
     def get_daily_pnl(self, day: str) -> float:
         row = self.conn.execute("SELECT pnl FROM daily_pnl WHERE day = ?", (day,)).fetchone()
         if row is None:

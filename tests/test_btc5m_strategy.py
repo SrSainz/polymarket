@@ -15,8 +15,9 @@ from app.settings import AppPaths, AppSettings, BotConfig, EnvSettings
 
 
 class _FakeGammaClient:
-    def __init__(self, market: dict) -> None:
+    def __init__(self, market: dict, events: dict[str, dict] | None = None) -> None:
         self.market = market
+        self.events = events or {}
 
     def get_market_by_slug(self, slug: str) -> dict | None:
         if "question" in self.market or "conditionId" in self.market:
@@ -29,6 +30,10 @@ class _FakeGammaClient:
         copy = dict(payload)
         copy["slug"] = slug
         return copy
+
+    def get_event_by_id(self, event_id: str) -> dict | None:
+        payload = self.events.get(event_id)
+        return dict(payload) if payload is not None else None
 
 
 class _FailingGammaClient:
@@ -2410,6 +2415,63 @@ def test_arb_spot_context_prefers_official_price_to_beat_over_local_anchor(tmp_p
     db.close()
 
 
+def test_arb_spot_context_uses_lead_basis_for_lower_latency_current(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-lead-basis"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=75)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Lead Basis",
+        "slug": slug,
+        "conditionId": "cond-arb-lead-basis",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [
+            {
+                "startTime": start_time,
+                "eventMetadata": {"priceToBeat": 70000.0},
+            }
+        ],
+    }
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70010.0,
+            lead_price=70020.0,
+            binance_price=70020.0,
+            chainlink_price=70010.0,
+            basis=5.0,
+            source="polymarket-rtds+binance",
+            age_ms=9,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0),
+        logger=logging.getLogger("test-btc5m-lead-basis"),
+        spot_feed=spot_feed,
+    )
+
+    context = service._arb_spot_context(market=market, seconds_into_window=75)
+
+    assert context is not None
+    assert context.price_mode == "lead-basis"
+    assert round(context.current_price, 2) == 70025.00
+    assert round(context.reference_price, 2) == 70010.00
+    assert round(context.lead_price, 2) == 70020.00
+    assert round(context.delta_bps, 2) == round(((70025.0 / 70000.0) - 1.0) * 10000, 2)
+    db.close()
+
+
 def test_arb_live_spot_state_refetches_market_for_official_beat_from_slug(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -2461,6 +2523,60 @@ def test_arb_live_spot_state_refetches_market_for_official_beat_from_slug(tmp_pa
     assert round(float(state["strategy_official_price_to_beat"]), 2) == 71982.16
     assert state["strategy_anchor_source"] == "polymarket-official"
     assert state["strategy_reference_quality"] == "official"
+    db.close()
+
+
+def test_arb_live_spot_state_uses_lead_basis_for_current_price(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-1773597300"
+    market = {
+        "question": "Bitcoin Up or Down - Live Lead Basis",
+        "slug": slug,
+        "conditionId": "cond-live-lead-basis",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [
+            {
+                "startTime": "2026-03-15T17:55:00Z",
+                "eventMetadata": {"priceToBeat": 70000.0},
+            }
+        ],
+    }
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70010.0,
+            lead_price=70020.0,
+            binance_price=70020.0,
+            chainlink_price=70010.0,
+            basis=5.0,
+            source="polymarket-rtds+binance",
+            age_ms=11,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({slug: market}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-live-lead-basis"),
+        spot_feed=spot_feed,
+    )
+
+    state = service._arb_live_spot_state(market=market, seconds_into_window=60)
+
+    assert state["strategy_spot_price_mode"] == "lead-basis"
+    assert round(float(state["strategy_spot_price"]), 2) == 70025.00
+    assert round(float(state["strategy_spot_chainlink"]), 2) == 70010.00
+    assert round(float(state["strategy_spot_binance"]), 2) == 70020.00
     db.close()
 
 
@@ -2544,6 +2660,41 @@ def test_market_official_price_to_beat_refetches_partial_market_by_slug(tmp_path
     official = service._market_official_price_to_beat(partial_market)
 
     assert round(official, 2) == 71771.65
+    db.close()
+
+
+def test_market_official_price_to_beat_reads_refreshed_event_payload_top_level(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-1773600000"
+    partial_market = {
+        "question": "Bitcoin Up or Down - Event Fallback",
+        "slug": slug,
+        "conditionId": "cond-event-fallback",
+        "closed": False,
+        "acceptingOrders": True,
+        "events": [{"id": "evt-top-level", "eventMetadata": {}}],
+    }
+    gamma = _FakeGammaClient(
+        {slug: partial_market},
+        events={"evt-top-level": {"id": "evt-top-level", "priceToBeat": 70984.43}},
+    )
+    service = BTC5mStrategyService(
+        db,
+        gamma,
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-event-fallback"),
+    )
+
+    official = service._market_official_price_to_beat(partial_market)
+
+    assert round(official, 2) == 70984.43
     db.close()
 
 

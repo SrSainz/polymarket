@@ -121,6 +121,19 @@ def _build_handler(
                 result = _reset_runtime_state(db_path)
                 self._json(result)
                 return
+            if parsed.path == "/api/live-control":
+                payload = self._read_json_body()
+                try:
+                    result = _apply_live_control_action(
+                        db_path,
+                        action=str(payload.get("action") or ""),
+                        note=str(payload.get("note") or ""),
+                    )
+                except ValueError as error:
+                    self._json({"ok": False, "error": str(error)}, status=HTTPStatus.BAD_REQUEST)
+                    return
+                self._json(result)
+                return
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
         def log_message(self, format: str, *args) -> None:  # noqa: A003
@@ -244,6 +257,14 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         live_cash_allowance = _bot_state_float(conn, "live_cash_allowance")
         live_total_capital = _bot_state_float(conn, "live_total_capital")
         live_balance_updated_at = _bot_state_int(conn, "live_balance_updated_at")
+        live_control_state_raw = _bot_state_text(conn, "live_control_state")
+        live_control_reason = _bot_state_text(conn, "live_control_reason")
+        live_control_updated_at = _bot_state_int(conn, "live_control_updated_at")
+        live_control_default_state = _bot_state_text(conn, "live_control_default_state")
+        telegram_status_summary_enabled = _bot_state_int(conn, "telegram_status_summary_enabled")
+        telegram_status_summary_interval_minutes = _bot_state_int(conn, "telegram_status_summary_interval_minutes")
+        telegram_status_summary_recent_limit = _bot_state_int(conn, "telegram_status_summary_recent_limit")
+        telegram_status_summary_last_sent_at = _bot_state_int(conn, "telegram_status_summary_last_sent_ts")
         strategy_mode = _bot_state_text(conn, "strategy_mode")
         strategy_entry_mode = _bot_state_text(conn, "strategy_entry_mode")
         strategy_variant = _bot_state_text(conn, "strategy_variant") or "default"
@@ -286,6 +307,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_spot_fair_up = _bot_state_float(conn, "strategy_spot_fair_up")
         strategy_spot_fair_down = _bot_state_float(conn, "strategy_spot_fair_down")
         strategy_spot_source = _bot_state_text(conn, "strategy_spot_source")
+        strategy_spot_price_mode = _bot_state_text(conn, "strategy_spot_price_mode")
         strategy_spot_age_ms = _bot_state_int(conn, "strategy_spot_age_ms")
         strategy_spot_binance = _bot_state_float(conn, "strategy_spot_binance")
         strategy_spot_chainlink = _bot_state_float(conn, "strategy_spot_chainlink")
@@ -400,7 +422,15 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         outcome_group["unrealized_pnl"] += line_unrealized
 
     pnl_total = realized_pnl + unrealized_pnl
-    live_mode_active = execution_mode == "live" and live_trading_enabled
+    live_control = _resolve_live_control(
+        raw_state=live_control_state_raw,
+        raw_reason=live_control_reason,
+        raw_updated_at=live_control_updated_at,
+        default_state=live_control_default_state,
+        execution_mode=execution_mode,
+        live_trading_enabled=live_trading_enabled,
+    )
+    live_mode_active = bool(live_control["can_execute"])
     live_available_to_trade = _available_to_trade(
         live_cash_balance=live_cash_balance,
         live_cash_allowance=live_cash_allowance,
@@ -479,6 +509,16 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "live_available_to_trade": round(live_available_to_trade, 4),
         "live_equity_estimate": round(live_equity_estimate, 4),
         "live_balance_updated_at": int(live_balance_updated_at),
+        "live_control_state": str(live_control["state"]),
+        "live_control_label": str(live_control["label"]),
+        "live_control_reason": str(live_control["reason"]),
+        "live_control_updated_at": int(live_control["updated_at"]),
+        "live_control_can_execute": bool(live_control["can_execute"]),
+        "live_control_is_live_session": bool(live_control["is_live_session"]),
+        "telegram_status_summary_enabled": bool(telegram_status_summary_enabled),
+        "telegram_status_summary_interval_minutes": int(telegram_status_summary_interval_minutes),
+        "telegram_status_summary_recent_limit": int(telegram_status_summary_recent_limit),
+        "telegram_status_summary_last_sent_at": int(telegram_status_summary_last_sent_at),
         "strategy_mode": strategy_mode,
         "strategy_entry_mode": strategy_entry_mode,
         "strategy_variant": strategy_variant,
@@ -546,6 +586,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_spot_fair_up": round(strategy_spot_fair_up, 4),
         "strategy_spot_fair_down": round(strategy_spot_fair_down, 4),
         "strategy_spot_source": strategy_spot_source,
+        "strategy_spot_price_mode": strategy_spot_price_mode,
         "strategy_spot_age_ms": int(strategy_spot_age_ms),
         "strategy_spot_binance": round(strategy_spot_binance, 4),
         "strategy_spot_chainlink": round(strategy_spot_chainlink, 4),
@@ -982,6 +1023,71 @@ def _bot_state_int(conn: sqlite3.Connection, key: str) -> int:
         return 0
 
 
+def _set_bot_state(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO bot_state (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+
+def _resolve_live_control(
+    *,
+    raw_state: str,
+    raw_reason: str,
+    raw_updated_at: int,
+    default_state: str,
+    execution_mode: str,
+    live_trading_enabled: bool,
+) -> dict[str, str | int | bool]:
+    is_live_session = execution_mode == "live" and live_trading_enabled
+    state = str(raw_state or "").strip().lower()
+    if state not in {"armed", "paused"}:
+        fallback_state = str(default_state or "").strip().lower()
+        if fallback_state in {"armed", "paused"}:
+            state = fallback_state
+        elif is_live_session:
+            state = "armed"
+        else:
+            state = "paper"
+
+    if not is_live_session:
+        label = "Solo paper" if execution_mode == "paper" else "Live no disponible"
+        reason = str(raw_reason or "").strip() or "el motor no esta en sesion live"
+        return {
+            "state": "paper",
+            "label": label,
+            "reason": reason,
+            "updated_at": int(raw_updated_at or 0),
+            "can_execute": False,
+            "is_live_session": False,
+        }
+
+    if state == "armed":
+        label = "Live armado"
+        reason = str(raw_reason or "").strip() or "motor habilitado para ejecutar en live"
+        return {
+            "state": "armed",
+            "label": label,
+            "reason": reason,
+            "updated_at": int(raw_updated_at or 0),
+            "can_execute": True,
+            "is_live_session": True,
+        }
+
+    reason = str(raw_reason or "").strip() or "live pausado desde el control center"
+    return {
+        "state": "paused",
+        "label": "Live pausado",
+        "reason": reason,
+        "updated_at": int(raw_updated_at or 0),
+        "can_execute": False,
+        "is_live_session": True,
+    }
+
+
 def _safe_int(raw: str, default: int, minimum: int, maximum: int) -> int:
     try:
         value = int(raw)
@@ -1022,6 +1128,33 @@ def _midpoint_for_asset(*, clob_host: str, asset: str) -> float | None:
 
     _MIDPOINT_CACHE[asset] = (midpoint, now + _MIDPOINT_CACHE_TTL_SECONDS)
     return midpoint
+
+
+def _apply_live_control_action(db_path: Path, *, action: str, note: str = "") -> dict:
+    safe_action = str(action or "").strip().lower()
+    safe_note = str(note or "").strip()
+    if safe_action not in {"arm", "pause", "summary_now"}:
+        raise ValueError("invalid action; expected arm, pause or summary_now")
+
+    now_ts = int(time.time())
+    with _connect(db_path) as conn:
+        with conn:
+            if safe_action == "arm":
+                _set_bot_state(conn, "live_control_state", "armed")
+                _set_bot_state(conn, "live_control_reason", safe_note or "armado desde dashboard")
+                _set_bot_state(conn, "live_control_updated_at", str(now_ts))
+            elif safe_action == "pause":
+                _set_bot_state(conn, "live_control_state", "paused")
+                _set_bot_state(conn, "live_control_reason", safe_note or "pausado desde dashboard")
+                _set_bot_state(conn, "live_control_updated_at", str(now_ts))
+            elif safe_action == "summary_now":
+                _set_bot_state(conn, "telegram_status_summary_force_send", "1")
+    return {
+        "ok": True,
+        "action": safe_action,
+        "note": safe_note,
+        "updated_at": now_ts,
+    }
 
 
 def _reset_runtime_state(db_path: Path) -> dict:

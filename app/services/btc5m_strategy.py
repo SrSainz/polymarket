@@ -166,6 +166,7 @@ class StrategyPlan:
     spot_age_ms: int = 0
     spot_binance_price: float = 0.0
     spot_chainlink_price: float = 0.0
+    spot_price_mode: str = ""
     desired_up_ratio: float = 0.5
     current_up_ratio: float = 0.5
     bracket_phase: str = ""
@@ -210,6 +211,8 @@ class ArbSingleSideSignal:
 @dataclass(frozen=True)
 class ArbSpotContext:
     current_price: float
+    reference_price: float
+    lead_price: float
     anchor_price: float
     local_anchor_price: float
     official_price_to_beat: float
@@ -217,6 +220,7 @@ class ArbSpotContext:
     fair_up: float
     fair_down: float
     delta_bps: float
+    price_mode: str
     source: str
     age_ms: int
     binance_price: float | None
@@ -315,6 +319,19 @@ class BTC5mStrategyService:
             total_exposure=total_exposure,
             live_total_capital=live_total_capital,
         )
+        live_allowed, live_control_note = self._live_control_can_execute(mode=mode)
+        if not live_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(note=live_control_note)
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=live_control_note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
 
         market = self._discover_market()
         if market is None:
@@ -615,6 +632,7 @@ class BTC5mStrategyService:
                 "strategy_spot_fair_up": f"{plan.spot_fair_up:.6f}",
                 "strategy_spot_fair_down": f"{plan.spot_fair_down:.6f}",
                 "strategy_spot_source": plan.spot_source,
+                "strategy_spot_price_mode": plan.spot_price_mode or "missing",
                 "strategy_spot_age_ms": str(plan.spot_age_ms),
                 "strategy_spot_binance": f"{plan.spot_binance_price:.6f}",
                 "strategy_spot_chainlink": f"{plan.spot_chainlink_price:.6f}",
@@ -712,6 +730,7 @@ class BTC5mStrategyService:
                 "strategy_spot_fair_up": f"{plan.spot_fair_up:.6f}",
                 "strategy_spot_fair_down": f"{plan.spot_fair_down:.6f}",
                 "strategy_spot_source": plan.spot_source,
+                "strategy_spot_price_mode": plan.spot_price_mode or "missing",
                 "strategy_spot_age_ms": str(plan.spot_age_ms),
                 "strategy_spot_binance": f"{plan.spot_binance_price:.6f}",
                 "strategy_spot_chainlink": f"{plan.spot_chainlink_price:.6f}",
@@ -878,6 +897,7 @@ class BTC5mStrategyService:
                 "strategy_spot_fair_up": f"{plan.spot_fair_up:.6f}",
                 "strategy_spot_fair_down": f"{plan.spot_fair_down:.6f}",
                 "strategy_spot_source": plan.spot_source,
+                "strategy_spot_price_mode": plan.spot_price_mode or "missing",
                 "strategy_spot_age_ms": str(plan.spot_age_ms),
                 "strategy_spot_binance": f"{plan.spot_binance_price:.6f}",
                 "strategy_spot_chainlink": f"{plan.spot_chainlink_price:.6f}",
@@ -966,6 +986,7 @@ class BTC5mStrategyService:
                 "strategy_spot_fair_up": f"{plan.spot_fair_up:.6f}",
                 "strategy_spot_fair_down": f"{plan.spot_fair_down:.6f}",
                 "strategy_spot_source": plan.spot_source,
+                "strategy_spot_price_mode": plan.spot_price_mode or "missing",
                 "strategy_spot_age_ms": str(plan.spot_age_ms),
                 "strategy_spot_binance": f"{plan.spot_binance_price:.6f}",
                 "strategy_spot_chainlink": f"{plan.spot_chainlink_price:.6f}",
@@ -1611,6 +1632,7 @@ class BTC5mStrategyService:
                         spot_fair_up=spot_context.fair_up if spot_context is not None else 0.0,
                         spot_fair_down=spot_context.fair_down if spot_context is not None else 0.0,
                         spot_source=spot_context.source if spot_context is not None else "",
+                        spot_price_mode=spot_context.price_mode if spot_context is not None else "",
                         spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
                         spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
                         spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
@@ -1735,6 +1757,7 @@ class BTC5mStrategyService:
                         spot_fair_up=spot_context.fair_up if spot_context is not None else 0.0,
                         spot_fair_down=spot_context.fair_down if spot_context is not None else 0.0,
                         spot_source=spot_context.source if spot_context is not None else "",
+                        spot_price_mode=spot_context.price_mode if spot_context is not None else "",
                         spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
                         spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
                         spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
@@ -1795,6 +1818,7 @@ class BTC5mStrategyService:
                 strategy_spot_fair_up=f"{spot_context.fair_up:.6f}" if spot_context is not None else "0.000000",
                 strategy_spot_fair_down=f"{spot_context.fair_down:.6f}" if spot_context is not None else "0.000000",
                 strategy_spot_source=spot_context.source if spot_context is not None else "",
+                strategy_spot_price_mode=spot_context.price_mode if spot_context is not None else "missing",
                 strategy_spot_age_ms=str(spot_context.age_ms if spot_context is not None else 0),
                 strategy_spot_binance=f"{(spot_context.binance_price or 0.0):.6f}" if spot_context is not None else "0.000000",
                 strategy_spot_chainlink=f"{(spot_context.chainlink_price or 0.0):.6f}" if spot_context is not None else "0.000000",
@@ -2706,6 +2730,7 @@ class BTC5mStrategyService:
             spot_fair_up=spot_context.fair_up if spot_context is not None else 0.0,
             spot_fair_down=spot_context.fair_down if spot_context is not None else 0.0,
             spot_source=spot_context.source if spot_context is not None else "",
+            spot_price_mode=spot_context.price_mode if spot_context is not None else "",
             spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
             spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
             spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
@@ -2854,6 +2879,7 @@ class BTC5mStrategyService:
             spot_fair_up=spot_context.fair_up if spot_context is not None else 0.0,
             spot_fair_down=spot_context.fair_down if spot_context is not None else 0.0,
             spot_source=spot_context.source if spot_context is not None else "",
+            spot_price_mode=spot_context.price_mode if spot_context is not None else "",
             spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
             spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
             spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
@@ -2881,7 +2907,10 @@ class BTC5mStrategyService:
             snapshot = self.spot_feed.get_snapshot()
         except Exception:  # noqa: BLE001
             return None
-        if snapshot.reference_price is None or snapshot.reference_price <= 0:
+        current_price, price_mode = self._arb_effective_spot_price(snapshot=snapshot)
+        reference_price = float(snapshot.reference_price or 0.0)
+        lead_price = float(snapshot.lead_price or 0.0)
+        if current_price <= 0:
             return None
 
         slug = str(market.get("slug") or "")
@@ -2904,13 +2933,15 @@ class BTC5mStrategyService:
         seconds_remaining = max(300 - seconds_into_window, 0)
         fair_up = self._arb_spot_fair_up(
             anchor_price=anchor_price,
-            current_price=snapshot.reference_price,
+            current_price=current_price,
             seconds_remaining=seconds_remaining,
         )
         fair_down = max(1.0 - fair_up, 0.0)
-        delta_bps = ((snapshot.reference_price / anchor_price) - 1.0) * 10000 if anchor_price > 0 else 0.0
+        delta_bps = ((current_price / anchor_price) - 1.0) * 10000 if anchor_price > 0 else 0.0
         return ArbSpotContext(
-            current_price=snapshot.reference_price,
+            current_price=current_price,
+            reference_price=reference_price,
+            lead_price=lead_price,
             anchor_price=anchor_price,
             local_anchor_price=local_anchor_price,
             official_price_to_beat=official_price_to_beat,
@@ -2918,6 +2949,7 @@ class BTC5mStrategyService:
             fair_up=fair_up,
             fair_down=fair_down,
             delta_bps=delta_bps,
+            price_mode=price_mode,
             source=snapshot.source,
             age_ms=snapshot.age_ms,
             binance_price=snapshot.binance_price,
@@ -3817,37 +3849,13 @@ class BTC5mStrategyService:
                 if time.monotonic() < cached_expires_at and cached_price > 0:
                     return cached_price
 
-        events = market.get("events") or []
-        if isinstance(events, list):
-            for event in events:
-                if not isinstance(event, dict):
-                    continue
-                metadata = event.get("eventMetadata") or {}
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        metadata = {}
-                if isinstance(metadata, dict):
-                    official = _safe_float(metadata.get("priceToBeat"))
-                    if official > 0:
-                        if slug:
-                            self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
-                        return official
+        official = self._market_official_price_to_beat_from_payload(market)
+        if official > 0:
+            if slug:
+                self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
+            return official
 
-        metadata = market.get("eventMetadata") or {}
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except json.JSONDecodeError:
-                metadata = {}
-        if isinstance(metadata, dict):
-            official = _safe_float(metadata.get("priceToBeat"))
-            if official > 0:
-                if slug:
-                    self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
-                return official
-
+        refreshed_market: dict | None = None
         if slug:
             try:
                 refreshed_market = self.gamma_client.get_market_by_slug(slug)
@@ -3858,36 +3866,89 @@ class BTC5mStrategyService:
                 if refreshed_official > 0:
                     self._official_price_cache[slug] = (refreshed_official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
                     return refreshed_official
+
+        event_lookup = getattr(self.gamma_client, "get_event_by_id", None)
+        if callable(event_lookup):
+            for event_id in self._market_event_ids(refreshed_market if isinstance(refreshed_market, dict) else market):
+                try:
+                    event_payload = event_lookup(event_id)
+                except Exception:  # noqa: BLE001
+                    continue
+                refreshed_official = self._market_official_price_to_beat_from_payload(event_payload)
+                if refreshed_official > 0:
+                    if slug:
+                        self._official_price_cache[slug] = (
+                            refreshed_official,
+                            time.monotonic() + _MARKET_METADATA_CACHE_SECONDS,
+                        )
+                    return refreshed_official
         return 0.0
 
     def _market_official_price_to_beat_from_payload(self, market: dict) -> float:
-        events = market.get("events") or []
-        if isinstance(events, list):
-            for event in events:
-                if not isinstance(event, dict):
+        return self._extract_price_to_beat(market)
+
+    def _extract_price_to_beat(self, payload: object) -> float:
+        normalized = self._decoded_json_payload(payload)
+        if isinstance(normalized, dict):
+            for key in ("priceToBeat", "price_to_beat"):
+                official = _safe_float(normalized.get(key))
+                if official > 0:
+                    return official
+            for nested_key in ("eventMetadata", "metadata", "marketMetadata", "event"):
+                official = self._extract_price_to_beat(normalized.get(nested_key))
+                if official > 0:
+                    return official
+            for list_key in ("events", "markets"):
+                raw_items = normalized.get(list_key)
+                if not isinstance(raw_items, list):
                     continue
-                metadata = event.get("eventMetadata") or {}
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        metadata = {}
-                if isinstance(metadata, dict):
-                    official = _safe_float(metadata.get("priceToBeat"))
+                for item in raw_items:
+                    official = self._extract_price_to_beat(item)
                     if official > 0:
                         return official
-
-        metadata = market.get("eventMetadata") or {}
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except json.JSONDecodeError:
-                metadata = {}
-        if isinstance(metadata, dict):
-            official = _safe_float(metadata.get("priceToBeat"))
-            if official > 0:
-                return official
         return 0.0
+
+    def _decoded_json_payload(self, payload: object) -> object:
+        if not isinstance(payload, str):
+            return payload
+        text = payload.strip()
+        if not text:
+            return payload
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return payload
+
+    def _market_event_ids(self, market: dict | None) -> list[str]:
+        if not isinstance(market, dict):
+            return []
+        event_ids: list[str] = []
+        for raw_event in market.get("events") or []:
+            if not isinstance(raw_event, dict):
+                continue
+            event_id = str(raw_event.get("id") or "").strip()
+            if event_id:
+                event_ids.append(event_id)
+        return list(dict.fromkeys(event_ids))
+
+    def _arb_effective_spot_price(self, *, snapshot: SpotSnapshot) -> tuple[float, str]:
+        reference_price = float(snapshot.reference_price or 0.0)
+        lead_price = float(snapshot.lead_price or 0.0)
+        binance_price = float(snapshot.binance_price or 0.0)
+        chainlink_price = float(snapshot.chainlink_price or 0.0)
+        basis = float(snapshot.basis or 0.0)
+
+        if lead_price > 0 and binance_price > 0 and reference_price > 0 and (chainlink_price > 0 or basis != 0.0):
+            comparable_lead = lead_price + basis
+            if comparable_lead > 0:
+                return comparable_lead, "lead-basis"
+        if reference_price > 0:
+            if lead_price > 0 and chainlink_price <= 0 and abs(lead_price - reference_price) < 1e-9:
+                return lead_price, "lead"
+            return reference_price, "reference"
+        if lead_price > 0:
+            return lead_price, "lead"
+        return 0.0, "missing"
 
     def _arb_reference_state(
         self,
@@ -4151,13 +4212,31 @@ class BTC5mStrategyService:
             return normalized_balance
         return min(normalized_balance, normalized_allowance)
 
+    def _live_control_can_execute(self, *, mode: str) -> tuple[bool, str]:
+        if mode != "live":
+            return True, ""
+        raw_state_value = self.db.get_bot_state("live_control_state")
+        if raw_state_value is None or not str(raw_state_value).strip():
+            return True, ""
+        raw_state = str(raw_state_value).strip().lower()
+        if raw_state == "armed":
+            return True, ""
+        reason = str(self.db.get_bot_state("live_control_reason") or "").strip()
+        return False, reason or "live pausado desde el live control center"
+
     def _execute_instruction(self, *, mode: str, instruction: CopyInstruction) -> ExecutionResult:
         if mode == "live":
+            live_allowed, live_control_note = self._live_control_can_execute(mode=mode)
+            if not live_allowed:
+                raise RuntimeError(live_control_note)
             return self.live_broker.execute(instruction)
         return self.paper_broker.execute(instruction)
 
     def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:
         if self.settings.config.strategy_entry_mode in {"vidarx_micro", "arb_micro"}:
+            return
+        live_allowed, _ = self._live_control_can_execute(mode=mode)
+        if mode == "live" and not live_allowed:
             return
         positions = self.db.list_copy_positions()
         for position in positions:
@@ -4245,6 +4324,7 @@ class BTC5mStrategyService:
             "strategy_spot_fair_up": "0.000000",
             "strategy_spot_fair_down": "0.000000",
             "strategy_spot_source": "",
+            "strategy_spot_price_mode": "missing",
             "strategy_spot_age_ms": "0",
             "strategy_spot_binance": "0.000000",
             "strategy_spot_chainlink": "0.000000",
@@ -4257,14 +4337,15 @@ class BTC5mStrategyService:
         except Exception:  # noqa: BLE001
             return state
 
-        reference_price = float(snapshot.reference_price or 0.0)
-        if reference_price <= 0:
+        current_price, price_mode = self._arb_effective_spot_price(snapshot=snapshot)
+        if current_price <= 0:
             return state
 
         state.update(
             {
-                "strategy_spot_price": f"{reference_price:.6f}",
+                "strategy_spot_price": f"{current_price:.6f}",
                 "strategy_spot_source": snapshot.source,
+                "strategy_spot_price_mode": price_mode,
                 "strategy_spot_age_ms": str(int(snapshot.age_ms)),
                 "strategy_spot_binance": f"{float(snapshot.binance_price or 0.0):.6f}",
                 "strategy_spot_chainlink": f"{float(snapshot.chainlink_price or 0.0):.6f}",
@@ -4318,11 +4399,11 @@ class BTC5mStrategyService:
         seconds_remaining = max(300 - int(seconds_value), 0)
         fair_up = self._arb_spot_fair_up(
             anchor_price=anchor_price,
-            current_price=reference_price,
+            current_price=current_price,
             seconds_remaining=seconds_remaining,
         )
         fair_down = max(1.0 - fair_up, 0.0)
-        delta_bps = ((reference_price / anchor_price) - 1.0) * 10000 if anchor_price > 0 else 0.0
+        delta_bps = ((current_price / anchor_price) - 1.0) * 10000 if anchor_price > 0 else 0.0
 
         state.update(
             {

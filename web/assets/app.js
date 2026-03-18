@@ -117,8 +117,10 @@ function modeLabel() {
 function tradingModeLabel(summary) {
   if (runtimeMode === "backend-unreachable") return "NAS OFF";
   if (isPublicRuntime()) return "PUBLICO";
-  const isLive = Boolean(summary.live_mode_active);
-  return isLive ? "LIVE" : "PAPER";
+  const isLiveSession = Boolean(summary.live_control_is_live_session);
+  const canExecute = Boolean(summary.live_control_can_execute);
+  if (isLiveSession) return canExecute ? "LIVE ARMADO" : "LIVE PAUSADO";
+  return "PAPER";
 }
 
 function strategyLabel(summary) {
@@ -180,6 +182,27 @@ function datasetMeta(summary = lastSummary) {
   const events = Number(summary?.strategy_dataset_events || 0);
   if (!windows && !events) return "";
   return `dataset nativo ${windows} ventanas | ${events} eventos`;
+}
+
+function liveControlInfo(summary = lastSummary) {
+  const isLiveSession = Boolean(summary?.live_control_is_live_session);
+  const canExecute = Boolean(summary?.live_control_can_execute);
+  const label = String(summary?.live_control_label || (isLiveSession ? "Live pausado" : "Solo paper"));
+  const reason = String(summary?.live_control_reason || "").trim();
+  const updatedAt = Number(summary?.live_control_updated_at || 0);
+  const statusSummaryEnabled = Boolean(summary?.telegram_status_summary_enabled);
+  const statusSummaryIntervalMinutes = Number(summary?.telegram_status_summary_interval_minutes || 0);
+  const statusSummaryLastSentAt = Number(summary?.telegram_status_summary_last_sent_at || 0);
+  return {
+    isLiveSession,
+    canExecute,
+    label,
+    reason,
+    updatedAt,
+    statusSummaryEnabled,
+    statusSummaryIntervalMinutes,
+    statusSummaryLastSentAt,
+  };
 }
 
 function isVidarxLab(summary = lastSummary) {
@@ -328,6 +351,7 @@ function currentSpotInfo(summary) {
   const fairDown = Number(summary?.strategy_spot_fair_down || 0);
   const ageMs = Number(summary?.strategy_spot_age_ms || 0);
   const source = String(summary?.strategy_spot_source || "").trim();
+  const priceMode = String(summary?.strategy_spot_price_mode || "").trim();
   const binance = Number(summary?.strategy_spot_binance || 0);
   const beatKind = officialBeat > 0 ? "official" : anchor > 0 && referenceQuality === "rtds-derived" ? "rtds-derived" : anchor > 0 ? "fallback" : "missing";
   const beatReference = officialBeat > 0 ? officialBeat : anchor;
@@ -344,7 +368,7 @@ function currentSpotInfo(summary) {
   const binanceDeltaUsd = binance > 0 && beatReference > 0 ? binance - beatReference : 0;
   const binanceDeltaBps = binance > 0 && beatReference > 0 ? ((binance / beatReference) - 1) * 10000 : 0;
   return {
-    available: referenceComparable && polymarketCurrent > 0 && beatReference > 0,
+    available: referenceComparable && current > 0 && beatReference > 0,
     hasCurrent: current > 0,
     hasAnchor: anchor > 0,
     hasLocalAnchor: localAnchor > 0,
@@ -369,6 +393,7 @@ function currentSpotInfo(summary) {
     anchorDriftBps,
     anchorDriftRefUsd,
     anchorDriftRefBps,
+    priceMode: priceMode || "missing",
     chainlinkDeltaUsd,
     chainlinkDeltaBps,
     binanceDeltaUsd,
@@ -632,10 +657,55 @@ function setLiveBadge(summary) {
     badge.classList.remove("live-badge", "paper-badge");
     return;
   }
-  const isLive = Boolean(summary.live_mode_active);
+  const info = liveControlInfo(summary);
   badge.textContent = tradingModeLabel(summary);
   badge.classList.remove("live-badge", "paper-badge");
-  badge.classList.add(isLive ? "live-badge" : "paper-badge");
+  badge.classList.add(info.canExecute ? "live-badge" : "paper-badge");
+}
+
+function applyLiveControlUi(summary = lastSummary) {
+  const controlBadge = document.getElementById("liveControlBadge");
+  const summaryBadge = document.getElementById("liveSummaryBadge");
+  const meta = document.getElementById("liveControlMeta");
+  const armBtn = document.getElementById("armLiveBtn");
+  const pauseBtn = document.getElementById("pauseLiveBtn");
+  const summaryNowBtn = document.getElementById("summaryNowBtn");
+  if (!controlBadge || !summaryBadge || !meta || !armBtn || !pauseBtn || !summaryNowBtn) return;
+
+  if (isPublicRuntime()) {
+    controlBadge.textContent = "PUBLICO";
+    summaryBadge.textContent = "Resumen Telegram: n/a";
+    meta.textContent = "Conecta el backend real del NAS para armar, pausar y pedir resúmenes.";
+    controlBadge.classList.remove("live-badge", "paper-badge");
+    controlBadge.classList.add("paper-badge");
+    armBtn.disabled = true;
+    pauseBtn.disabled = true;
+    summaryNowBtn.disabled = true;
+    return;
+  }
+
+  const info = liveControlInfo(summary);
+  const updatedText = info.updatedAt > 0 ? tsToIso(info.updatedAt) : "sin cambios";
+  const lastSentText = info.statusSummaryLastSentAt > 0 ? tsToIso(info.statusSummaryLastSentAt) : "sin enviar";
+  controlBadge.textContent = info.label.toUpperCase();
+  controlBadge.classList.remove("live-badge", "paper-badge");
+  controlBadge.classList.add(info.canExecute ? "live-badge" : "paper-badge");
+  summaryBadge.textContent = info.statusSummaryEnabled
+    ? `Resumen Telegram: ${info.statusSummaryIntervalMinutes || 30}m`
+    : "Resumen Telegram: off";
+  meta.textContent =
+    `${info.reason || (info.isLiveSession ? "sin motivo" : "el bot no esta en live")} | ` +
+    `cambio ${updatedText} | ultimo resumen ${lastSentText}`;
+
+  const localAvailable = runtimeMode === "local";
+  armBtn.disabled = !localAvailable || !info.isLiveSession || info.canExecute;
+  pauseBtn.disabled = !localAvailable || !info.isLiveSession || !info.canExecute;
+  summaryNowBtn.disabled = !localAvailable;
+  armBtn.title =
+    !localAvailable ? "Solo disponible con backend local" : !info.isLiveSession ? "Activa run.py live con LIVE_TRADING=true" : "";
+  pauseBtn.title =
+    !localAvailable ? "Solo disponible con backend local" : !info.isLiveSession ? "Activa run.py live con LIVE_TRADING=true" : "";
+  summaryNowBtn.title = !localAvailable ? "Solo disponible con backend local" : "";
 }
 
 function setCardTone(elementId, value) {
@@ -790,6 +860,7 @@ function disconnectedSummary() {
     strategy_reference_quality: "",
     strategy_reference_comparable: false,
     strategy_reference_note: "",
+    strategy_spot_price_mode: "",
     strategy_operability_state: "",
     strategy_operability_label: "",
     strategy_operability_reason: "",
@@ -804,6 +875,15 @@ function disconnectedSummary() {
     live_available_to_trade: 0,
     live_equity_estimate: 0,
     live_total_capital: 0,
+    live_control_state: "paper",
+    live_control_label: "Solo paper",
+    live_control_reason: "backend NAS desconectado",
+    live_control_updated_at: 0,
+    live_control_can_execute: false,
+    live_control_is_live_session: false,
+    telegram_status_summary_enabled: false,
+    telegram_status_summary_interval_minutes: 30,
+    telegram_status_summary_last_sent_at: 0,
     exposure: 0,
     exposure_mark: 0,
     open_positions: 0,
@@ -999,6 +1079,7 @@ function paintSummary(summary, items = lastPositions) {
       : `${feedInfo.meta} | backend ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${operability.label.toLowerCase()}${spotInfo.hasCurrent ? ` | BTC ${fmtBtcPrice(spotInfo.current)}` : ""}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
+  applyLiveControlUi(summary);
 
   const modeText =
     runtimeMode === "local"
@@ -1061,9 +1142,9 @@ function paintLabOverview(summary) {
   const edgeInfo = currentEdgeInfo(summary);
   const spotInfo = currentSpotInfo(summary);
   const operability = operabilityInfo(summary);
-  const visibleMarketPrice = spotInfo.hasChainlink ? spotInfo.polymarketCurrent : 0;
-  const visibleDeltaUsd = visibleMarketPrice > 0 && spotInfo.hasAnchor ? spotInfo.chainlinkDeltaUsd : 0;
-  const visibleDeltaBps = visibleMarketPrice > 0 && spotInfo.hasAnchor ? spotInfo.chainlinkDeltaBps : 0;
+  const visibleComparablePrice = spotInfo.hasCurrent ? spotInfo.current : spotInfo.polymarketCurrent;
+  const visibleDeltaUsd = visibleComparablePrice > 0 && spotInfo.hasAnchor ? spotInfo.deltaUsd : 0;
+  const visibleDeltaBps = visibleComparablePrice > 0 && spotInfo.hasAnchor ? spotInfo.deltaMarketBps : 0;
   const fastSpotPrice = spotInfo.hasBinance ? spotInfo.binance : spotInfo.fallbackCurrent;
   const beatLabel =
     spotInfo.beatKind === "official"
@@ -1108,14 +1189,19 @@ function paintLabOverview(summary) {
   document.getElementById("labFeedValue").textContent = spotInfo.referenceComparable ? feedInfo.label : `${feedInfo.label} | degradado`;
   document.getElementById("labOperabilityValue").textContent = operability.label;
   document.getElementById("labOperabilityReason").textContent = operability.reason;
-  document.getElementById("labSpotCurrentLabel").textContent = "Current price Chainlink/Polymarket";
-  document.getElementById("labFastSpotLabel").textContent = "Spot externo rapido";
+  document.getElementById("labSpotCurrentLabel").textContent =
+    spotInfo.priceMode === "lead-basis"
+      ? "Spot comparable usado (lead+basis)"
+      : spotInfo.priceMode === "lead"
+      ? "Spot usado (rapido)"
+      : "Spot comparable usado";
+  document.getElementById("labFastSpotLabel").textContent = spotInfo.hasBinance ? "Spot externo rapido" : "Spot observado";
   document.getElementById("labBeatLabel").textContent = beatLabel;
   document.getElementById("labBeatDeltaLabel").textContent = beatDeltaLabel;
   document.getElementById("labFastBeatDeltaLabel").textContent = fastBeatDeltaLabel;
   document.getElementById("labAnchorDriftLabel").textContent = anchorDriftLabel;
   document.getElementById("labSpotCurrent").textContent =
-    visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-";
+    visibleComparablePrice > 0 ? fmtBtcPrice(visibleComparablePrice) : "-";
   document.getElementById("labChainlinkPrice").textContent = fastSpotPrice > 0 ? fmtBtcPrice(fastSpotPrice) : "-";
   document.getElementById("labSpotAnchor").textContent =
     spotInfo.beatKind === "official"
@@ -1126,7 +1212,7 @@ function paintLabOverview(summary) {
       ? `${fmtBtcPrice(spotInfo.anchor)} (sin oficial)`
       : "-";
   document.getElementById("labSpotDelta").textContent =
-    visibleMarketPrice > 0 && spotInfo.hasAnchor
+    visibleComparablePrice > 0 && spotInfo.hasAnchor
       ? `${fmtUsd(visibleDeltaUsd, 2)} | ${fmt(visibleDeltaBps, 1)}bps${spotInfo.referenceComparable ? "" : " | degradado"}`
       : spotInfo.hasCurrent || spotInfo.hasChainlink
       ? `degradado: ${spotInfo.referenceNote}`
@@ -1156,7 +1242,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | operabilidad ${operability.label.toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.referenceComparable ? `${spotInfo.source} ${spotInfo.ageMs}ms | ref ${spotInfo.referenceQuality} | polymarket ${visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-"}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasLocalAnchor && spotInfo.hasAnchor ? ` | desvio ${fmtUsd(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftUsd : spotInfo.anchorDriftRefUsd, 2)} / ${fmt(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftBps : spotInfo.anchorDriftRefBps, 1)}bps` : ""}` : `degradado | ${spotInfo.referenceNote} | ${spotInfo.source !== "-" ? `${spotInfo.source} ${spotInfo.ageMs}ms` : feedInfo.summaryLabel}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}`} | dinero metido ${fmtUsdPlain(deployed, 2)}${incubationMeta(summary) ? ` | ${incubationMeta(summary)}` : ""}${variantBacktestMeta(summary) ? ` | ${variantBacktestMeta(summary)}` : ""}${datasetMeta(summary) ? ` | ${datasetMeta(summary)}` : ""}`
+    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | operabilidad ${operability.label.toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.referenceComparable ? `${spotInfo.source} ${spotInfo.ageMs}ms | ref ${spotInfo.referenceQuality} | usado ${visibleComparablePrice > 0 ? fmtBtcPrice(visibleComparablePrice) : "-"}${spotInfo.priceMode ? ` (${spotInfo.priceMode})` : ""}${spotInfo.hasChainlink ? ` | chainlink ${fmtBtcPrice(spotInfo.polymarketCurrent)}` : ""}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasLocalAnchor && spotInfo.hasAnchor ? ` | desvio ${fmtUsd(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftUsd : spotInfo.anchorDriftRefUsd, 2)} / ${fmt(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftBps : spotInfo.anchorDriftRefBps, 1)}bps` : ""}` : `degradado | ${spotInfo.referenceNote} | ${spotInfo.source !== "-" ? `${spotInfo.source} ${spotInfo.ageMs}ms` : feedInfo.summaryLabel}${visibleComparablePrice > 0 ? ` | usado ${fmtBtcPrice(visibleComparablePrice)}` : ""}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}`} | dinero metido ${fmtUsdPlain(deployed, 2)}${incubationMeta(summary) ? ` | ${incubationMeta(summary)}` : ""}${variantBacktestMeta(summary) ? ` | ${variantBacktestMeta(summary)}` : ""}${datasetMeta(summary) ? ` | ${datasetMeta(summary)}` : ""}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
@@ -1800,6 +1886,40 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
     button.disabled = false;
     button.textContent = originalLabel || "Limpiar y reiniciar";
   }
+});
+
+async function sendLiveControlAction(action, buttonId, successPrefix) {
+  const button = document.getElementById(buttonId);
+  if (runtimeMode !== "local") {
+    document.getElementById("lastUpdated").textContent =
+      "Live control no disponible sin conexion con el backend local.";
+    return;
+  }
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Aplicando...";
+  try {
+    await postJson(withCacheBust(buildApiUrl("/api/live-control")), { action });
+    document.getElementById("lastUpdated").textContent = `${successPrefix}.`;
+    await refreshAll();
+  } catch (error) {
+    document.getElementById("lastUpdated").textContent = `Error live control: ${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+document.getElementById("armLiveBtn").addEventListener("click", async () => {
+  await sendLiveControlAction("arm", "armLiveBtn", "Live armado");
+});
+
+document.getElementById("pauseLiveBtn").addEventListener("click", async () => {
+  await sendLiveControlAction("pause", "pauseLiveBtn", "Live pausado");
+});
+
+document.getElementById("summaryNowBtn").addEventListener("click", async () => {
+  await sendLiveControlAction("summary_now", "summaryNowBtn", "Resumen Telegram solicitado");
 });
 
 async function bootstrap() {

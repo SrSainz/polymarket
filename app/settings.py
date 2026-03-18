@@ -131,10 +131,14 @@ class BotConfig(BaseModel):
     confirmation_end_hour: int = 20
     confirmation_timeout_minutes: int = 30
     confirmation_timezone: str = "Europe/Madrid"
+    live_control_default_state: Literal["paused", "armed"] = "paused"
     telegram_execution_notifications_enabled: bool = True
     telegram_daily_summary_enabled: bool = True
     telegram_daily_summary_hour: int = 20
     telegram_daily_summary_timezone: str = "Europe/Madrid"
+    telegram_status_summary_enabled: bool = False
+    telegram_status_summary_interval_minutes: int = 30
+    telegram_status_summary_recent_limit: int = 5
 
     max_position_per_market: float = 75.0
     max_total_exposure: float = 250.0
@@ -282,6 +286,10 @@ class BotConfig(BaseModel):
             raise ValueError("confirmation_timeout_minutes must be >= 1")
         if not (0 <= self.telegram_daily_summary_hour <= 23):
             raise ValueError("telegram_daily_summary_hour must be between 0 and 23")
+        if self.telegram_status_summary_interval_minutes < 5:
+            raise ValueError("telegram_status_summary_interval_minutes must be >= 5")
+        if self.telegram_status_summary_recent_limit < 1:
+            raise ValueError("telegram_status_summary_recent_limit must be >= 1")
         if self.max_daily_loss_pct <= 0 or self.max_daily_loss_pct > 1:
             raise ValueError("max_daily_loss_pct must be in (0, 1]")
         if self.profit_keep_ratio < 0 or self.profit_keep_ratio > 1:

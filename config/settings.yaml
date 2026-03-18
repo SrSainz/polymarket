@@ -46,8 +46,12 @@ btc5m_relaxed_risk: true
 
 autonomous_decisions_enabled: false
 manual_confirmation_enabled: false
-telegram_execution_notifications_enabled: true
+live_control_default_state: "paused"
+telegram_execution_notifications_enabled: false
 telegram_daily_summary_enabled: false
+telegram_status_summary_enabled: true
+telegram_status_summary_interval_minutes: 30
+telegram_status_summary_recent_limit: 5
 
 allowed_tags:
   - "crypto"

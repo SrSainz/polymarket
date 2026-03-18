@@ -6,7 +6,7 @@ from pathlib import Path
 from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
-from app.services.dashboard_server import _summary_payload
+from app.services.dashboard_server import _apply_live_control_action, _summary_payload
 
 
 def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
@@ -105,6 +105,7 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_spot_delta_bps", "3.60")
     db.set_bot_state("strategy_spot_fair_up", "0.559")
     db.set_bot_state("strategy_spot_fair_down", "0.441")
+    db.set_bot_state("strategy_spot_price_mode", "lead-basis")
     db.set_bot_state("strategy_primary_ratio", "0.80")
     db.set_bot_state("strategy_primary_outcome", "Up")
     db.set_bot_state("strategy_hedge_outcome", "Down")
@@ -176,6 +177,7 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     assert summary["strategy_reference_quality"] == "official"
     assert summary["strategy_reference_comparable"] is True
     assert summary["strategy_reference_note"] == "referencia oficial Polymarket + Chainlink RTDS"
+    assert summary["strategy_spot_price_mode"] == "lead-basis"
     assert summary["strategy_operability_state"] == "ready"
     assert summary["strategy_operability_label"] == "Listo para ejecutar"
     assert summary["strategy_operability_reason"] == "Hay un plan valido preparado para este ciclo."
@@ -258,6 +260,56 @@ def test_summary_payload_exposes_setup_performance(tmp_path: Path) -> None:
     assert summary["strategy_setup_performance"][0]["price_mode"] == "extreme"
     assert summary["strategy_setup_performance"][0]["timing_regime"] == "second-wave"
     assert summary["strategy_setup_performance"][0]["pnl_total"] == 32.5
+
+
+def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("live_control_state", "paused")
+    db.set_bot_state("live_control_reason", "seguimos en rojo")
+    db.set_bot_state("live_control_updated_at", "1710755400")
+    db.set_bot_state("telegram_status_summary_enabled", "1")
+    db.set_bot_state("telegram_status_summary_interval_minutes", "30")
+    db.set_bot_state("telegram_status_summary_recent_limit", "5")
+    db.set_bot_state("telegram_status_summary_last_sent_ts", "1710753600")
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="live",
+        live_trading_enabled=True,
+    )
+
+    assert summary["live_mode_active"] is False
+    assert summary["live_control_state"] == "paused"
+    assert summary["live_control_label"] == "Live pausado"
+    assert summary["live_control_reason"] == "seguimos en rojo"
+    assert summary["live_control_can_execute"] is False
+    assert summary["live_control_is_live_session"] is True
+    assert summary["telegram_status_summary_enabled"] is True
+    assert summary["telegram_status_summary_interval_minutes"] == 30
+    assert summary["telegram_status_summary_last_sent_at"] == 1710753600
+
+
+def test_apply_live_control_action_updates_runtime_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.close()
+
+    arm_result = _apply_live_control_action(db_path, action="arm")
+    pause_result = _apply_live_control_action(db_path, action="pause")
+    summary_result = _apply_live_control_action(db_path, action="summary_now")
+
+    db = Database(db_path)
+    assert arm_result["ok"] is True
+    assert pause_result["ok"] is True
+    assert summary_result["ok"] is True
+    assert db.get_bot_state("live_control_state") == "paused"
+    assert db.get_bot_state("telegram_status_summary_force_send") == "1"
+    db.close()
 
 
 def test_summary_payload_exposes_experiments_hypotheses_and_dataset(tmp_path: Path) -> None:

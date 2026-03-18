@@ -82,6 +82,19 @@ def _record_runtime_metadata(db: Database, settings: AppSettings) -> None:
     db.set_bot_state("strategy_variant", settings.config.strategy_variant)
     db.set_bot_state("strategy_notes", settings.config.strategy_notes)
     db.set_bot_state("strategy_incubation_stage", settings.config.incubation_stage)
+    db.set_bot_state("live_control_default_state", settings.config.live_control_default_state)
+    db.set_bot_state(
+        "telegram_status_summary_enabled",
+        "1" if settings.config.telegram_status_summary_enabled else "0",
+    )
+    db.set_bot_state(
+        "telegram_status_summary_interval_minutes",
+        str(settings.config.telegram_status_summary_interval_minutes),
+    )
+    db.set_bot_state(
+        "telegram_status_summary_recent_limit",
+        str(settings.config.telegram_status_summary_recent_limit),
+    )
     db.set_bot_state("strategy_incubation_auto_promote", "1" if settings.config.incubation_auto_promote else "0")
     db.set_bot_state("strategy_incubation_min_days", str(settings.config.incubation_min_days))
     db.set_bot_state("strategy_incubation_min_resolutions", str(settings.config.incubation_min_resolutions))
@@ -110,6 +123,14 @@ def _record_runtime_metadata(db: Database, settings: AppSettings) -> None:
             entry_mode=settings.config.strategy_entry_mode,
         ).items():
             db.set_bot_state(key, value)
+    if db.get_bot_state("live_control_state") is None:
+        db.set_bot_state("live_control_state", settings.config.live_control_default_state)
+        if settings.config.live_control_default_state == "armed":
+            reason = "armado por defecto desde configuracion"
+        else:
+            reason = "pendiente de armar desde live control center"
+        db.set_bot_state("live_control_reason", reason)
+        db.set_bot_state("live_control_updated_at", str(int(time.time())))
 
 
 def run_strategy_once(strategy_service: BTC5mStrategyService, mode: str) -> None:

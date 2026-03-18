@@ -245,6 +245,24 @@ input {
   gap: 10px;
 }
 
+.control-status {
+  gap: 10px;
+}
+
+.control-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.control-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-family: "IBM Plex Mono", monospace;
+  line-height: 1.5;
+}
+
 button {
   min-height: 48px;
   border: 0;
