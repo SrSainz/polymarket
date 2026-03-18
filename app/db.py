@@ -178,8 +178,9 @@ CREATE TABLE IF NOT EXISTS strategy_windows (
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
-        self.conn = sqlite3.connect(str(db_path))
+        self.conn = sqlite3.connect(str(db_path), timeout=30.0)
         self.conn.row_factory = sqlite3.Row
+        self._configure_connection()
 
     def init_schema(self) -> None:
         with self.conn:
@@ -188,6 +189,11 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+    def _configure_connection(self) -> None:
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self.conn.execute("PRAGMA busy_timeout=30000")
 
     def _migrate_schema(self) -> None:
         strategy_window_columns = {
