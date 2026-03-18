@@ -1,0 +1,96 @@
+defaults:
+  incubation:
+    auto_promote: false
+    min_days: 14
+    min_resolutions: 20
+    max_drawdown: 40.0
+    min_backtest_pnl: 0.0
+    min_backtest_fill_rate: 0.20
+    min_backtest_hit_rate: 0.35
+    min_backtest_edge_bps: 0.0
+
+variants:
+  arb-micro-v1:
+    enabled: true
+    entry_mode: arb_micro
+    runtime_handler: arb_micro
+    notes: "Baseline arb micro bot under incubation."
+    thesis: "Explota underround y cheap-side con referencia spot comparable."
+    tags: ["btc5m", "arb", "spot-aware"]
+    overrides:
+      strategy_trade_allocation_pct: 0.03
+      strategy_min_seconds_into_window: 20
+      strategy_max_seconds_into_window: 260
+    research_overrides:
+      sub_strategy: underround_arb
+      latency_budget_ms: 250
+      execution:
+        mode: hybrid
+      sizing:
+        max_usdc_per_trade: 45.0
+    incubation:
+      stage: paper
+
+  arb-micro-balanced-v1:
+    enabled: true
+    entry_mode: arb_micro
+    runtime_handler: arb_micro
+    notes: "Arb micro conservadora para comparar drawdown y fill quality."
+    thesis: "Reduce agresividad para priorizar edge neto y control de drawdown."
+    tags: ["btc5m", "arb", "balanced"]
+    overrides:
+      strategy_trade_allocation_pct: 0.02
+      strategy_min_seconds_into_window: 25
+      strategy_max_seconds_into_window: 245
+    research_overrides:
+      sub_strategy: underround_arb
+      latency_budget_ms: 220
+      execution:
+        mode: hybrid
+      sizing:
+        max_usdc_per_trade: 30.0
+    incubation:
+      stage: idea
+
+  arb-micro-aggressive-v1:
+    enabled: true
+    entry_mode: arb_micro
+    runtime_handler: arb_micro
+    notes: "Arb micro agresiva para medir si mas size empeora el edge real."
+    thesis: "Escala el ticket y abre antes para capturar underround mas tiempo."
+    tags: ["btc5m", "arb", "aggressive"]
+    overrides:
+      strategy_trade_allocation_pct: 0.05
+      strategy_min_seconds_into_window: 12
+      strategy_max_seconds_into_window: 275
+    research_overrides:
+      sub_strategy: underround_arb
+      latency_budget_ms: 300
+      execution:
+        mode: taker_only
+      sizing:
+        max_usdc_per_trade: 70.0
+    incubation:
+      stage: idea
+      max_drawdown: 30.0
+
+  vidarx-tilted-v1:
+    enabled: true
+    entry_mode: vidarx_micro
+    runtime_handler: vidarx_micro
+    notes: "Bracket sesgado estilo Vidarx, centrado en tilted setups."
+    thesis: "Aprovecha sesgos tempranos y mid-late con reparto dual controlado."
+    tags: ["btc5m", "vidarx", "bracket"]
+    overrides:
+      strategy_trade_allocation_pct: 0.03
+      strategy_min_seconds_into_window: 20
+      strategy_max_seconds_into_window: 240
+    research_overrides:
+      sub_strategy: market_making
+      latency_budget_ms: 200
+      execution:
+        mode: maker_only
+      sizing:
+        max_usdc_per_trade: 25.0
+    incubation:
+      stage: backtest_pass

@@ -5,29 +5,39 @@ import sys
 import time
 from pathlib import Path
 
+from app.core.strategy_registry import active_variant_metadata
 from app.core.autonomous_decider import AutonomousDecider
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.logger import setup_logger
+from app.polymarket.activity_client import ActivityClient
 from app.polymarket.clob_client import CLOBClient
 from app.polymarket.gamma_client import GammaClient
 from app.polymarket.market_feed import MarketFeed
 from app.polymarket.spot_feed import SpotFeed
 from app.services.btc5m_strategy import BTC5mStrategyService
 from app.services.dashboard_server import run_dashboard_server
+from app.services.experiment_runner import ExperimentRunner
+from app.services.historical_dataset_builder import HistoricalDatasetBuilder
 from app.services.report import ReportService
 from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
+from app.services.wallet_pattern_miner import WalletPatternMiner
 from app.settings import AppSettings, load_settings
 
 
-def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyService, ReportService]:
+def build_core_context(root_dir: Path) -> tuple[AppSettings, Database]:
     settings = load_settings(root_dir)
-    logger = setup_logger(settings.paths.logs_dir, settings.env.log_level)
-
     db = Database(settings.paths.db_path)
     db.init_schema()
+    _record_runtime_metadata(db, settings)
+    return settings, db
+
+
+def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyService, ReportService]:
+    settings, db = build_core_context(root_dir)
+    logger = setup_logger(settings.paths.logs_dir, settings.env.log_level)
 
     gamma_client = GammaClient(settings.env.gamma_api_host)
     market_feed = MarketFeed(
@@ -68,6 +78,40 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyS
     return settings, db, strategy_service, report_service
 
 
+def _record_runtime_metadata(db: Database, settings: AppSettings) -> None:
+    db.set_bot_state("strategy_variant", settings.config.strategy_variant)
+    db.set_bot_state("strategy_notes", settings.config.strategy_notes)
+    db.set_bot_state("strategy_incubation_stage", settings.config.incubation_stage)
+    db.set_bot_state("strategy_incubation_auto_promote", "1" if settings.config.incubation_auto_promote else "0")
+    db.set_bot_state("strategy_incubation_min_days", str(settings.config.incubation_min_days))
+    db.set_bot_state("strategy_incubation_min_resolutions", str(settings.config.incubation_min_resolutions))
+    db.set_bot_state("strategy_incubation_max_drawdown", f"{settings.config.incubation_max_drawdown:.4f}")
+    db.set_bot_state(
+        "strategy_incubation_min_backtest_pnl",
+        f"{settings.config.incubation_min_backtest_pnl:.4f}",
+    )
+    db.set_bot_state(
+        "strategy_incubation_min_backtest_fill_rate",
+        f"{settings.config.incubation_min_backtest_fill_rate:.6f}",
+    )
+    db.set_bot_state(
+        "strategy_incubation_min_backtest_hit_rate",
+        f"{settings.config.incubation_min_backtest_hit_rate:.6f}",
+    )
+    db.set_bot_state(
+        "strategy_incubation_min_backtest_edge_bps",
+        f"{settings.config.incubation_min_backtest_edge_bps:.4f}",
+    )
+    registry = settings.strategy_registry
+    if registry is not None:
+        for key, value in active_variant_metadata(
+            registry,
+            variant_name=settings.config.strategy_variant,
+            entry_mode=settings.config.strategy_entry_mode,
+        ).items():
+            db.set_bot_state(key, value)
+
+
 def run_strategy_once(strategy_service: BTC5mStrategyService, mode: str) -> None:
     exec_stats = strategy_service.run(mode=mode)
     print(
@@ -82,7 +126,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BTC 5m microstructure lab for Polymarket")
     parser.add_argument(
         "command",
-        choices=["paper", "live", "once", "dashboard", "report"],
+        choices=["paper", "live", "once", "dashboard", "report", "dataset", "experiments", "hypotheses"],
         help="Command to run",
     )
     return parser.parse_args()
@@ -122,7 +166,12 @@ def _loop_strategy(strategy_service: BTC5mStrategyService, *, mode: str, sleep_s
 def main() -> int:
     args = parse_args()
     root_dir = Path(__file__).resolve().parent
-    settings, db, strategy_service, report_service = build_context(root_dir)
+    strategy_service = None
+    if args.command in {"paper", "live", "once"}:
+        settings, db, strategy_service, report_service = build_context(root_dir)
+    else:
+        settings, db = build_core_context(root_dir)
+        report_service = ReportService(db, settings.paths.reports_dir)
 
     try:
         if args.command == "report":
@@ -139,6 +188,44 @@ def main() -> int:
                 live_trading_enabled=settings.env.live_trading,
                 host=settings.env.dashboard_host,
                 port=settings.env.dashboard_port,
+            )
+            return 0
+
+        if args.command == "dataset":
+            summary = HistoricalDatasetBuilder(settings.paths.research_dir).build_from_capture_logs()
+            print(
+                "dataset => "
+                f"windows={summary['windows']} events={summary['events']} trades={summary['trades']}"
+            )
+            return 0
+
+        if args.command == "experiments":
+            dataset_builder = HistoricalDatasetBuilder(settings.paths.research_dir)
+            dataset_summary = dataset_builder.build_from_capture_logs()
+            runner = ExperimentRunner(
+                settings.paths.research_dir,
+                settings.strategy_registry if settings.strategy_registry is not None else load_settings(root_dir).strategy_registry,  # pragma: no cover
+            )
+            results = runner.run(fallback_inputs=[settings.paths.root / "sample.json"])
+            print(
+                "experiments => "
+                f"variants={len(results.get('variants', []))} datasets={len(results.get('datasets', []))} "
+                f"windows={dataset_summary['windows']}"
+            )
+            return 0
+
+        if args.command == "hypotheses":
+            miner = WalletPatternMiner(
+                db,
+                ActivityClient(settings.env.data_api_host),
+                GammaClient(settings.env.gamma_api_host),
+                settings.paths.research_dir,
+                watched_wallets=settings.config.watched_wallets,
+            )
+            payload = miner.run(wallet_limit=max(settings.config.top_wallets_to_copy, 1))
+            print(
+                "hypotheses => "
+                f"wallets={len(payload.get('wallets', []))} hypotheses={len(payload.get('hypotheses', []))}"
             )
             return 0
 
@@ -172,11 +259,12 @@ def main() -> int:
         return 0
     finally:
         try:
-            strategy_service.clob_client.close()
+            if strategy_service is not None:
+                strategy_service.clob_client.close()
         except Exception:  # noqa: BLE001
             pass
         try:
-            if getattr(strategy_service, "spot_feed", None) is not None:
+            if strategy_service is not None and getattr(strategy_service, "spot_feed", None) is not None:
                 strategy_service.spot_feed.close()
         except Exception:  # noqa: BLE001
             pass

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from app.core.paper_broker import PaperBroker
@@ -259,6 +260,79 @@ def test_summary_payload_exposes_setup_performance(tmp_path: Path) -> None:
     assert summary["strategy_setup_performance"][0]["pnl_total"] == 32.5
 
 
+def test_summary_payload_exposes_experiments_hypotheses_and_dataset(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_variant", "arb-micro-v1")
+    db.set_bot_state("strategy_notes", "variant under test")
+    db.set_bot_state("strategy_incubation_stage", "idea")
+    db.set_bot_state("strategy_incubation_auto_promote", "1")
+    db.set_bot_state("strategy_incubation_min_days", "0")
+    db.set_bot_state("strategy_incubation_min_resolutions", "1")
+    db.set_bot_state("strategy_incubation_max_drawdown", "25")
+    db.set_bot_state("strategy_incubation_min_backtest_pnl", "0")
+    db.set_bot_state("strategy_incubation_min_backtest_fill_rate", "0.2")
+    db.set_bot_state("strategy_incubation_min_backtest_hit_rate", "0.2")
+    db.set_bot_state("strategy_incubation_min_backtest_edge_bps", "0")
+    research_root = tmp_path / "research"
+    (research_root / "experiments").mkdir(parents=True, exist_ok=True)
+    (research_root / "hypotheses").mkdir(parents=True, exist_ok=True)
+    (research_root / "datasets" / "btc5m").mkdir(parents=True, exist_ok=True)
+    (research_root / "experiments" / "variant_leaderboard.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-18T10:00:00Z",
+                "variants": [
+                    {
+                        "variant": "arb-micro-v1",
+                        "status": "pass",
+                        "gate_passed": True,
+                        "windows": 5,
+                        "net_realized_pnl_usdc": 12.5,
+                        "max_drawdown_usdc": 3.0,
+                        "fill_rate": 0.8,
+                        "hit_rate": 0.6,
+                        "real_edge_bps": 14.2,
+                        "expectancy_window_usdc": 2.5,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (research_root / "hypotheses" / "top_wallet_patterns.json").write_text(
+        json.dumps(
+            {
+                "patterns": [{"label": "Categoria dominante", "value": "crypto 90%"}],
+                "hypotheses": [{"title": "Priorizar variantes crypto-first", "detail": "Hay sesgo crypto claro."}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (research_root / "datasets" / "btc5m" / "dataset_summary.json").write_text(
+        json.dumps({"generated_at": "2026-03-18T09:00:00Z", "windows": 3, "events": 120, "trades": 8}),
+        encoding="utf-8",
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    assert summary["strategy_variant_backtest_status"] == "pass"
+    assert summary["strategy_variant_backtest_gate_passed"] is True
+    assert summary["strategy_variant_backtest_real_edge_bps"] == 14.2
+    assert summary["strategy_incubation_transition_ready"] is True
+    assert summary["strategy_incubation_next_stage"] == "backtest_pass"
+    assert summary["strategy_incubation_auto_apply_ready"] is True
+    assert summary["strategy_wallet_hypotheses"][0]["title"] == "Priorizar variantes crypto-first"
+    assert summary["strategy_dataset_windows"] == 3
+
+
 def test_summary_payload_recent_windows_use_deployed_notional(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.db"
     db = Database(db_path)
@@ -303,3 +377,85 @@ def test_summary_payload_recent_windows_use_deployed_notional(tmp_path: Path) ->
     assert summary["strategy_recent_resolutions"][0]["notional"] == 28.75
     assert summary["strategy_recent_resolutions"][0]["deployed_notional"] == 28.75
     assert summary["strategy_recent_resolutions"][0]["planned_budget"] == 3.5
+
+
+def test_summary_payload_filters_strategy_variant_and_exposes_incubation(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+
+    db.set_bot_state("strategy_variant", "arb-micro-v1")
+    db.set_bot_state("strategy_notes", "baseline")
+    db.set_bot_state("strategy_incubation_stage", "paper")
+    db.set_bot_state("strategy_incubation_min_days", "14")
+    db.set_bot_state("strategy_incubation_min_resolutions", "1")
+    db.set_bot_state("strategy_incubation_max_drawdown", "20")
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-v1",
+        condition_id="cond-v1",
+        title="Bitcoin Up or Down - V1",
+        price_mode="underround",
+        timing_regime="mid-late",
+        primary_outcome="Up",
+        hedge_outcome="Down",
+        primary_ratio=0.62,
+        planned_budget=12.0,
+        current_exposure=12.0,
+        notes="variant v1",
+    )
+    db.record_strategy_window_fills(
+        slug="btc-updown-5m-v1",
+        fill_count=3,
+        added_notional=11.25,
+        replenishment_count=1,
+        notes="fills v1",
+    )
+    db.close_strategy_window(
+        slug="btc-updown-5m-v1",
+        realized_pnl=4.5,
+        winning_outcome="Up",
+        current_exposure=0.0,
+        notes="resolved v1",
+    )
+
+    db.set_bot_state("strategy_variant", "arb-micro-v2")
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-v2",
+        condition_id="cond-v2",
+        title="Bitcoin Up or Down - V2",
+        price_mode="balanced",
+        timing_regime="early-mid",
+        primary_outcome="Down",
+        hedge_outcome="Up",
+        primary_ratio=0.55,
+        planned_budget=9.0,
+        current_exposure=9.0,
+        notes="variant v2",
+    )
+    db.close_strategy_window(
+        slug="btc-updown-5m-v2",
+        realized_pnl=-3.0,
+        winning_outcome="Up",
+        current_exposure=0.0,
+        notes="resolved v2",
+    )
+
+    db.set_bot_state("strategy_variant", "arb-micro-v1")
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    assert summary["strategy_variant"] == "arb-micro-v1"
+    assert summary["strategy_notes"] == "baseline"
+    assert summary["strategy_incubation_stage"] == "paper"
+    assert summary["strategy_incubation_resolutions"] == 1
+    assert summary["strategy_incubation_pnl_total"] == 4.5
+    assert summary["strategy_incubation_ready_to_scale"] is False
+    assert summary["strategy_recent_resolutions"][0]["slug"] == "btc-updown-5m-v1"
+    assert len(summary["strategy_setup_performance"]) == 1
+    assert summary["strategy_setup_performance"][0]["price_mode"] == "underround"

@@ -293,6 +293,12 @@ class BacktestEngine:
         avg_latency_e2e_ms = float(np.mean(latency_e2e)) if latency_e2e else 0.0
         avg_spread = float(np.mean(self._spread_samples)) if self._spread_samples else 0.0
         avg_depth = float(np.mean(self._depth_samples)) if self._depth_samples else 0.0
+        deployed_notional_usdc = float(window_df["deployed_notional"].sum())
+        real_edge_bps = (
+            float(self.state.realized_pnl_usdc) / deployed_notional_usdc * 10_000
+            if deployed_notional_usdc > 0
+            else 0.0
+        )
 
         return {
             "expectancy_trade_usdc": float(trade_expectancy),
@@ -309,6 +315,8 @@ class BacktestEngine:
             "avg_latency_e2e_ms": avg_latency_e2e_ms,
             "avg_spread": avg_spread,
             "avg_depth_top3": avg_depth,
+            "deployed_notional_usdc": deployed_notional_usdc,
+            "real_edge_bps": real_edge_bps,
             "net_realized_pnl_usdc": float(self.state.realized_pnl_usdc),
             "ending_equity_usdc": float(equity_series[-1]),
             "windows": float(len(window_df)),

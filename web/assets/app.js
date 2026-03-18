@@ -126,11 +126,60 @@ function strategyLabel(summary) {
   if (isPublicRuntime()) return "Perfil publico";
   const mode = String(summary.strategy_mode || "").trim();
   const entry = String(summary.strategy_entry_mode || "").trim();
+  const variant = strategyVariant(summary);
   if (!mode) return "-";
-  if (entry === "arb_micro") return "Arbitraje BTC5m";
-  if (entry === "vidarx_micro") return "Simulador Vidarx";
-  if (mode !== "btc5m_orderbook") return mode;
-  return `BTC5m / ${entry || "-"}`;
+  let label = mode;
+  if (entry === "arb_micro") label = "Arbitraje BTC5m";
+  else if (entry === "vidarx_micro") label = "Simulador Vidarx";
+  else if (mode === "btc5m_orderbook") label = `BTC5m / ${entry || "-"}`;
+  return variant ? `${label} · ${variant}` : label;
+}
+
+function strategyVariant(summary = lastSummary) {
+  const value = String(summary?.strategy_variant || "").trim();
+  if (!value || value === "default") return "";
+  return value;
+}
+
+function incubationMeta(summary = lastSummary) {
+  if (!summary || isPublicRuntime()) return "";
+  const stage = String(summary?.strategy_incubation_stage || "").trim();
+  const stageLabel = String(summary?.strategy_incubation_stage_label || "").trim();
+  const recoLabel = String(summary?.strategy_incubation_recommendation_label || "").trim();
+  const variant = strategyVariant(summary) || "default";
+  if (!stageLabel || stage === "disabled") {
+    return variant === "default" ? "" : `variante ${variant}`;
+  }
+  const progress = Number(summary?.strategy_incubation_progress_pct || 0);
+  const resolutions = Number(summary?.strategy_incubation_resolutions || 0);
+  return `variante ${variant} | ${stageLabel.toLowerCase()} | ${recoLabel.toLowerCase()} | ${resolutions} cierres | ${fmtPct(progress, 0)}`;
+}
+
+function incubationTransitionMeta(summary = lastSummary) {
+  if (!summary || isPublicRuntime()) return "";
+  const label = String(summary?.strategy_incubation_transition_label || "").trim();
+  const nextStage = String(summary?.strategy_incubation_next_stage || "").trim();
+  if (!label || !nextStage) return "";
+  return `${label.toLowerCase()} -> ${nextStage}`;
+}
+
+function variantBacktestMeta(summary = lastSummary) {
+  if (!summary || isPublicRuntime()) return "";
+  const status = String(summary?.strategy_variant_backtest_status || "").trim();
+  const pnl = Number(summary?.strategy_variant_backtest_pnl || 0);
+  const edge = Number(summary?.strategy_variant_backtest_real_edge_bps || 0);
+  const fill = Number(summary?.strategy_variant_backtest_fill_rate || 0);
+  const windows = Number(summary?.strategy_variant_backtest_windows || 0);
+  if (!status && !windows) return "";
+  return `backtest ${status || "n/a"} | ${windows} ventanas | pnl ${fmtUsd(pnl, 2)} | edge ${fmt(edge, 1)}bps | fill ${fmtPct(fill * 100, 0)}`;
+}
+
+function datasetMeta(summary = lastSummary) {
+  if (!summary || isPublicRuntime()) return "";
+  const windows = Number(summary?.strategy_dataset_windows || 0);
+  const events = Number(summary?.strategy_dataset_events || 0);
+  if (!windows && !events) return "";
+  return `dataset nativo ${windows} ventanas | ${events} eventos`;
 }
 
 function isVidarxLab(summary = lastSummary) {
@@ -901,10 +950,13 @@ function paintSummary(summary, items = lastPositions) {
   const timing = timingLabel(summary);
   const strategyNoteText = strategyNote || "sin trigger";
   const latestObserved = latestObservedExecution();
+  const transitionText = incubationTransitionMeta(summary);
+  const backtestText = variantBacktestMeta(summary);
+  const datasetText = datasetMeta(summary);
   document.getElementById("strategyCardMeta").textContent = isPublicRuntime()
     ? "Esta web esta leyendo solo posiciones y actividad publicas. Para el estado real del bot, conecta el backend del NAS."
     : isVidarxLab(summary)
-    ? `${windowState.detail} Estado operativo: ${operability.label.toLowerCase()}. Snapshot motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}.`
+    ? `${windowState.detail} Estado operativo: ${operability.label.toLowerCase()}. Snapshot motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}.${incubationMeta(summary) ? ` ${incubationMeta(summary)}.` : ""}${transitionText ? ` ${transitionText}.` : ""}${backtestText ? ` ${backtestText}.` : ""}`
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
     : strategyNote || strategyTitle;
@@ -967,9 +1019,11 @@ function paintSummary(summary, items = lastPositions) {
       ? `${windowState.label}. ${windowState.detail} Operabilidad ${operability.label.toLowerCase()}. Objetivo ${desiredRatio}, reparto real ${actualRatio}, restan ${timingInfo.remaining}s y el snapshot del motor tiene ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones. Total del simulador ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)}.`
       : `${windowState.label}. ${windowState.detail} Operabilidad ${operability.label.toLowerCase()}. Objetivo ${desiredRatio}, restan ${timingInfo.remaining}s y el motor reporta ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} de antigüedad. Total del simulador ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}.`
     : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
+  const incubationText = incubationMeta(summary);
+  const researchText = [transitionText, backtestText, datasetText].filter(Boolean).join(". ");
   document.getElementById("systemNotice").textContent = backendWarning
-    ? `${backendWarning} ${strategySummary}`
-    : strategySummary;
+    ? `${backendWarning} ${strategySummary}${incubationText ? ` ${incubationText}.` : ""}${researchText ? ` ${researchText}.` : ""}`
+    : `${strategySummary}${incubationText ? ` ${incubationText}.` : ""}${researchText ? ` ${researchText}.` : ""}`;
 
   paintLabOverview(summary);
 }
@@ -1102,7 +1156,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | operabilidad ${operability.label.toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.referenceComparable ? `${spotInfo.source} ${spotInfo.ageMs}ms | ref ${spotInfo.referenceQuality} | polymarket ${visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-"}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasLocalAnchor && spotInfo.hasAnchor ? ` | desvio ${fmtUsd(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftUsd : spotInfo.anchorDriftRefUsd, 2)} / ${fmt(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftBps : spotInfo.anchorDriftRefBps, 1)}bps` : ""}` : `degradado | ${spotInfo.referenceNote} | ${spotInfo.source !== "-" ? `${spotInfo.source} ${spotInfo.ageMs}ms` : feedInfo.summaryLabel}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}`} | dinero metido ${fmtUsdPlain(deployed, 2)}`
+    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | operabilidad ${operability.label.toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.referenceComparable ? `${spotInfo.source} ${spotInfo.ageMs}ms | ref ${spotInfo.referenceQuality} | polymarket ${visibleMarketPrice > 0 ? fmtBtcPrice(visibleMarketPrice) : "-"}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasLocalAnchor && spotInfo.hasAnchor ? ` | desvio ${fmtUsd(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftUsd : spotInfo.anchorDriftRefUsd, 2)} / ${fmt(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftBps : spotInfo.anchorDriftRefBps, 1)}bps` : ""}` : `degradado | ${spotInfo.referenceNote} | ${spotInfo.source !== "-" ? `${spotInfo.source} ${spotInfo.ageMs}ms` : feedInfo.summaryLabel}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}`} | dinero metido ${fmtUsdPlain(deployed, 2)}${incubationMeta(summary) ? ` | ${incubationMeta(summary)}` : ""}${variantBacktestMeta(summary) ? ` | ${variantBacktestMeta(summary)}` : ""}${datasetMeta(summary) ? ` | ${datasetMeta(summary)}` : ""}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 
@@ -1234,7 +1288,7 @@ function paintRiskBlocks(payload) {
     `
       )
       .join("");
-    document.getElementById("riskBlocksMeta").textContent = `hoy ${lastSummary?.strategy_resolution_count_today || 0} ventanas | ${fmtUsd(Number(lastSummary?.strategy_resolution_pnl_today || 0), 2)}`;
+    document.getElementById("riskBlocksMeta").textContent = `hoy ${lastSummary?.strategy_resolution_count_today || 0} ventanas | ${fmtUsd(Number(lastSummary?.strategy_resolution_pnl_today || 0), 2)}${lastSummary?.strategy_incubation_recommendation_label ? ` | ${String(lastSummary.strategy_incubation_recommendation_label).toLowerCase()}` : ""}`;
     return;
   }
 
@@ -1342,6 +1396,26 @@ function paintStrategySetups(summary) {
   const body = document.getElementById("strategySetupsList");
   const count = document.getElementById("strategySetupsCount");
   const meta = document.getElementById("strategySetupsMeta");
+  const leaderboard = Array.isArray(summary?.strategy_variant_leaderboard) ? summary.strategy_variant_leaderboard : [];
+  if (leaderboard.length) {
+    count.textContent = String(leaderboard.length);
+    body.innerHTML = leaderboard
+      .map((item) => {
+        const pnl = Number(item.pnl || 0);
+        const pnlClass = pnl > 0 ? "pnl-pos" : pnl < 0 ? "pnl-neg" : "pnl-flat";
+        return `
+          <li class="mini-item">
+            <strong>#${Number(item.rank || 0)} ${escapeHtml(String(item.variant || "-"))}</strong>
+            <span>edge ${fmt(Number(item.real_edge_bps || 0), 1)}bps | fill ${fmtPct(Number(item.fill_rate || 0) * 100, 0)} | hit ${fmtPct(Number(item.hit_rate || 0) * 100, 0)}</span>
+            <span class="${pnlClass}">${escapeHtml(String(item.status || "-"))} | pnl ${fmtUsd(pnl, 2)} | dd ${fmtUsdPlain(Math.abs(Number(item.drawdown || 0)), 2)}</span>
+          </li>
+        `;
+      })
+      .join("");
+    meta.textContent = `${variantBacktestMeta(summary)}${datasetMeta(summary) ? ` | ${datasetMeta(summary)}` : ""}`;
+    return;
+  }
+
   const items = Array.isArray(summary?.strategy_setup_performance) ? summary.strategy_setup_performance : [];
   count.textContent = String(items.length);
 
@@ -1368,6 +1442,40 @@ function paintStrategySetups(summary) {
 
   const best = items[0];
   meta.textContent = `mejor ahora: ${String(best.price_mode || "-")} / ${timingLabel({ strategy_timing_regime: best.timing_regime })} | ${fmtUsd(Number(best.pnl_total || 0), 2)}`;
+}
+
+function paintWalletHypotheses(summary) {
+  const body = document.getElementById("walletHypothesesList");
+  const count = document.getElementById("walletHypothesesCount");
+  const meta = document.getElementById("walletHypothesesMeta");
+  if (isPublicRuntime()) {
+    count.textContent = "0";
+    body.innerHTML = `<li class="mini-item"><strong>Sin backend</strong><span>Las hipotesis salen del miner del NAS y no de la Data API publica.</span></li>`;
+    meta.textContent = "requiere backend del NAS";
+    return;
+  }
+  const items = Array.isArray(summary?.strategy_wallet_hypotheses) ? summary.strategy_wallet_hypotheses : [];
+  const patterns = Array.isArray(summary?.strategy_wallet_patterns) ? summary.strategy_wallet_patterns : [];
+  count.textContent = String(items.length);
+  if (!items.length) {
+    body.innerHTML = `<li class="mini-item"><strong>Sin hipotesis aun</strong><span>Ejecuta el miner de wallets para extraer patrones convertibles en variantes.</span></li>`;
+    meta.textContent = "sin artefacto de hypotheses";
+    return;
+  }
+  body.innerHTML = items
+    .map((item) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(String(item.title || "-"))}</strong>
+        <span>${escapeHtml(String(item.detail || ""))}</span>
+      </li>
+    `)
+    .join("");
+  meta.textContent = patterns.length
+    ? patterns
+        .slice(0, 2)
+        .map((item) => `${String(item.label || "-").toLowerCase()}: ${String(item.value || "-")}`)
+        .join(" | ")
+    : "patrones derivados de wallets top";
 }
 
 function renderPositionRows(items, emptyLabel) {
@@ -1516,6 +1624,7 @@ async function refreshAll() {
       paintExposureDonut(summary || {});
       paintOperationPnl(executions.items || []);
       paintStrategySetups(summary || {});
+      paintWalletHypotheses(summary || {});
       return;
     }
 
@@ -1530,6 +1639,7 @@ async function refreshAll() {
       paintExposureDonut(summary || {});
       paintOperationPnl([]);
       paintStrategySetups(summary || {});
+      paintWalletHypotheses(summary || {});
       return;
     }
 
@@ -1592,6 +1702,7 @@ async function refreshAll() {
     paintExposureDonut(summary);
     paintOperationPnl(executions);
     paintStrategySetups(summary);
+    paintWalletHypotheses(summary);
   } catch (error) {
     document.getElementById("lastUpdated").textContent = `Error de actualizacion: ${error.message}`;
   }

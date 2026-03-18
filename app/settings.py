@@ -9,6 +9,8 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.core.strategy_registry import StrategyRegistry, apply_variant_overrides, load_strategy_registry
+
 
 class BotConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -47,6 +49,17 @@ class BotConfig(BaseModel):
     dry_run: bool = True
     strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "btc5m_orderbook"
     strategy_entry_mode: Literal["buy_above", "buy_opposite", "vidarx_micro", "arb_micro"] = "arb_micro"
+    strategy_variant: str = "default"
+    strategy_notes: str = ""
+    incubation_stage: Literal["disabled", "idea", "backtest_pass", "paper", "live_small", "scaled", "paused"] = "disabled"
+    incubation_auto_promote: bool = False
+    incubation_min_days: int = 14
+    incubation_min_resolutions: int = 20
+    incubation_max_drawdown: float = 50.0
+    incubation_min_backtest_pnl: float = 0.0
+    incubation_min_backtest_fill_rate: float = 0.20
+    incubation_min_backtest_hit_rate: float = 0.35
+    incubation_min_backtest_edge_bps: float = 0.0
     strategy_trigger_price: float = 0.98
     strategy_trade_allocation_pct: float = 0.10
     strategy_fixed_trade_amount: float = 0.0
@@ -159,6 +172,16 @@ class BotConfig(BaseModel):
             return []
         return [item.strip().lower() for item in value if item and item.strip()]
 
+    @field_validator("strategy_variant", mode="before")
+    @classmethod
+    def normalize_strategy_variant(cls, value: str) -> str:
+        return str(value or "").strip() or "default"
+
+    @field_validator("strategy_notes", mode="before")
+    @classmethod
+    def normalize_strategy_notes(cls, value: str) -> str:
+        return str(value or "").strip()
+
     @model_validator(mode="after")
     def validate_copy_sources(self) -> "BotConfig":
         if not self.auto_select_wallets and not self.watched_wallets:
@@ -183,6 +206,16 @@ class BotConfig(BaseModel):
             raise ValueError("min_price cannot be greater than max_price")
         if self.strategy_trigger_price <= 0 or self.strategy_trigger_price > 1:
             raise ValueError("strategy_trigger_price must be in (0, 1]")
+        if self.incubation_min_days < 0:
+            raise ValueError("incubation_min_days must be >= 0")
+        if self.incubation_min_resolutions < 1:
+            raise ValueError("incubation_min_resolutions must be >= 1")
+        if self.incubation_max_drawdown < 0:
+            raise ValueError("incubation_max_drawdown must be >= 0")
+        if self.incubation_min_backtest_fill_rate < 0 or self.incubation_min_backtest_fill_rate > 1:
+            raise ValueError("incubation_min_backtest_fill_rate must be between 0 and 1")
+        if self.incubation_min_backtest_hit_rate < 0 or self.incubation_min_backtest_hit_rate > 1:
+            raise ValueError("incubation_min_backtest_hit_rate must be between 0 and 1")
         if self.strategy_trade_allocation_pct <= 0 or self.strategy_trade_allocation_pct > 1:
             raise ValueError("strategy_trade_allocation_pct must be in (0, 1]")
         if self.strategy_fixed_trade_amount < 0:
@@ -317,10 +350,31 @@ class AppPaths:
     logs_dir: Path
     reports_dir: Path
 
+    @property
+    def research_dir(self) -> Path:
+        return self.root / "data" / "research"
+
+    @property
+    def experiments_dir(self) -> Path:
+        return self.research_dir / "experiments"
+
+    @property
+    def hypotheses_dir(self) -> Path:
+        return self.research_dir / "hypotheses"
+
+    @property
+    def datasets_dir(self) -> Path:
+        return self.research_dir / "datasets"
+
+    @property
+    def strategy_registry_path(self) -> Path:
+        return self.root / "config" / "strategy_registry.yaml"
+
     def ensure(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.reports_dir.mkdir(parents=True, exist_ok=True)
+        self.research_dir.mkdir(parents=True, exist_ok=True)
 
 
 @dataclass(frozen=True)
@@ -328,6 +382,7 @@ class AppSettings:
     config: BotConfig
     env: EnvSettings
     paths: AppPaths
+    strategy_registry: StrategyRegistry | None = None
 
 
 def load_settings(root_dir: Path | None = None) -> AppSettings:
@@ -343,9 +398,6 @@ def load_settings(root_dir: Path | None = None) -> AppSettings:
     with config_path.open("r", encoding="utf-8") as file_handle:
         raw_config = yaml.safe_load(file_handle) or {}
 
-    config = BotConfig.model_validate(raw_config)
-    env = EnvSettings.from_env()
-
     paths = AppPaths(
         root=root,
         db_path=root / "data" / "bot.db",
@@ -353,8 +405,12 @@ def load_settings(root_dir: Path | None = None) -> AppSettings:
         reports_dir=root / "data" / "reports",
     )
     paths.ensure()
+    strategy_registry = load_strategy_registry(paths.strategy_registry_path)
+    normalized_config = apply_variant_overrides(raw_config, strategy_registry)
+    config = BotConfig.model_validate(normalized_config)
+    env = EnvSettings.from_env()
 
-    return AppSettings(config=config, env=env, paths=paths)
+    return AppSettings(config=config, env=env, paths=paths, strategy_registry=strategy_registry)
 
 
 def _to_bool(raw: str) -> bool:

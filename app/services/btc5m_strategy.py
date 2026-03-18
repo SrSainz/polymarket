@@ -11,6 +11,7 @@ from decimal import Decimal, ROUND_DOWN
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
 from app.core.risk import RiskManager
+from app.core.strategy_registry import active_variant_metadata
 from app.core.autonomous_decider import AutonomousDecider
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
@@ -283,10 +284,18 @@ class BTC5mStrategyService:
         self._last_market_lookup_warning_at = 0.0
 
     def run(self, mode: str = "paper") -> dict[str, int]:
-        if self.settings.config.strategy_entry_mode == "arb_micro":
-            return self._run_arb_micro(mode=mode)
-        if self.settings.config.strategy_entry_mode == "vidarx_micro":
-            return self._run_vidarx_micro(mode=mode)
+        handler_name = str(self.settings.config.strategy_entry_mode or "").strip()
+        if self.settings.strategy_registry is not None:
+            handler_name = self.settings.strategy_registry.resolve(
+                self.settings.config.strategy_variant,
+                entry_mode=self.settings.config.strategy_entry_mode,
+            ).runtime_handler
+        handler = {
+            "arb_micro": self._run_arb_micro,
+            "vidarx_micro": self._run_vidarx_micro,
+        }.get(handler_name)
+        if handler is not None:
+            return handler(mode=mode)
 
         stats = {
             "pending": 0,
@@ -3530,6 +3539,45 @@ class BTC5mStrategyService:
         operability_state = self._derive_strategy_operability_state(note=note, extra_state=snapshot_state)
         self.db.set_bot_state("strategy_mode", self.settings.config.strategy_mode)
         self.db.set_bot_state("strategy_entry_mode", self.settings.config.strategy_entry_mode)
+        self.db.set_bot_state("strategy_variant", self.settings.config.strategy_variant)
+        self.db.set_bot_state("strategy_notes", self.settings.config.strategy_notes)
+        self.db.set_bot_state("strategy_incubation_stage", self.settings.config.incubation_stage)
+        self.db.set_bot_state(
+            "strategy_incubation_auto_promote",
+            "1" if self.settings.config.incubation_auto_promote else "0",
+        )
+        self.db.set_bot_state("strategy_incubation_min_days", str(self.settings.config.incubation_min_days))
+        self.db.set_bot_state(
+            "strategy_incubation_min_resolutions",
+            str(self.settings.config.incubation_min_resolutions),
+        )
+        self.db.set_bot_state(
+            "strategy_incubation_max_drawdown",
+            f"{self.settings.config.incubation_max_drawdown:.4f}",
+        )
+        self.db.set_bot_state(
+            "strategy_incubation_min_backtest_pnl",
+            f"{self.settings.config.incubation_min_backtest_pnl:.4f}",
+        )
+        self.db.set_bot_state(
+            "strategy_incubation_min_backtest_fill_rate",
+            f"{self.settings.config.incubation_min_backtest_fill_rate:.6f}",
+        )
+        self.db.set_bot_state(
+            "strategy_incubation_min_backtest_hit_rate",
+            f"{self.settings.config.incubation_min_backtest_hit_rate:.6f}",
+        )
+        self.db.set_bot_state(
+            "strategy_incubation_min_backtest_edge_bps",
+            f"{self.settings.config.incubation_min_backtest_edge_bps:.4f}",
+        )
+        if self.settings.strategy_registry is not None:
+            for key, value in active_variant_metadata(
+                self.settings.strategy_registry,
+                variant_name=self.settings.config.strategy_variant,
+                entry_mode=self.settings.config.strategy_entry_mode,
+            ).items():
+                self.db.set_bot_state(key, value)
         self.db.set_bot_state("strategy_last_note", note)
         self.db.set_bot_state("strategy_last_updated_at", str(int(datetime.now(timezone.utc).timestamp())))
         self._record_market_feed_state()

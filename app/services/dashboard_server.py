@@ -11,6 +11,19 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from app.core.incubation_policy import evaluate_incubation_progress
+from app.core.lab_artifacts import (
+    load_dataset_summary,
+    load_experiment_leaderboard,
+    load_wallet_hypotheses,
+    research_root_from_db,
+)
+from app.core.strategy_monitoring import (
+    build_incubation_summary,
+    build_recent_resolution_windows,
+    build_setup_performance,
+)
+
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
 
@@ -165,6 +178,7 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live_trading_enabled: bool) -> dict:
     today_utc = datetime.now(timezone.utc).date().isoformat()
+    research_root = research_root_from_db(db_path)
     with _connect(db_path) as conn:
         open_positions = _single_float(conn, "SELECT COUNT(*) AS value FROM copy_positions")
         exposure = _single_float(conn, "SELECT COALESCE(SUM(ABS(size * avg_price)), 0) AS value FROM copy_positions")
@@ -232,6 +246,20 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         live_balance_updated_at = _bot_state_int(conn, "live_balance_updated_at")
         strategy_mode = _bot_state_text(conn, "strategy_mode")
         strategy_entry_mode = _bot_state_text(conn, "strategy_entry_mode")
+        strategy_variant = _bot_state_text(conn, "strategy_variant") or "default"
+        strategy_notes = _bot_state_text(conn, "strategy_notes")
+        strategy_incubation_stage = _bot_state_text(conn, "strategy_incubation_stage")
+        strategy_incubation_auto_promote = _bot_state_int(conn, "strategy_incubation_auto_promote")
+        strategy_incubation_min_days = _bot_state_int(conn, "strategy_incubation_min_days")
+        strategy_incubation_min_resolutions = _bot_state_int(conn, "strategy_incubation_min_resolutions")
+        strategy_incubation_max_drawdown_limit = _bot_state_float(conn, "strategy_incubation_max_drawdown")
+        strategy_incubation_min_backtest_pnl = _bot_state_float(conn, "strategy_incubation_min_backtest_pnl")
+        strategy_incubation_min_backtest_fill_rate = _bot_state_float(conn, "strategy_incubation_min_backtest_fill_rate")
+        strategy_incubation_min_backtest_hit_rate = _bot_state_float(conn, "strategy_incubation_min_backtest_hit_rate")
+        strategy_incubation_min_backtest_edge_bps = _bot_state_float(conn, "strategy_incubation_min_backtest_edge_bps")
+        strategy_runtime_handler = _bot_state_text(conn, "strategy_runtime_handler")
+        strategy_variant_thesis = _bot_state_text(conn, "strategy_variant_thesis")
+        strategy_variant_tags = _bot_state_text(conn, "strategy_variant_tags")
         strategy_runtime_mode = _bot_state_text(conn, "strategy_runtime_mode")
         strategy_market_slug = _bot_state_text(conn, "strategy_market_slug")
         strategy_market_title = _bot_state_text(conn, "strategy_market_title")
@@ -285,33 +313,52 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_feed_connected = _bot_state_int(conn, "strategy_feed_connected")
         strategy_feed_age_ms = _bot_state_int(conn, "strategy_feed_age_ms")
         strategy_feed_tracked_assets = _bot_state_int(conn, "strategy_feed_tracked_assets")
-        strategy_resolution_count_today = _single_float(
-            conn,
+        strategy_resolution_rows_today = conn.execute(
             """
-            SELECT COUNT(*) AS value
+            SELECT ts, pnl_delta, strategy_variant
             FROM executions
             WHERE mode = 'paper'
               AND (notes LIKE 'strategy_resolution:%' OR notes LIKE 'vidarx_resolution:%')
               AND strftime('%Y-%m-%d', ts, 'unixepoch') = ?
             """,
             (today_utc,),
+        ).fetchall()
+        strategy_resolution_rows_today = _filter_variant_rows(
+            strategy_resolution_rows_today,
+            variant=strategy_variant,
+            field="strategy_variant",
         )
-        strategy_resolution_pnl_today = _single_float(
-            conn,
-            """
-            SELECT COALESCE(SUM(pnl_delta), 0) AS value
-            FROM executions
-            WHERE mode = 'paper'
-              AND (notes LIKE 'strategy_resolution:%' OR notes LIKE 'vidarx_resolution:%')
-              AND strftime('%Y-%m-%d', ts, 'unixepoch') = ?
-            """,
-            (today_utc,),
+        strategy_resolution_count_today = float(len(strategy_resolution_rows_today))
+        strategy_resolution_pnl_today = float(
+            sum(float(row["pnl_delta"] or 0.0) for row in strategy_resolution_rows_today)
         )
         positions = conn.execute(
             "SELECT asset, condition_id, size, avg_price, slug, title, outcome FROM copy_positions"
         ).fetchall()
-        recent_resolution_windows = _recent_vidarx_resolution_windows(conn, limit=6)
-        setup_performance = _vidarx_setup_performance(conn, limit=8)
+        recent_resolution_windows = build_recent_resolution_windows(conn, variant=strategy_variant, limit=6)
+        setup_performance = build_setup_performance(conn, variant=strategy_variant, limit=8)
+        incubation = build_incubation_summary(
+            conn,
+            variant=strategy_variant,
+            stage=strategy_incubation_stage,
+            min_days=max(int(strategy_incubation_min_days), 0),
+            min_resolutions=max(int(strategy_incubation_min_resolutions), 1),
+            max_drawdown=max(float(strategy_incubation_max_drawdown_limit), 0.0),
+        )
+
+    experiment_payload = load_experiment_leaderboard(research_root)
+    dataset_payload = load_dataset_summary(research_root)
+    wallet_payload = load_wallet_hypotheses(research_root)
+    active_experiment = _active_experiment_row(experiment_payload, variant=strategy_variant)
+    incubation_transition = evaluate_incubation_progress(
+        stage=strategy_incubation_stage,
+        live_metrics=incubation,
+        backtest_metrics=active_experiment,
+        auto_promote=bool(strategy_incubation_auto_promote),
+    )
+    variant_leaderboard = _variant_leaderboard_rows(experiment_payload)
+    wallet_hypotheses = _wallet_hypothesis_rows(wallet_payload)
+    wallet_patterns = _wallet_pattern_rows(wallet_payload)
 
     unrealized_pnl = 0.0
     exposure_mark = 0.0
@@ -434,6 +481,45 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "live_balance_updated_at": int(live_balance_updated_at),
         "strategy_mode": strategy_mode,
         "strategy_entry_mode": strategy_entry_mode,
+        "strategy_variant": strategy_variant,
+        "strategy_notes": strategy_notes,
+        "strategy_runtime_handler": strategy_runtime_handler,
+        "strategy_variant_thesis": strategy_variant_thesis,
+        "strategy_variant_tags": [item for item in strategy_variant_tags.split(",") if item],
+        "strategy_incubation_stage": str(incubation["stage"]),
+        "strategy_incubation_stage_label": str(incubation["stage_label"]),
+        "strategy_incubation_auto_promote": bool(strategy_incubation_auto_promote),
+        "strategy_incubation_min_days": int(incubation["min_days"]),
+        "strategy_incubation_min_resolutions": int(incubation["min_resolutions"]),
+        "strategy_incubation_max_drawdown_limit": round(float(incubation["max_drawdown_limit"]), 4),
+        "strategy_incubation_min_backtest_pnl": round(strategy_incubation_min_backtest_pnl, 4),
+        "strategy_incubation_min_backtest_fill_rate": round(strategy_incubation_min_backtest_fill_rate, 4),
+        "strategy_incubation_min_backtest_hit_rate": round(strategy_incubation_min_backtest_hit_rate, 4),
+        "strategy_incubation_min_backtest_edge_bps": round(strategy_incubation_min_backtest_edge_bps, 4),
+        "strategy_incubation_days_observed": round(float(incubation["days_observed"]), 2),
+        "strategy_incubation_resolutions": int(incubation["resolutions"]),
+        "strategy_incubation_wins": int(incubation["wins"]),
+        "strategy_incubation_losses": int(incubation["losses"]),
+        "strategy_incubation_win_rate_pct": round(float(incubation["win_rate_pct"]), 2),
+        "strategy_incubation_pnl_total": round(float(incubation["pnl_total"]), 4),
+        "strategy_incubation_avg_pnl": round(float(incubation["avg_pnl"]), 4),
+        "strategy_incubation_deployed_total": round(float(incubation["deployed_total"]), 4),
+        "strategy_incubation_avg_deployed": round(float(incubation["avg_deployed"]), 4),
+        "strategy_incubation_max_drawdown": round(float(incubation["max_drawdown"]), 4),
+        "strategy_incubation_best_resolution": round(float(incubation["best_resolution"]), 4),
+        "strategy_incubation_worst_resolution": round(float(incubation["worst_resolution"]), 4),
+        "strategy_incubation_progress_pct": round(float(incubation["progress_pct"]), 2),
+        "strategy_incubation_ready_to_scale": bool(incubation["ready_to_scale"]),
+        "strategy_incubation_drawdown_breached": bool(incubation["drawdown_breached"]),
+        "strategy_incubation_recommendation": str(incubation["recommendation"]),
+        "strategy_incubation_recommendation_label": str(incubation["recommendation_label"]),
+        "strategy_incubation_first_closed_at": int(incubation["first_closed_at"]),
+        "strategy_incubation_last_closed_at": int(incubation["last_closed_at"]),
+        "strategy_incubation_next_stage": str(incubation_transition["next_stage"]),
+        "strategy_incubation_transition_ready": bool(incubation_transition["transition_ready"]),
+        "strategy_incubation_transition_label": str(incubation_transition["label"]),
+        "strategy_incubation_transition_reason": str(incubation_transition["reason"]),
+        "strategy_incubation_auto_apply_ready": bool(incubation_transition["auto_apply_ready"]),
         "strategy_runtime_mode": strategy_runtime_mode,
         "strategy_market_slug": strategy_market_slug,
         "strategy_market_title": strategy_market_title,
@@ -495,6 +581,23 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_current_market_breakdown": current_market_breakdown,
         "strategy_recent_resolutions": recent_resolution_windows,
         "strategy_setup_performance": setup_performance,
+        "strategy_variant_backtest_generated_at": str(experiment_payload.get("generated_at") or ""),
+        "strategy_variant_backtest_status": str(active_experiment.get("status") or ""),
+        "strategy_variant_backtest_gate_passed": bool(active_experiment.get("gate_passed")),
+        "strategy_variant_backtest_windows": round(float(active_experiment.get("windows") or 0.0), 4),
+        "strategy_variant_backtest_pnl": round(float(active_experiment.get("net_realized_pnl_usdc") or 0.0), 4),
+        "strategy_variant_backtest_drawdown": round(float(active_experiment.get("max_drawdown_usdc") or 0.0), 4),
+        "strategy_variant_backtest_fill_rate": round(float(active_experiment.get("fill_rate") or 0.0), 4),
+        "strategy_variant_backtest_hit_rate": round(float(active_experiment.get("hit_rate") or 0.0), 4),
+        "strategy_variant_backtest_real_edge_bps": round(float(active_experiment.get("real_edge_bps") or 0.0), 4),
+        "strategy_variant_backtest_expectancy_window": round(float(active_experiment.get("expectancy_window_usdc") or 0.0), 4),
+        "strategy_variant_leaderboard": variant_leaderboard,
+        "strategy_wallet_patterns": wallet_patterns,
+        "strategy_wallet_hypotheses": wallet_hypotheses,
+        "strategy_dataset_generated_at": str(dataset_payload.get("generated_at") or ""),
+        "strategy_dataset_windows": int(dataset_payload.get("windows") or 0),
+        "strategy_dataset_events": int(dataset_payload.get("events") or 0),
+        "strategy_dataset_trades": int(dataset_payload.get("trades") or 0),
         "strategy_resolution_count_today": int(strategy_resolution_count_today),
         "strategy_resolution_pnl_today": round(strategy_resolution_pnl_today, 4),
         "strategy_is_lab": strategy_entry_mode in {"vidarx_micro", "arb_micro"},
@@ -543,7 +646,7 @@ def _executions_payload(db_path: Path, limit: int) -> dict:
         rows = conn.execute(
             """
             SELECT id, ts, mode, status, action, side, asset, condition_id, size, price, notional,
-                   source_wallet, source_signal_id, notes, pnl_delta
+                   source_wallet, source_signal_id, strategy_variant, notes, pnl_delta
             FROM executions
             ORDER BY ts DESC
             LIMIT ?
@@ -568,6 +671,7 @@ def _executions_payload(db_path: Path, limit: int) -> dict:
                 "notional": float(row["notional"]),
                 "source_wallet": row["source_wallet"] or "",
                 "source_signal_id": int(row["source_signal_id"]) if row["source_signal_id"] is not None else 0,
+                "strategy_variant": row["strategy_variant"] or "",
                 "notes": row["notes"] or "",
                 "pnl_delta": float(row["pnl_delta"]),
             }
@@ -612,6 +716,44 @@ def _signals_payload(db_path: Path, limit: int) -> dict:
             }
         )
     return {"items": items}
+
+
+def _active_experiment_row(payload: dict, *, variant: str) -> dict:
+    rows = payload.get("variants") if isinstance(payload.get("variants"), list) else []
+    safe_variant = str(variant or "").strip().lower()
+    for row in rows:
+        if str(row.get("variant") or "").strip().lower() == safe_variant:
+            return dict(row)
+    return {}
+
+
+def _variant_leaderboard_rows(payload: dict) -> list[dict]:
+    rows = payload.get("variants") if isinstance(payload.get("variants"), list) else []
+    output: list[dict] = []
+    for row in rows[:5]:
+        output.append(
+            {
+                "variant": str(row.get("variant") or ""),
+                "status": str(row.get("status") or ""),
+                "rank": int(row.get("rank") or 0),
+                "pnl": round(float(row.get("net_realized_pnl_usdc") or 0.0), 4),
+                "drawdown": round(float(row.get("max_drawdown_usdc") or 0.0), 4),
+                "fill_rate": round(float(row.get("fill_rate") or 0.0), 4),
+                "hit_rate": round(float(row.get("hit_rate") or 0.0), 4),
+                "real_edge_bps": round(float(row.get("real_edge_bps") or 0.0), 4),
+            }
+        )
+    return output
+
+
+def _wallet_hypothesis_rows(payload: dict) -> list[dict]:
+    rows = payload.get("hypotheses") if isinstance(payload.get("hypotheses"), list) else []
+    return [dict(row) for row in rows[:4] if isinstance(row, dict)]
+
+
+def _wallet_pattern_rows(payload: dict) -> list[dict]:
+    rows = payload.get("patterns") if isinstance(payload.get("patterns"), list) else []
+    return [dict(row) for row in rows[:4] if isinstance(row, dict)]
 
 
 def _selected_wallets_payload(db_path: Path, limit: int) -> dict:
@@ -805,6 +947,16 @@ def _vidarx_setup_performance(conn: sqlite3.Connection, *, limit: int) -> list[d
             }
         )
     return items
+
+
+def _filter_variant_rows(rows: list[sqlite3.Row], *, variant: str, field: str) -> list[sqlite3.Row]:
+    active_variant = str(variant or "").strip()
+    if not active_variant:
+        return list(rows)
+    matched = [row for row in rows if str(row[field] or "").strip() == active_variant]
+    if matched:
+        return matched
+    return [row for row in rows if not str(row[field] or "").strip()]
 
 
 def _bot_state_text(conn: sqlite3.Connection, key: str) -> str:

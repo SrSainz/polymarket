@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS executions (
     notional REAL NOT NULL,
     source_wallet TEXT,
     source_signal_id INTEGER,
+    strategy_variant TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
     pnl_delta REAL NOT NULL DEFAULT 0
 );
@@ -153,6 +154,7 @@ CREATE TABLE IF NOT EXISTS strategy_windows (
     slug TEXT PRIMARY KEY,
     condition_id TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
+    strategy_variant TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'open',
     opened_at INTEGER NOT NULL,
     first_trade_at INTEGER NOT NULL DEFAULT 0,
@@ -178,7 +180,7 @@ CREATE TABLE IF NOT EXISTS strategy_windows (
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
-        self.conn = sqlite3.connect(str(db_path), timeout=30.0)
+        self.conn = self._connect_with_retry(db_path)
         self.conn.row_factory = sqlite3.Row
         self._configure_connection()
 
@@ -190,20 +192,61 @@ class Database:
     def close(self) -> None:
         self.conn.close()
 
+    def _connect_with_retry(self, db_path: Path, attempts: int = 6) -> sqlite3.Connection:
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return sqlite3.connect(str(db_path), timeout=30.0)
+            except sqlite3.OperationalError as error:
+                last_error = error
+                if attempt >= attempts:
+                    raise
+                time.sleep(min(0.15 * attempt, 1.0))
+        if last_error is not None:
+            raise last_error
+        raise sqlite3.OperationalError(f"unable to connect to sqlite database: {db_path}")
+
     def _configure_connection(self) -> None:
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA busy_timeout=30000")
+        self._set_preferred_journal_mode()
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+
+    def _set_preferred_journal_mode(self) -> None:
+        for journal_mode in ("WAL", "TRUNCATE", "DELETE"):
+            row = self.conn.execute(f"PRAGMA journal_mode={journal_mode}").fetchone()
+            active_mode = str(row[0] if row else "").strip().upper()
+            if active_mode == journal_mode:
+                return
+        self.conn.execute("PRAGMA journal_mode=DELETE")
 
     def _migrate_schema(self) -> None:
-        strategy_window_columns = {
-            str(row["name"]): str(row["type"] or "")
-            for row in self.conn.execute("PRAGMA table_info(strategy_windows)").fetchall()
-        }
+        strategy_window_columns = self._table_columns("strategy_windows")
         if "deployed_notional" not in strategy_window_columns:
             self.conn.execute(
                 "ALTER TABLE strategy_windows ADD COLUMN deployed_notional REAL NOT NULL DEFAULT 0"
             )
+        if "strategy_variant" not in strategy_window_columns:
+            self.conn.execute(
+                "ALTER TABLE strategy_windows ADD COLUMN strategy_variant TEXT NOT NULL DEFAULT ''"
+            )
+
+        execution_columns = self._table_columns("executions")
+        if "strategy_variant" not in execution_columns:
+            self.conn.execute(
+                "ALTER TABLE executions ADD COLUMN strategy_variant TEXT NOT NULL DEFAULT ''"
+            )
+
+    def _table_columns(self, table_name: str) -> dict[str, str]:
+        return {
+            str(row["name"]): str(row["type"] or "")
+            for row in self.conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+
+    def _current_strategy_variant(self) -> str:
+        variant = self.get_bot_state("strategy_variant")
+        if variant is None:
+            return ""
+        return str(variant).strip()
 
     def get_source_positions(self, wallet: str) -> dict[str, SourcePosition]:
         rows = self.conn.execute(
@@ -645,14 +688,16 @@ class Database:
         source_wallet: str,
         source_signal_id: int,
         notes: str,
+        strategy_variant: str | None = None,
     ) -> None:
+        active_variant = str(strategy_variant or self._current_strategy_variant()).strip()
         with self.conn:
             self.conn.execute(
                 """
                 INSERT INTO executions (
                     ts, mode, status, action, side, asset, condition_id, size, price, notional,
-                    source_wallet, source_signal_id, notes, pnl_delta
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_wallet, source_signal_id, strategy_variant, notes, pnl_delta
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(time.time()),
@@ -667,6 +712,7 @@ class Database:
                     result.notional,
                     source_wallet,
                     source_signal_id,
+                    active_variant,
                     notes,
                     result.pnl_delta,
                 ),
@@ -783,18 +829,21 @@ class Database:
         planned_budget: float,
         current_exposure: float,
         notes: str,
+        strategy_variant: str | None = None,
     ) -> None:
         now_ts = int(time.time())
+        active_variant = str(strategy_variant or self._current_strategy_variant()).strip()
         with self.conn:
             self.conn.execute(
                 """
                 INSERT INTO strategy_windows (
-                    slug, condition_id, title, status, opened_at, price_mode, timing_regime,
+                    slug, condition_id, title, strategy_variant, status, opened_at, price_mode, timing_regime,
                     primary_outcome, hedge_outcome, primary_ratio, planned_budget, current_exposure, notes
-                ) VALUES (?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(slug) DO UPDATE SET
                     condition_id=excluded.condition_id,
                     title=excluded.title,
+                    strategy_variant=excluded.strategy_variant,
                     price_mode=excluded.price_mode,
                     timing_regime=excluded.timing_regime,
                     primary_outcome=excluded.primary_outcome,
@@ -808,6 +857,7 @@ class Database:
                     slug,
                     condition_id,
                     title,
+                    active_variant,
                     now_ts,
                     price_mode,
                     timing_regime,

@@ -8,6 +8,17 @@ dry_run: true
 
 strategy_mode: "btc5m_orderbook"
 strategy_entry_mode: "arb_micro"
+strategy_variant: "arb-micro-v1"
+strategy_notes: "Baseline arb micro bot under incubation."
+incubation_stage: "paper"
+incubation_auto_promote: false
+incubation_min_days: 14
+incubation_min_resolutions: 20
+incubation_max_drawdown: 40.0
+incubation_min_backtest_pnl: 0.0
+incubation_min_backtest_fill_rate: 0.20
+incubation_min_backtest_hit_rate: 0.35
+incubation_min_backtest_edge_bps: 0.0
 
 bankroll: 10000.0
 min_trade_amount: 5.0
