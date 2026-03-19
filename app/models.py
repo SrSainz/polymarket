@@ -70,6 +70,10 @@ class CopyInstruction(BaseModel):
     outcome: str
     category: str
     reason: str = ""
+    execution_profile: str = ""
+    time_in_force: str = ""
+    post_only: bool = False
+    good_till_seconds: int = 0
 
 
 class ExecutionResult(BaseModel):

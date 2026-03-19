@@ -15,6 +15,9 @@ from app.core.incubation_policy import evaluate_incubation_progress
 from app.core.lab_artifacts import (
     load_dataset_summary,
     load_experiment_leaderboard,
+    load_latency_snapshot,
+    load_liquidation_snapshot,
+    load_microstructure_snapshot,
     load_runtime_diagnostics,
     load_wallet_hypotheses,
     research_root_from_db,
@@ -99,6 +102,18 @@ def _build_handler(
                     )
                 )
                 return
+            if path == "/api/microstructure":
+                self._json(_microstructure_payload(db_path))
+                return
+            if path == "/api/liquidations":
+                self._json(_liquidations_payload(db_path))
+                return
+            if path == "/api/latency":
+                self._json(_latency_payload(db_path))
+                return
+            if path == "/metrics":
+                self._text(_metrics_payload(db_path))
+                return
             if path == "/api/positions":
                 self._json(_positions_payload(db_path, clob_host=clob_host))
                 return
@@ -160,6 +175,15 @@ def _build_handler(
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _text(self, payload: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+            body = payload.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -340,6 +364,31 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_feed_connected = _bot_state_int(conn, "strategy_feed_connected")
         strategy_feed_age_ms = _bot_state_int(conn, "strategy_feed_age_ms")
         strategy_feed_tracked_assets = _bot_state_int(conn, "strategy_feed_tracked_assets")
+        strategy_readiness_score = _bot_state_float(conn, "strategy_readiness_score")
+        strategy_regime = _bot_state_text(conn, "strategy_regime")
+        strategy_signal_side = _bot_state_text(conn, "strategy_signal_side")
+        strategy_expected_edge_bps = _bot_state_float(conn, "strategy_expected_edge_bps")
+        strategy_maker_ev_bps = _bot_state_float(conn, "strategy_maker_ev_bps")
+        strategy_taker_ev_bps = _bot_state_float(conn, "strategy_taker_ev_bps")
+        strategy_selected_execution = _bot_state_text(conn, "strategy_selected_execution")
+        strategy_best_bid_up = _bot_state_float(conn, "strategy_best_bid_up")
+        strategy_best_ask_up = _bot_state_float(conn, "strategy_best_ask_up")
+        strategy_best_bid_down = _bot_state_float(conn, "strategy_best_bid_down")
+        strategy_best_ask_down = _bot_state_float(conn, "strategy_best_ask_down")
+        strategy_spread_bps_up = _bot_state_float(conn, "strategy_spread_bps_up")
+        strategy_spread_bps_down = _bot_state_float(conn, "strategy_spread_bps_down")
+        strategy_internal_bullish_pressure_5s = _bot_state_float(conn, "strategy_internal_bullish_pressure_5s")
+        strategy_internal_bearish_pressure_5s = _bot_state_float(conn, "strategy_internal_bearish_pressure_5s")
+        strategy_external_spot_pressure_5s = _bot_state_float(conn, "strategy_external_spot_pressure_5s")
+        strategy_cvd_5s = _bot_state_float(conn, "strategy_cvd_5s")
+        strategy_cvd_30s = _bot_state_float(conn, "strategy_cvd_30s")
+        strategy_liq_buy_notional_30s = _bot_state_float(conn, "strategy_liq_buy_notional_30s")
+        strategy_liq_sell_notional_30s = _bot_state_float(conn, "strategy_liq_sell_notional_30s")
+        strategy_liq_burst_zscore = _bot_state_float(conn, "strategy_liq_burst_zscore")
+        strategy_near_liq_cluster_distance_bps = _bot_state_float(conn, "strategy_near_liq_cluster_distance_bps")
+        strategy_window_third = _bot_state_text(conn, "strategy_window_third")
+        strategy_market_event_lag_ms = _bot_state_float(conn, "strategy_market_event_lag_ms")
+        strategy_decision_blocked_by = _bot_state_text(conn, "strategy_decision_blocked_by")
         strategy_resolution_rows_today = conn.execute(
             """
             SELECT ts, pnl_delta, strategy_variant
@@ -376,6 +425,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
     experiment_payload = load_experiment_leaderboard(research_root)
     dataset_payload = load_dataset_summary(research_root)
     diagnostics_payload = load_runtime_diagnostics(research_root)
+    microstructure_payload = load_microstructure_snapshot(research_root)
+    liquidations_payload = load_liquidation_snapshot(research_root)
+    latency_payload = load_latency_snapshot(research_root)
     wallet_payload = load_wallet_hypotheses(research_root)
     active_experiment = _active_experiment_row(experiment_payload, variant=strategy_variant)
     incubation_transition = evaluate_incubation_progress(
@@ -620,6 +672,31 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_feed_connected": bool(strategy_feed_connected),
         "strategy_feed_age_ms": int(strategy_feed_age_ms),
         "strategy_feed_tracked_assets": int(strategy_feed_tracked_assets),
+        "strategy_readiness_score": round(strategy_readiness_score, 4),
+        "strategy_regime": strategy_regime,
+        "strategy_signal_side": strategy_signal_side,
+        "strategy_expected_edge_bps": round(strategy_expected_edge_bps, 4),
+        "strategy_maker_ev_bps": round(strategy_maker_ev_bps, 4),
+        "strategy_taker_ev_bps": round(strategy_taker_ev_bps, 4),
+        "strategy_selected_execution": strategy_selected_execution,
+        "strategy_best_bid_up": round(strategy_best_bid_up, 4),
+        "strategy_best_ask_up": round(strategy_best_ask_up, 4),
+        "strategy_best_bid_down": round(strategy_best_bid_down, 4),
+        "strategy_best_ask_down": round(strategy_best_ask_down, 4),
+        "strategy_spread_bps_up": round(strategy_spread_bps_up, 4),
+        "strategy_spread_bps_down": round(strategy_spread_bps_down, 4),
+        "strategy_internal_bullish_pressure_5s": round(strategy_internal_bullish_pressure_5s, 4),
+        "strategy_internal_bearish_pressure_5s": round(strategy_internal_bearish_pressure_5s, 4),
+        "strategy_external_spot_pressure_5s": round(strategy_external_spot_pressure_5s, 4),
+        "strategy_cvd_5s": round(strategy_cvd_5s, 4),
+        "strategy_cvd_30s": round(strategy_cvd_30s, 4),
+        "strategy_liq_buy_notional_30s": round(strategy_liq_buy_notional_30s, 4),
+        "strategy_liq_sell_notional_30s": round(strategy_liq_sell_notional_30s, 4),
+        "strategy_liq_burst_zscore": round(strategy_liq_burst_zscore, 4),
+        "strategy_near_liq_cluster_distance_bps": round(strategy_near_liq_cluster_distance_bps, 4),
+        "strategy_window_third": strategy_window_third,
+        "strategy_market_event_lag_ms": round(strategy_market_event_lag_ms, 4),
+        "strategy_decision_blocked_by": [item for item in strategy_decision_blocked_by.split(",") if item],
         "strategy_current_market_live_pnl": round(current_market_live_pnl, 4),
         "strategy_current_market_total_exposure": round(current_market_total_exposure, 4),
         "strategy_current_market_total_shares": round(current_market_total_shares, 4),
@@ -645,6 +722,12 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "runtime_diagnostics_status": str(diagnostics_payload.get("status") or ""),
         "runtime_diagnostics_summary": str(diagnostics_payload.get("summary") or ""),
         "runtime_diagnostics_findings": diagnostics_payload.get("findings") if isinstance(diagnostics_payload.get("findings"), list) else [],
+        "microstructure_snapshot_generated_at": str(microstructure_payload.get("generated_at") or ""),
+        "microstructure_snapshot": microstructure_payload,
+        "liquidations_snapshot_generated_at": str(liquidations_payload.get("generated_at") or ""),
+        "liquidations_snapshot": liquidations_payload,
+        "latency_snapshot_generated_at": str(latency_payload.get("generated_at") or ""),
+        "latency_snapshot": latency_payload,
         "runtime_guard_state": str(runtime_guard_state or ""),
         "runtime_guard_reason": str(runtime_guard_reason or ""),
         "runtime_guard_until": int(runtime_guard_until),
@@ -660,6 +743,92 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "daily_profit_gross": round(daily_profit_gross, 4),
         "daily_loss_gross": round(daily_loss_gross, 4),
     }
+
+
+def _microstructure_payload(db_path: Path) -> dict:
+    research_root = research_root_from_db(db_path)
+    payload = load_microstructure_snapshot(research_root)
+    frame = payload.get("frame") if isinstance(payload.get("frame"), dict) else {}
+    decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+    return {
+        "generated_at": str(payload.get("generated_at") or ""),
+        "market_slug": str(payload.get("market_slug") or frame.get("market_slug") or ""),
+        "market_title": str(payload.get("market_title") or frame.get("market_title") or ""),
+        "note": str(payload.get("note") or ""),
+        "frame": frame,
+        "decision": decision,
+    }
+
+
+def _liquidations_payload(db_path: Path) -> dict:
+    research_root = research_root_from_db(db_path)
+    payload = load_liquidation_snapshot(research_root)
+    totals = payload.get("totals") if isinstance(payload.get("totals"), dict) else {}
+    recent = payload.get("recent") if isinstance(payload.get("recent"), list) else []
+    return {
+        "generated_at": str(payload.get("generated_at") or ""),
+        "totals": totals,
+        "recent": recent[:40],
+    }
+
+
+def _latency_payload(db_path: Path) -> dict:
+    research_root = research_root_from_db(db_path)
+    payload = load_latency_snapshot(research_root)
+    latencies = payload.get("latencies") if isinstance(payload.get("latencies"), dict) else {}
+    return {
+        "generated_at": str(payload.get("generated_at") or ""),
+        "latencies": latencies,
+    }
+
+
+def _metrics_payload(db_path: Path) -> str:
+    research_root = research_root_from_db(db_path)
+    microstructure_payload = load_microstructure_snapshot(research_root)
+    latency_payload = load_latency_snapshot(research_root)
+    liquidations_payload = load_liquidation_snapshot(research_root)
+    experiment_payload = load_experiment_leaderboard(research_root)
+    frame = microstructure_payload.get("frame") if isinstance(microstructure_payload.get("frame"), dict) else {}
+    decision = microstructure_payload.get("decision") if isinstance(microstructure_payload.get("decision"), dict) else {}
+    latencies = latency_payload.get("latencies") if isinstance(latency_payload.get("latencies"), dict) else {}
+    liquidation_totals = liquidations_payload.get("totals") if isinstance(liquidations_payload.get("totals"), dict) else {}
+    variants = experiment_payload.get("variants") if isinstance(experiment_payload.get("variants"), list) else []
+    top_variant = variants[0] if variants else {}
+
+    metrics: list[tuple[str, float]] = [
+        ("pm_readiness_score", float(frame.get("readiness_score") or 0.0)),
+        ("pm_expected_edge_bps", float(decision.get("expected_edge_bps") or 0.0)),
+        ("pm_maker_ev_bps", float(decision.get("maker_ev_bps") or 0.0)),
+        ("pm_taker_ev_bps", float(decision.get("taker_ev_bps") or 0.0)),
+        ("pm_book_age_ms", float(frame.get("market_event_lag_ms") or latencies.get("market_event_lag_ms") or 0.0)),
+        ("pm_spot_age_ms", float(frame.get("spot_age_ms") or latencies.get("spot_age_ms") or 0.0)),
+        ("pm_signal_to_order_ms", float(latencies.get("signal_to_order_ms") or 0.0)),
+        ("pm_order_to_fill_ms", float(latencies.get("order_to_fill_ms") or 0.0)),
+        ("pm_feature_compute_ms", float(latencies.get("feature_compute_ms") or 0.0)),
+        ("pm_fill_ratio", float(top_variant.get("fill_rate") or 0.0)),
+        ("pm_maker_share", float(top_variant.get("maker_share") or 0.0)),
+        ("pm_expected_slippage_bps", float(latencies.get("expected_slippage_bps") or 0.0)),
+        ("pm_realized_slippage_bps", float(latencies.get("realized_slippage_bps") or 0.0)),
+        ("pm_edge_decay_bps", float(latencies.get("edge_decay_bps") or 0.0)),
+        ("pm_window_pnl_usdc", float(top_variant.get("expectancy_window_usdc") or 0.0)),
+        ("pm_regime_pnl_usdc", float(decision.get("expected_edge_bps") or 0.0)),
+        ("pm_liq_buy_notional_30s", float(liquidation_totals.get("buy_30s") or 0.0)),
+        ("pm_liq_sell_notional_30s", float(liquidation_totals.get("sell_30s") or 0.0)),
+        ("pm_liq_buy_notional_5m", float(liquidation_totals.get("buy_5m") or 0.0)),
+        ("pm_liq_sell_notional_5m", float(liquidation_totals.get("sell_5m") or 0.0)),
+    ]
+
+    lines = [
+        "# HELP pm_readiness_score Window readiness score.",
+        "# TYPE pm_readiness_score gauge",
+    ]
+    seen_help = {"pm_readiness_score"}
+    for name, value in metrics:
+        if name not in seen_help:
+            lines.append(f"# TYPE {name} gauge")
+            seen_help.add(name)
+        lines.append(f"{name} {value:.6f}")
+    return "\n".join(lines) + "\n"
 
 
 def _positions_payload(db_path: Path, *, clob_host: str) -> dict:

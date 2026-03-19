@@ -16,16 +16,20 @@ from app.polymarket.clob_client import CLOBClient
 from app.polymarket.gamma_client import GammaClient
 from app.polymarket.market_feed import MarketFeed
 from app.polymarket.spot_feed import SpotFeed
+from app.polymarket.user_feed import UserFeed
 from app.services.btc5m_strategy import BTC5mStrategyService
 from app.services.dashboard_server import run_dashboard_server
 from app.services.experiment_runner import ExperimentRunner
 from app.services.historical_dataset_builder import HistoricalDatasetBuilder
+from app.services.liquidation_feed import LiquidationFeed
 from app.services.report import ReportService
 from app.services.runtime_diagnostics import RuntimeDiagnosticsService
 from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.services.wallet_pattern_miner import WalletPatternMiner
 from app.settings import AppSettings, load_settings
+from app.core.replay_engine import ReplayEngine
+from app.core.lab_artifacts import load_microstructure_snapshot
 
 
 def build_core_context(root_dir: Path) -> tuple[AppSettings, Database]:
@@ -53,11 +57,34 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyS
         enabled=settings.config.spot_feed_enabled,
         stale_after_seconds=settings.config.spot_feed_stale_seconds,
     )
+    liquidation_feed = LiquidationFeed(
+        logger,
+        enabled=settings.config.liquidation_feed_enabled,
+        binance_ws_url=settings.env.binance_liquidation_ws_host,
+        bybit_ws_url=settings.env.bybit_liquidation_ws_host,
+        bybit_symbol=settings.config.liquidation_bybit_symbol,
+    )
+    user_feed = UserFeed(
+        settings.env.polymarket_user_ws_host,
+        logger,
+        api_key=settings.env.polymarket_api_key,
+        api_secret=settings.env.polymarket_api_secret,
+        api_passphrase=settings.env.polymarket_api_passphrase,
+        enabled=settings.env.live_trading or settings.config.shadow_mode_enabled,
+    )
     spot_feed.start()
+    liquidation_feed.start()
+    user_feed.start()
     clob_client = CLOBClient(settings.env.clob_host, settings.env, market_feed=market_feed)
 
     paper_broker = PaperBroker(db)
-    live_broker = LiveBroker(db, clob_client, settings.env, slippage_limit=settings.config.slippage_limit)
+    live_broker = LiveBroker(
+        db,
+        clob_client,
+        settings.env,
+        slippage_limit=settings.config.slippage_limit,
+        execution_profile=settings.config.live_execution_profile,
+    )
     autonomous_decider = AutonomousDecider(settings.config, db)
     daily_summary = TelegramDailySummaryService(db, settings.config, settings.env, logger)
     trade_notifier = TelegramTradeNotifierService(settings.config, settings.env, logger)
@@ -76,6 +103,8 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyS
         logger,
         runtime_diagnostics=runtime_diagnostics,
         spot_feed=spot_feed,
+        liquidation_feed=liquidation_feed,
+        user_feed=user_feed,
     )
     report_service = ReportService(db, settings.paths.reports_dir)
     return settings, db, strategy_service, report_service
@@ -150,9 +179,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BTC 5m microstructure lab for Polymarket")
     parser.add_argument(
         "command",
-        choices=["paper", "live", "once", "dashboard", "report", "dataset", "experiments", "hypotheses", "diagnostics"],
+        choices=["paper", "live", "shadow", "once", "dashboard", "report", "dataset", "experiments", "hypotheses", "diagnostics", "replay"],
         help="Command to run",
     )
+    parser.add_argument("--replay-market-slug", default="", help="Slug de mercado a usar para replay")
+    parser.add_argument("--replay-output-dir", default="data/research/replay", help="Directorio de salida para replay")
     return parser.parse_args()
 
 
@@ -161,7 +192,7 @@ def _wait_for_next_cycle(strategy_service: BTC5mStrategyService, *, mode: str, s
     spot_feed = getattr(strategy_service, "spot_feed", None)
     entry_mode = str(strategy_service.settings.config.strategy_entry_mode or "")
     if (
-        mode == "paper"
+        mode in {"paper", "shadow"}
         and entry_mode == "arb_micro"
         and (feed is not None or spot_feed is not None)
     ):
@@ -191,7 +222,7 @@ def main() -> int:
     args = parse_args()
     root_dir = Path(__file__).resolve().parent
     strategy_service = None
-    if args.command in {"paper", "live", "once"}:
+    if args.command in {"paper", "live", "shadow", "once"}:
         settings, db, strategy_service, report_service = build_context(root_dir)
     else:
         settings, db = build_core_context(root_dir)
@@ -263,6 +294,34 @@ def main() -> int:
             )
             return 0
 
+        if args.command == "replay":
+            market_slug = str(args.replay_market_slug or "").strip()
+            latest = load_microstructure_snapshot(settings.paths.research_dir)
+            if not market_slug:
+                market_slug = str(latest.get("market_slug") or "")
+            if not market_slug:
+                print("replay => no market slug available. Use --replay-market-slug.")
+                return 1
+            gamma_client = GammaClient(settings.env.gamma_api_host)
+            market = gamma_client.get_market_by_slug(market_slug)
+            if market is None:
+                print(f"replay => market not found for slug {market_slug}")
+                return 1
+            replay = ReplayEngine(
+                market=market,
+                research_dir=settings.paths.research_dir,
+                output_dir=(settings.paths.root / args.replay_output_dir),
+                official_price_to_beat=float(latest.get("frame", {}).get("spot_anchor") or 0.0),
+            )
+            summary = replay.run()
+            print(
+                "replay => "
+                f"market={summary.market_slug} events={summary.events} features={summary.feature_frames} "
+                f"decisions={summary.decision_traces} readiness={summary.latest_readiness_score:.2f} "
+                f"edge={summary.latest_expected_edge_bps:.2f}bps"
+            )
+            return 0
+
         if args.command == "once":
             mode = "paper" if settings.config.execution_mode == "paper" else "live"
             if mode == "live" and not settings.env.live_trading:
@@ -288,6 +347,16 @@ def main() -> int:
                 sleep_seconds=settings.config.polling_interval_seconds,
             )
 
+        if args.command == "shadow":
+            if not settings.config.shadow_mode_enabled:
+                print("shadow_mode_enabled=false in config. Enable it before running shadow mode.")
+                return 1
+            return _loop_strategy(
+                strategy_service,
+                mode="shadow",
+                sleep_seconds=settings.config.polling_interval_seconds,
+            )
+
     except KeyboardInterrupt:
         print("stopped by user")
         return 0
@@ -300,6 +369,16 @@ def main() -> int:
         try:
             if strategy_service is not None and getattr(strategy_service, "spot_feed", None) is not None:
                 strategy_service.spot_feed.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if strategy_service is not None and getattr(strategy_service, "liquidation_feed", None) is not None:
+                strategy_service.liquidation_feed.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if strategy_service is not None and getattr(strategy_service, "user_feed", None) is not None:
+                strategy_service.user_feed.close()
         except Exception:  # noqa: BLE001
             pass
         db.close()

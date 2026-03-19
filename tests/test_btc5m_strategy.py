@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from app.core.decision_engine import DecisionTrace
 from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
@@ -188,6 +189,75 @@ def test_strategy_buy_opposite_uses_cheap_side_and_records_balance(tmp_path: Pat
     assert broker.instructions[0].outcome == "Down"
     assert db.get_bot_state("live_cash_balance") == "50.00000000"
     assert db.get_bot_state("strategy_target_outcome") == "Down"
+    db.close()
+
+
+def test_execute_instruction_uses_latest_microstructure_execution_profile_for_live(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    live_broker = _FakeBroker()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=live_broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-live-profile"),
+    )
+    service.telemetry._latest_decision = DecisionTrace(
+        window_id="btc-updown-5m-test",
+        market_slug="btc-updown-5m-test",
+        market_title="Bitcoin Up or Down - Test",
+        readiness_score=82.0,
+        regime="directional_pressure",
+        signal_side="up",
+        expected_edge_bps=12.0,
+        maker_ev_bps=9.0,
+        taker_ev_bps=11.0,
+        maker_fill_prob=0.55,
+        selected_execution="maker_post_only_gtc",
+        blocked_by=(),
+        latency_penalty_bps=1.0,
+        spread_penalty_bps=2.0,
+        adverse_selection_penalty_bps=1.5,
+    )
+
+    service._execute_instruction(
+        mode="live",
+        instruction=CopyInstruction(
+            action=SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset="asset-up",
+            condition_id="cond-1",
+            size=10.0,
+            price=0.42,
+            notional=4.2,
+            source_wallet="strategy:test",
+            source_signal_id=1,
+            title="Bitcoin Up or Down - Test",
+            slug="btc-updown-5m-test",
+            outcome="Up",
+            category="crypto",
+            reason="unit-test",
+        ),
+    )
+
+    assert live_broker.instructions
+    assert live_broker.instructions[0].execution_profile == "maker_post_only_gtc"
     db.close()
 
 
@@ -2418,6 +2488,92 @@ def test_arb_micro_stabilizes_extreme_one_sided_inventory_when_spot_aligns(tmp_p
     db.close()
 
 
+def test_arb_micro_unwinds_extreme_wrong_side_inventory_when_repair_is_too_expensive(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-unwind"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=160)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Inventory Unwind",
+        "slug": slug,
+        "conditionId": "cond-arb-unwind",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.64"}],
+                "asks": [{"price": "0.66", "size": "400"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.37"}],
+                "asks": [{"price": "0.39", "size": "400"}],
+            },
+        },
+        balance=1000.0,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70942.58,
+            lead_price=70942.58,
+            binance_price=70942.58,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=12,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-inventory-unwind"),
+        spot_feed=spot_feed,
+    )
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "71017.17000000")
+    seeded = service.paper_broker.execute(
+        CopyInstruction(
+            action=SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset="asset-up",
+            condition_id=market["conditionId"],
+            size=50.0,
+            price=0.66,
+            notional=33.0,
+            source_wallet="strategy:test-seed",
+            source_signal_id=0,
+            title=market["question"],
+            slug=slug,
+            outcome="Up",
+            category="crypto",
+            reason="test-seed",
+        )
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert seeded.status == "filled"
+    assert stats["filled"] > 0
+    position = db.get_copy_position("asset-up")
+    assert position is not None
+    assert float(position["size"]) < 50.0
+    assert db.get_bot_state("strategy_price_mode") == "inventory-unwind"
+    assert "unwind Up" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
 def test_btc5m_operating_bankroll_keeps_reserved_profit_out_of_reinvestment(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -2986,6 +3142,7 @@ def test_runtime_guard_uses_paper_profile_thresholds(tmp_path: Path) -> None:
         trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
         settings=_settings(
             strategy_entry_mode="arb_micro",
+            paper_runtime_guard_enabled=True,
             paper_runtime_guard_lookback_minutes=90,
             paper_runtime_guard_loss_streak=5,
             paper_runtime_guard_max_recent_pnl=-120.0,
@@ -3014,6 +3171,54 @@ def test_runtime_guard_uses_paper_profile_thresholds(tmp_path: Path) -> None:
     assert kwargs["loss_streak_limit"] == 5
     assert kwargs["max_recent_close_pnl"] == -120.0
     assert kwargs["cooldown_minutes"] == 12
+    db.close()
+
+
+def test_runtime_guard_can_be_disabled_only_for_paper(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            runtime_guard_enabled=True,
+            paper_runtime_guard_enabled=False,
+        ),
+        logger=logging.getLogger("test-btc5m-paper-runtime-guard-disabled"),
+        spot_feed=None,
+    )
+
+    with patch("app.services.btc5m_strategy.evaluate_runtime_guard") as evaluate_mock:
+        allowed, note = service._runtime_guard_can_open(mode="paper")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.get_bot_state("runtime_guard_profile") == "paper-disabled"
+    assert db.get_bot_state("runtime_guard_state") == "disabled"
+    evaluate_mock.assert_not_called()
+
+    with patch("app.services.btc5m_strategy.evaluate_runtime_guard") as evaluate_mock:
+        evaluate_mock.return_value = {
+            "blocked": False,
+            "recent_close_count": 0,
+            "recent_close_pnl": 0.0,
+            "consecutive_losses": 0,
+            "cooldown_until": 0,
+            "reason": "",
+        }
+        allowed, note = service._runtime_guard_can_open(mode="live")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.get_bot_state("runtime_guard_profile") == "live"
+    evaluate_mock.assert_called_once()
     db.close()
 
 

@@ -163,6 +163,90 @@ class CLOBClient:
             "py-clob-client API mismatch. Expected create_market_order/post_order methods are unavailable."
         )
 
+    def place_limit_order(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        price: float,
+        size: float,
+        order_type: str = "GTC",
+        post_only: bool = False,
+    ) -> dict[str, Any]:
+        if not self.env.live_trading:
+            raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to enable order placement.")
+
+        client = build_authenticated_clob_client(self.env)
+        side_upper = str(side or "").upper().strip()
+        if side_upper not in {"BUY", "SELL"}:
+            raise RuntimeError(f"Unsupported side: {side}")
+        try:
+            from py_clob_client.clob_types import OrderArgs, OrderType
+            from py_clob_client.order_builder.constants import BUY, SELL
+        except ImportError as error:
+            raise RuntimeError("py-clob-client install is incomplete for limit order types.") from error
+
+        side_const = BUY if side_upper == "BUY" else SELL
+        order_type_name = str(order_type or "GTC").upper().strip()
+        order_type_value = getattr(OrderType, order_type_name, None)
+        if order_type_value is None:
+            raise RuntimeError(f"Unsupported order type: {order_type}")
+
+        order_args = OrderArgs(
+            token_id=token_id,
+            price=float(price),
+            size=float(size),
+            side=side_const,
+        )
+        if hasattr(client, "create_and_post_order"):
+            return client.create_and_post_order(order_args, orderType=order_type_value, postOnly=bool(post_only))
+        if hasattr(client, "create_order") and hasattr(client, "post_order"):
+            signed_order = client.create_order(order_args)
+            return client.post_order(signed_order, orderType=order_type_value, postOnly=bool(post_only))
+        raise RuntimeError("py-clob-client API mismatch. Expected create limit order methods are unavailable.")
+
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        if not self.env.live_trading:
+            raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to manage orders.")
+        client = build_authenticated_clob_client(self.env)
+        if hasattr(client, "cancel_order"):
+            response = client.cancel_order(order_id)
+            return response if isinstance(response, dict) else {"canceled": [order_id]}
+        raise RuntimeError("py-clob-client API mismatch. Expected cancel_order().")
+
+    def cancel_all(self, *, market: str = "", asset_id: str = "") -> dict[str, Any]:
+        if not self.env.live_trading:
+            raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to manage orders.")
+        client = build_authenticated_clob_client(self.env)
+        if market or asset_id:
+            if hasattr(client, "cancel_market_orders"):
+                payload = {}
+                if market:
+                    payload["market"] = market
+                if asset_id:
+                    payload["asset_id"] = asset_id
+                response = client.cancel_market_orders(payload)
+                return response if isinstance(response, dict) else {"canceled": []}
+            raise RuntimeError("py-clob-client API mismatch. Expected cancel_market_orders().")
+        if hasattr(client, "cancel_all"):
+            response = client.cancel_all()
+            return response if isinstance(response, dict) else {"canceled": []}
+        raise RuntimeError("py-clob-client API mismatch. Expected cancel_all().")
+
+    def list_open_orders(self, *, market: str = "", asset_id: str = "") -> list[dict[str, Any]]:
+        if not self.env.live_trading:
+            raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to query orders.")
+        client = build_authenticated_clob_client(self.env)
+        if not hasattr(client, "get_open_orders"):
+            raise RuntimeError("py-clob-client API mismatch. Expected get_open_orders().")
+        params = {}
+        if market:
+            params["market"] = market
+        if asset_id:
+            params["asset_id"] = asset_id
+        rows = client.get_open_orders(params or None, True)
+        return [_normalize_order_status(row) for row in (rows or [])]
+
 
 def _build_balance_params(balance_params_cls, asset_type):  # noqa: ANN001
     try:
@@ -215,3 +299,44 @@ def _normalize_usdc_balance(raw_value: object) -> float:
     if parsed >= 100_000 and parsed.is_integer():
         return parsed / 1_000_000
     return parsed
+
+
+def _normalize_order_status(payload: object) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        row = dict(payload)
+    else:
+        row = {
+            "id": getattr(payload, "id", ""),
+            "status": getattr(payload, "status", ""),
+            "market": getattr(payload, "market", ""),
+            "asset_id": getattr(payload, "asset_id", ""),
+            "side": getattr(payload, "side", ""),
+            "original_size": getattr(payload, "original_size", 0.0),
+            "size_matched": getattr(payload, "size_matched", 0.0),
+            "price": getattr(payload, "price", 0.0),
+            "created_at": getattr(payload, "created_at", 0),
+            "order_type": getattr(payload, "order_type", ""),
+        }
+    return {
+        "id": str(row.get("id") or row.get("orderID") or ""),
+        "status": str(row.get("status") or ""),
+        "market": str(row.get("market") or ""),
+        "asset_id": str(row.get("asset_id") or ""),
+        "side": str(row.get("side") or ""),
+        "original_size": _safe_float(row.get("original_size") or row.get("size") or 0.0),
+        "size_matched": _safe_float(row.get("size_matched") or row.get("matched_amount") or 0.0),
+        "price": _safe_float(row.get("price") or 0.0),
+        "created_at": int(_safe_float(row.get("created_at") or 0)),
+        "order_type": str(row.get("order_type") or row.get("type") or ""),
+    }
+
+
+def _safe_float(value: object) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

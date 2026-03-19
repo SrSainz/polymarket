@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from app.polymarket.clob_client import CLOBClient
@@ -93,3 +94,28 @@ def test_market_feed_reports_idle_when_no_assets_tracked() -> None:
     assert status.mode == "websocket-idle"
     assert status.connected is False
     assert status.tracked_assets == 0
+
+
+def test_market_feed_emits_trade_listener_event() -> None:
+    feed = MarketFeed("wss://clob.example/ws", logging.getLogger("test-market-feed"), enabled=True)
+    seen = []
+    feed.register_listener(seen.append)
+
+    feed._handle_message(
+        None,
+        json.dumps(
+            {
+                "event_type": "last_trade_price",
+                "asset_id": "asset-up",
+                "price": "0.48",
+                "size": "22",
+                "side": "BUY",
+                "timestamp": 1773341700123,
+            }
+        ),
+    )
+
+    assert len(seen) == 1
+    assert seen[0].kind == "market_trade"
+    assert seen[0].asset_id == "asset-up"
+    assert seen[0].payload["side"] == "buy"

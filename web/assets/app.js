@@ -59,6 +59,12 @@ function fmtPct(value, digits = 0) {
   return `${asNumber.toFixed(digits)}%`;
 }
 
+function fmtBps(value, digits = 1) {
+  const asNumber = Number(value);
+  if (Number.isNaN(asNumber)) return "-";
+  return `${asNumber.toFixed(digits)}bps`;
+}
+
 function tsToIso(ts) {
   if (!ts) return "-";
   const date = new Date(ts * 1000);
@@ -1008,6 +1014,7 @@ function paintSummary(summary, items = lastPositions) {
     livePnlNode.classList.remove("pnl-pos", "pnl-neg", "pnl-flat");
     livePnlNode.classList.add(livePnlToday > 0 ? "pnl-pos" : livePnlToday < 0 ? "pnl-neg" : "pnl-flat");
   }
+  setCardTone("livePnlToday", livePnlToday);
   document.getElementById("strategyModeCard").textContent = isVidarxLab(summary)
     ? windowState.label
     : strategyLabel(summary);
@@ -1098,6 +1105,10 @@ function paintSummary(summary, items = lastPositions) {
       : `public api mode (${watchedWallet})`;
   document.getElementById("lastUpdated").textContent = `Última actualización backend ${snapshotInfo.backendText} | snapshot ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | ${modeText}`;
   document.getElementById("headerTimestamp").textContent = `snapshot backend ${snapshotInfo.backendText} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}`;
+  const lastUpdatedHero = document.getElementById("lastUpdatedHero");
+  if (lastUpdatedHero) {
+    lastUpdatedHero.textContent = `backend ${snapshotInfo.backendText} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}`;
+  }
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const lastLiveExecution = Number(summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
@@ -1116,6 +1127,7 @@ function paintSummary(summary, items = lastPositions) {
     : `${strategySummary}${incubationText ? ` ${incubationText}.` : ""}${researchText ? ` ${researchText}.` : ""}`;
 
   paintLabOverview(summary);
+  paintMicrostructurePanels(summary);
 }
 
 function paintLabOverview(summary) {
@@ -1253,6 +1265,156 @@ function paintLabOverview(summary) {
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
     ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | operabilidad ${operability.label.toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.referenceComparable ? `${spotInfo.source} ${spotInfo.ageMs}ms | ref ${spotInfo.referenceQuality} | usado ${visibleComparablePrice > 0 ? fmtBtcPrice(visibleComparablePrice) : "-"}${spotInfo.priceMode ? ` (${spotInfo.priceMode})` : ""}${spotInfo.hasChainlink ? ` | chainlink ${fmtBtcPrice(spotInfo.polymarketCurrent)}` : ""}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasLocalAnchor && spotInfo.hasAnchor ? ` | desvio ${fmtUsd(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftUsd : spotInfo.anchorDriftRefUsd, 2)} / ${fmt(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftBps : spotInfo.anchorDriftRefBps, 1)}bps` : ""}` : `degradado | ${spotInfo.referenceNote} | ${spotInfo.source !== "-" ? `${spotInfo.source} ${spotInfo.ageMs}ms` : feedInfo.summaryLabel}${visibleComparablePrice > 0 ? ` | usado ${fmtBtcPrice(visibleComparablePrice)}` : ""}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}`} | dinero metido ${fmtUsdPlain(deployed, 2)}${incubationMeta(summary) ? ` | ${incubationMeta(summary)}` : ""}${variantBacktestMeta(summary) ? ` | ${variantBacktestMeta(summary)}` : ""}${datasetMeta(summary) ? ` | ${datasetMeta(summary)}` : ""}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
+}
+
+function paintMicrostructurePanels(summary) {
+  const pressureList = document.getElementById("microPressureList");
+  const pressureMeta = document.getElementById("microPressureMeta");
+  const pressureBadge = document.getElementById("microPressureBadge");
+  const decisionList = document.getElementById("microDecisionList");
+  const decisionMeta = document.getElementById("microDecisionMeta");
+  const decisionBadge = document.getElementById("microDecisionBadge");
+  const liquidationList = document.getElementById("microLiquidationList");
+  const liquidationMeta = document.getElementById("microLiquidationMeta");
+  const liquidationBadge = document.getElementById("microLiquidationBadge");
+  const latencyList = document.getElementById("microLatencyList");
+  const latencyMeta = document.getElementById("microLatencyMeta");
+  const latencyBadge = document.getElementById("microLatencyBadge");
+
+  if (isPublicRuntime() || isBackendDisconnectedRuntime()) {
+    const fallbackText = isPublicRuntime()
+      ? "requiere backend del NAS para microestructura en tiempo real"
+      : "backend desconectado: sin telemetria de microestructura";
+    pressureBadge.textContent = "off";
+    decisionBadge.textContent = "off";
+    liquidationBadge.textContent = "off";
+    latencyBadge.textContent = "off";
+    pressureList.innerHTML = `<li class="mini-item"><strong>Sin stream interno</strong><span>${fallbackText}</span></li>`;
+    decisionList.innerHTML = `<li class="mini-item"><strong>Sin decision trace</strong><span>${fallbackText}</span></li>`;
+    liquidationList.innerHTML = `<li class="mini-item"><strong>Sin liquidation feed</strong><span>${fallbackText}</span></li>`;
+    latencyList.innerHTML = `<li class="mini-item"><strong>Sin latency trace</strong><span>${fallbackText}</span></li>`;
+    pressureMeta.textContent = fallbackText;
+    decisionMeta.textContent = fallbackText;
+    liquidationMeta.textContent = fallbackText;
+    latencyMeta.textContent = fallbackText;
+    return;
+  }
+
+  const micro = summary?.microstructure_snapshot || {};
+  const frame = micro?.frame || {};
+  const decision = micro?.decision || {};
+  const liquidations = summary?.liquidations_snapshot || {};
+  const liquidationTotals = liquidations?.totals || {};
+  const latency = summary?.latency_snapshot?.latencies || {};
+  const recentLiquidations = Array.isArray(liquidations?.recent) ? liquidations.recent : [];
+  const blockedBy = Array.isArray(summary?.strategy_decision_blocked_by)
+    ? summary.strategy_decision_blocked_by
+    : String(summary?.strategy_decision_blocked_by || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+  const timingInfo = windowTiming(summary);
+
+  const internalBull5 = Number(summary?.strategy_internal_bullish_pressure_5s ?? frame.internal_bullish_pressure_5s ?? 0);
+  const internalBear5 = Number(summary?.strategy_internal_bearish_pressure_5s ?? frame.internal_bearish_pressure_5s ?? 0);
+  const externalSpot5 = Number(summary?.strategy_external_spot_pressure_5s ?? frame.external_spot_pressure_5s ?? 0);
+  const cvd5 = Number(summary?.strategy_cvd_5s ?? frame.cvd_5s ?? 0);
+  const cvd30 = Number(summary?.strategy_cvd_30s ?? frame.cvd_30s ?? 0);
+  const liqBias = Number(summary?.strategy_liq_buy_notional_30s ?? 0) - Number(summary?.strategy_liq_sell_notional_30s ?? 0);
+  const pressureTilt =
+    internalBull5 > internalBear5 ? "bullish" : internalBear5 > internalBull5 ? "bearish" : "neutral";
+  pressureBadge.textContent = pressureTilt;
+  pressureList.innerHTML = [
+    ["Pressure interna 5s", `bull ${fmtUsdPlain(internalBull5, 2)} | bear ${fmtUsdPlain(internalBear5, 2)}`],
+    ["Spot pressure 5s", fmtBps(externalSpot5, 1)],
+    ["CVD", `5s ${fmtUsd(cvd5, 2)} | 30s ${fmtUsd(cvd30, 2)}`],
+    ["Spread Up / Down", `${fmtBps(summary?.strategy_spread_bps_up ?? frame.spread_bps_up ?? 0, 1)} / ${fmtBps(summary?.strategy_spread_bps_down ?? frame.spread_bps_down ?? 0, 1)}`],
+    ["Pair sum / locked edge", `${fmtBps(frame.pair_sum_bps ?? 0, 1)} | edge ${fmtBps(frame.locked_edge_bps ?? 0, 1)}`],
+    ["Liquidation bias 30s", fmtUsd(liqBias, 2)],
+  ]
+    .map(
+      ([label, value]) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(String(value))}</span>
+      </li>
+    `
+    )
+    .join("");
+  pressureMeta.textContent = `snapshot ${isoText(summary?.microstructure_snapshot_generated_at)} | paired OFI ${fmt(frame.paired_ofi_z ?? 0, 2)} | paired CVD ${fmt(frame.paired_cvd ?? 0, 2)}`;
+
+  const selectedExecution = String(summary?.strategy_selected_execution || decision.selected_execution || "no-trade");
+  decisionBadge.textContent = selectedExecution || "no-trade";
+  decisionList.innerHTML = [
+    ["Readiness", `${fmtPct(summary?.strategy_readiness_score ?? frame.readiness_score ?? 0, 1)} | ${String(summary?.strategy_regime || frame.regime || "-")}`],
+    ["Signal", `${String(summary?.strategy_signal_side || decision.signal_side || "-")} | edge ${fmtBps(summary?.strategy_expected_edge_bps ?? decision.expected_edge_bps ?? 0, 1)}`],
+    ["EV maker / taker", `${fmtBps(summary?.strategy_maker_ev_bps ?? decision.maker_ev_bps ?? 0, 1)} / ${fmtBps(summary?.strategy_taker_ev_bps ?? decision.taker_ev_bps ?? 0, 1)}`],
+    ["BBO Up", `${fmt(Number(summary?.strategy_best_bid_up ?? frame.best_bid_up ?? 0), 3)} / ${fmt(Number(summary?.strategy_best_ask_up ?? frame.best_ask_up ?? 0), 3)}`],
+    ["BBO Down", `${fmt(Number(summary?.strategy_best_bid_down ?? frame.best_bid_down ?? 0), 3)} / ${fmt(Number(summary?.strategy_best_ask_down ?? frame.best_ask_down ?? 0), 3)}`],
+    ["Tiempo / fase", `${timingInfo.remaining}s | ${String(summary?.strategy_window_third || frame.window_third || "-")}`],
+    ["Blockers", blockedBy.length ? blockedBy.join(" | ") : "sin bloqueo activo"],
+  ]
+    .map(
+      ([label, value]) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(String(value))}</span>
+      </li>
+    `
+    )
+    .join("");
+  decisionMeta.textContent = String(summary?.strategy_last_note || micro?.note || "sin nota de decision");
+
+  const exchangeTotals = Object.entries(liquidationTotals?.by_exchange_5m || {});
+  liquidationBadge.textContent = String(recentLiquidations.length || 0);
+  const liquidationRows = [
+    ["Burst 30s", `buy ${fmtUsdPlain(liquidationTotals?.buy_30s ?? 0, 2)} | sell ${fmtUsdPlain(liquidationTotals?.sell_30s ?? 0, 2)}`],
+    ["Burst 5m", `buy ${fmtUsdPlain(liquidationTotals?.buy_5m ?? 0, 2)} | sell ${fmtUsdPlain(liquidationTotals?.sell_5m ?? 0, 2)}`],
+    ["Z-score / near cluster", `${fmt(summary?.strategy_liq_burst_zscore ?? frame.liq_burst_zscore ?? 0, 2)} | ${fmtBps(summary?.strategy_near_liq_cluster_distance_bps ?? frame.near_liq_cluster_distance_bps ?? 0, 1)}`],
+  ];
+  exchangeTotals.slice(0, 2).forEach(([exchange, notional]) => {
+    liquidationRows.push([`5m ${exchange}`, fmtUsdPlain(notional, 2)]);
+  });
+  recentLiquidations.slice(0, 3).forEach((item) => {
+    liquidationRows.push([
+      `${String(item.exchange || "-").toUpperCase()} ${String(item.side || "-")}`,
+      `${fmtUsdPlain(item.notional || 0, 2)} @ ${fmtBtcPrice(item.price || 0)}`,
+    ]);
+  });
+  liquidationList.innerHTML = liquidationRows
+    .map(
+      ([label, value]) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(String(value))}</span>
+      </li>
+    `
+    )
+    .join("");
+  liquidationMeta.textContent = `snapshot ${isoText(summary?.liquidations_snapshot_generated_at)} | ${recentLiquidations.length} eventos recientes`;
+
+  const marketLag = Number(summary?.strategy_market_event_lag_ms ?? latency.market_event_lag_ms ?? 0);
+  const spotAge = Number(summary?.strategy_spot_age_ms ?? latency.spot_age_ms ?? 0);
+  const featureCompute = Number(latency.feature_compute_ms ?? 0);
+  const decisionBlockers = Number(latency.decision_blockers ?? blockedBy.length ?? 0);
+  latencyBadge.textContent = String(summary?.strategy_data_source || "idle");
+  latencyList.innerHTML = [
+    ["Feed", `${String(summary?.strategy_data_source || "-")} | ${Boolean(summary?.strategy_feed_connected) ? "connected" : "offline"}`],
+    ["Assets / lag mercado", `${String(summary?.strategy_feed_tracked_assets ?? 0)} | ${fmt(marketLag, 1)} ms`],
+    ["Edad spot / compute", `${spotAge} ms | ${fmt(featureCompute, 2)} ms`],
+    ["Blockers runtime", String(decisionBlockers)],
+    ["Execution mode", selectedExecution],
+  ]
+    .map(
+      ([label, value]) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(String(value))}</span>
+      </li>
+    `
+    )
+    .join("");
+  latencyMeta.textContent = `snapshot ${isoText(summary?.latency_snapshot_generated_at)} | backend ${isoText(summary?.timestamp_utc)}`;
 }
 
 function paintSelectedWallets(items) {

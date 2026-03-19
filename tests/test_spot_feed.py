@@ -91,3 +91,20 @@ def test_spot_feed_anchor_price_prefers_chainlink_sample_near_window_start() -> 
     anchor = feed.get_anchor_price(symbol="btc/usd", target_ts=target)
 
     assert anchor == 71852.76
+
+
+def test_spot_feed_emits_listener_events_for_binance_trade() -> None:
+    feed = SpotFeed("wss://stream.binance.com:9443/ws/btcusdt@aggTrade", logging.getLogger("test-spot-feed"))
+    seen = []
+    feed.register_listener(seen.append)
+
+    feed._handle_message(
+        """
+        {"e":"aggTrade","E":1773341700123,"s":"BTCUSDT","p":"70045.57","q":"0.17","m":false}
+        """.strip()
+    )
+
+    assert len(seen) == 1
+    assert seen[0].kind == "spot_price"
+    assert seen[0].payload["symbol"] == "btcusdt"
+    assert seen[0].payload["price"] == 70045.57

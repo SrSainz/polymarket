@@ -29,6 +29,24 @@ def runtime_diagnostics_path(research_root: Path) -> Path:
     return research_root / "runtime" / "diagnostics_latest.json"
 
 
+def microstructure_snapshot_path(research_root: Path) -> Path:
+    return research_root / "runtime" / "microstructure_latest.json"
+
+
+def liquidation_snapshot_path(research_root: Path) -> Path:
+    return research_root / "runtime" / "liquidations_latest.json"
+
+
+def latency_snapshot_path(research_root: Path) -> Path:
+    return research_root / "runtime" / "latency_latest.json"
+
+
+def events_log_path(research_root: Path, name: str) -> Path:
+    safe_name = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in str(name or "")).strip("_")
+    safe_name = safe_name or "events"
+    return research_root / "runtime" / f"{safe_name}.jsonl"
+
+
 def load_experiment_leaderboard(research_root: Path) -> dict[str, Any]:
     return _load_json(experiment_leaderboard_path(research_root), default={"generated_at": "", "variants": []})
 
@@ -48,9 +66,36 @@ def load_runtime_diagnostics(research_root: Path) -> dict[str, Any]:
     )
 
 
+def load_microstructure_snapshot(research_root: Path) -> dict[str, Any]:
+    return _load_json(
+        microstructure_snapshot_path(research_root),
+        default={"generated_at": "", "market_slug": "", "frame": {}, "decision": {}},
+    )
+
+
+def load_liquidation_snapshot(research_root: Path) -> dict[str, Any]:
+    return _load_json(
+        liquidation_snapshot_path(research_root),
+        default={"generated_at": "", "totals": {}, "recent": []},
+    )
+
+
+def load_latency_snapshot(research_root: Path) -> dict[str, Any]:
+    return _load_json(
+        latency_snapshot_path(research_root),
+        default={"generated_at": "", "latencies": {}},
+    )
+
+
 def dump_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+
+
+def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
 def _load_json(path: Path, *, default: dict[str, Any]) -> dict[str, Any]:

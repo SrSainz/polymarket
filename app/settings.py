@@ -45,7 +45,16 @@ class BotConfig(BaseModel):
     market_feed_stale_seconds: float = 2.5
     spot_feed_enabled: bool = True
     spot_feed_stale_seconds: float = 1.5
+    microstructure_enabled: bool = True
+    microstructure_log_events: bool = True
+    decision_readiness_min_score: float = 70.0
+    decision_min_taker_edge_bps: float = 8.0
+    decision_min_maker_edge_bps: float = 6.0
+    liquidation_feed_enabled: bool = True
+    liquidation_bybit_symbol: str = "BTCUSDT"
+    shadow_mode_enabled: bool = False
     execution_mode: Literal["paper", "live"] = "paper"
+    live_execution_profile: Literal["taker_fok", "taker_fak", "maker_gtd", "maker_post_only_gtc"] = "taker_fak"
     dry_run: bool = True
     strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "btc5m_orderbook"
     strategy_entry_mode: Literal["buy_above", "buy_opposite", "vidarx_micro", "arb_micro"] = "arb_micro"
@@ -147,6 +156,7 @@ class BotConfig(BaseModel):
     runtime_diagnostics_execution_limit: int = 200
     runtime_diagnostics_decision_limit: int = 1200
     runtime_guard_enabled: bool = True
+    paper_runtime_guard_enabled: bool = False
     runtime_guard_lookback_minutes: int = 180
     runtime_guard_loss_streak: int = 3
     runtime_guard_max_recent_pnl: float = -35.0
@@ -349,7 +359,10 @@ class EnvSettings(BaseModel):
     gamma_api_host: str = "https://gamma-api.polymarket.com"
     clob_host: str = "https://clob.polymarket.com"
     clob_ws_host: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    polymarket_user_ws_host: str = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
     spot_ws_host: str = "wss://ws-live-data.polymarket.com"
+    binance_liquidation_ws_host: str = "wss://fstream.binance.com/ws/!forceOrder@arr"
+    bybit_liquidation_ws_host: str = "wss://stream.bybit.com/v5/public/linear"
 
     polymarket_private_key: str = ""
     polymarket_chain_id: int = 137
@@ -376,7 +389,10 @@ class EnvSettings(BaseModel):
             gamma_api_host=os.getenv("POLYMARKET_GAMMA_API_HOST", "https://gamma-api.polymarket.com"),
             clob_host=os.getenv("POLYMARKET_CLOB_HOST", "https://clob.polymarket.com"),
             clob_ws_host=os.getenv("POLYMARKET_CLOB_WS_HOST", "wss://ws-subscriptions-clob.polymarket.com/ws/market"),
+            polymarket_user_ws_host=os.getenv("POLYMARKET_USER_WS_HOST", "wss://ws-subscriptions-clob.polymarket.com/ws/user"),
             spot_ws_host=os.getenv("POLYMARKET_SPOT_WS_HOST", "wss://ws-live-data.polymarket.com"),
+            binance_liquidation_ws_host=os.getenv("BINANCE_LIQUIDATION_WS_HOST", "wss://fstream.binance.com/ws/!forceOrder@arr"),
+            bybit_liquidation_ws_host=os.getenv("BYBIT_LIQUIDATION_WS_HOST", "wss://stream.bybit.com/v5/public/linear"),
             polymarket_private_key=os.getenv("POLYMARKET_PRIVATE_KEY", ""),
             polymarket_chain_id=int(os.getenv("POLYMARKET_CHAIN_ID", "137")),
             polymarket_funder=os.getenv("POLYMARKET_FUNDER", ""),

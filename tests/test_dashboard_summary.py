@@ -6,7 +6,15 @@ from pathlib import Path
 from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
-from app.services.dashboard_server import _apply_live_control_action, _reset_runtime_state, _summary_payload
+from app.services.dashboard_server import (
+    _apply_live_control_action,
+    _latency_payload,
+    _liquidations_payload,
+    _metrics_payload,
+    _microstructure_payload,
+    _reset_runtime_state,
+    _summary_payload,
+)
 
 
 def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
@@ -545,3 +553,62 @@ def test_reset_runtime_state_clears_strategy_runtime_keys(tmp_path: Path) -> Non
     assert db.get_bot_state("runtime_guard_state") is None
     assert db.get_bot_state("live_control_state") == "paused"
     db.close()
+
+
+def test_dashboard_payloads_expose_microstructure_runtime_files(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.close()
+
+    runtime_root = tmp_path / "research" / "runtime"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (runtime_root / "microstructure_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-19T11:00:00Z",
+                "market_slug": "btc-updown-5m-test",
+                "market_title": "Bitcoin Up or Down - Test",
+                "note": "telemetry snapshot",
+                "frame": {"readiness_score": 81.5, "regime": "directional_pressure", "pair_sum_bps": -14.0},
+                "decision": {"selected_execution": "taker_fak", "expected_edge_bps": 12.4},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_root / "liquidations_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-19T11:00:00Z",
+                "totals": {"buy_30s": 12000.0, "sell_30s": 4000.0},
+                "recent": [{"exchange": "binance", "side": "buy", "notional": 12000.0, "price": 70200.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (runtime_root / "latency_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-19T11:00:00Z",
+                "latencies": {"market_event_lag_ms": 42.0, "spot_age_ms": 18, "feature_compute_ms": 1.7},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    assert summary["microstructure_snapshot"]["frame"]["readiness_score"] == 81.5
+    assert summary["liquidations_snapshot"]["totals"]["buy_30s"] == 12000.0
+    assert summary["latency_snapshot"]["latencies"]["market_event_lag_ms"] == 42.0
+    assert _microstructure_payload(db_path)["market_slug"] == "btc-updown-5m-test"
+    assert _liquidations_payload(db_path)["recent"][0]["exchange"] == "binance"
+    assert _latency_payload(db_path)["latencies"]["feature_compute_ms"] == 1.7
+    metrics = _metrics_payload(db_path)
+    assert "pm_readiness_score 81.500000" in metrics
+    assert "pm_liq_buy_notional_30s 12000.000000" in metrics

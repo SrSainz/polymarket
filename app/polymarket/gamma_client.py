@@ -93,6 +93,19 @@ class GammaClient:
         parts = [item for item in category.replace("_", "-").split("-") if item]
         return list(dict.fromkeys([category, *parts]))
 
+    def prefetch_next_btc5m_window(self, reference_slug: str) -> dict[str, Any] | None:
+        safe_slug = str(reference_slug or "").strip()
+        if not safe_slug.startswith("btc-updown-5m-"):
+            return None
+        suffix = safe_slug.rsplit("-", 1)[-1]
+        if not suffix.isdigit():
+            return None
+        next_slug = f"btc-updown-5m-{int(suffix) + 300}"
+        try:
+            return self.get_market_by_slug(next_slug)
+        except requests.RequestException:
+            return None
+
     def _get_market_by_slug_direct(self, slug: str) -> dict[str, Any] | None:
         try:
             response = self.session.get(

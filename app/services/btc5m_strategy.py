@@ -10,15 +10,23 @@ from decimal import Decimal, ROUND_DOWN
 
 from app.core.autonomous_decider import AutonomousDecider
 from app.core.bankroll import calculate_effective_bankroll, calculate_reserved_profit
+from app.core.decision_engine import ReadinessScorer, RegimeDetector, StrategyEngine
+from app.core.event_bus import EventBus
+from app.core.execution_engine import ExecutionEngine
+from app.core.feature_engine import FeatureEngine
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
 from app.core.risk import RiskManager
+from app.core.state_store import StateStore
 from app.core.strategy_registry import active_variant_metadata
+from app.core.telemetry import MicrostructureTelemetry
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.clob_client import CLOBClient
 from app.polymarket.gamma_client import GammaClient
 from app.polymarket.spot_feed import SpotFeed, SpotSnapshot
+from app.polymarket.user_feed import UserFeed
+from app.services.liquidation_feed import LiquidationFeed
 from app.services.runtime_diagnostics import RuntimeDiagnosticsService, evaluate_runtime_guard
 from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
@@ -112,6 +120,12 @@ _ARB_STABILIZE_MAX_NEG_NET_EDGE = -0.015
 _ARB_STABILIZE_PROGRESS_FRACTION = 0.35
 _ARB_STABILIZE_BUDGET_FRACTION = 0.18
 _ARB_STABILIZE_MIN_DELTA_BPS = 1.0
+_ARB_UNWIND_RATIO_TRIGGER = 0.18
+_ARB_UNWIND_EXTREME_RATIO = 0.88
+_ARB_UNWIND_MAX_FAIR_DISCOUNT = 0.03
+_ARB_UNWIND_PROGRESS_FRACTION = 0.50
+_ARB_UNWIND_BUDGET_FRACTION = 0.35
+_ARB_UNWIND_MIN_DELTA_BPS = 1.5
 _ARB_BURST_COOLDOWN_MIN_SECONDS = 0.8
 _ARB_BURST_COOLDOWN_MAX_SECONDS = 2.6
 _ARB_MAX_PLAN_INSTRUCTIONS = 72
@@ -282,6 +296,8 @@ class BTC5mStrategyService:
         logger: logging.Logger,
         runtime_diagnostics: RuntimeDiagnosticsService | None = None,
         spot_feed: SpotFeed | None = None,
+        liquidation_feed: LiquidationFeed | None = None,
+        user_feed: UserFeed | None = None,
     ) -> None:
         self.db = db
         self.gamma_client = gamma_client
@@ -295,7 +311,35 @@ class BTC5mStrategyService:
         self.logger = logger
         self.runtime_diagnostics = runtime_diagnostics
         self.spot_feed = spot_feed
+        self.liquidation_feed = liquidation_feed
+        self.user_feed = user_feed
         self.risk = RiskManager(settings.config)
+        self.execution_engine = ExecutionEngine(
+            db=self.db,
+            research_dir=self.settings.paths.research_dir,
+            paper_broker=self.paper_broker,
+            live_broker=self.live_broker,
+        )
+        self.event_bus = EventBus()
+        self.state_store = StateStore()
+        self.feature_engine = FeatureEngine()
+        self.readiness_scorer = ReadinessScorer(min_score=self.settings.config.decision_readiness_min_score)
+        self.regime_detector = RegimeDetector()
+        self.micro_strategy_engine = StrategyEngine(
+            min_taker_edge_bps=self.settings.config.decision_min_taker_edge_bps,
+            min_maker_edge_bps=self.settings.config.decision_min_maker_edge_bps,
+        )
+        self.telemetry = MicrostructureTelemetry(
+            db=self.db,
+            research_dir=self.settings.paths.research_dir,
+            bus=self.event_bus,
+            state_store=self.state_store,
+            feature_engine=self.feature_engine,
+            readiness_scorer=self.readiness_scorer,
+            regime_detector=self.regime_detector,
+            strategy_engine=self.micro_strategy_engine,
+            log_events=self.settings.config.microstructure_log_events,
+        )
         self._cached_market: dict | None = None
         self._cached_market_expires_at = 0.0
         self._official_price_cache: dict[str, tuple[float, float]] = {}
@@ -303,6 +347,7 @@ class BTC5mStrategyService:
         self._last_cycle_log_at = 0.0
         self._last_market_lookup_warning_signature = ""
         self._last_market_lookup_warning_at = 0.0
+        self._attach_runtime_feeds()
 
     def run(self, mode: str = "paper") -> dict[str, int]:
         handler_name = str(self.settings.config.strategy_entry_mode or "").strip()
@@ -528,7 +573,7 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        self._settle_resolved_paper_positions(stats)
+        self._settle_resolved_paper_positions(mode=mode, stats=stats)
         total_exposure = self.db.get_total_exposure()
         cash_balance, allowance = self._live_cash_snapshot(mode="paper")
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
@@ -727,7 +772,7 @@ class BTC5mStrategyService:
         filled_notional = 0.0
         for instruction in plan.instructions:
             try:
-                result = self.paper_broker.execute(instruction)
+                result = self._execute_instruction(mode=mode, instruction=instruction)
             except Exception as error:  # noqa: BLE001
                 stats["failed"] += 1
                 note = f"arb_micro execution failed: {error}"
@@ -860,7 +905,7 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        self._settle_resolved_paper_positions(stats)
+        self._settle_resolved_paper_positions(mode=mode, stats=stats)
         total_exposure = self.db.get_total_exposure()
         cash_balance, allowance = self._live_cash_snapshot(mode="paper")
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
@@ -1013,7 +1058,7 @@ class BTC5mStrategyService:
         filled_notional = 0.0
         for instruction in plan.instructions:
             try:
-                result = self.paper_broker.execute(instruction)
+                result = self._execute_instruction(mode=mode, instruction=instruction)
             except Exception as error:  # noqa: BLE001
                 stats["failed"] += 1
                 note = f"vidarx_micro execution failed: {error}"
@@ -1145,6 +1190,7 @@ class BTC5mStrategyService:
             self._cached_market = dict(market)
             self._cached_market_expires_at = time.monotonic() + _MARKET_METADATA_CACHE_SECONDS
             self._prime_market_feed(market)
+            self._prefetch_next_window(market)
             return market
         if (
             lookup_failed
@@ -1178,6 +1224,18 @@ class BTC5mStrategyService:
                 track_assets(token_ids)
             except Exception as error:  # noqa: BLE001
                 self.logger.debug("market feed prime skipped: %s", error)
+
+    def _prefetch_next_window(self, market: dict) -> None:
+        slug = str(market.get("slug") or "").strip()
+        if not slug:
+            return
+        prefetch = getattr(self.gamma_client, "prefetch_next_btc5m_window", None)
+        if not callable(prefetch):
+            return
+        try:
+            prefetch(slug)
+        except Exception as error:  # noqa: BLE001
+            self.logger.debug("next window prefetch skipped: %s", error)
 
     def _incomplete_book_note(self, *, label: str, book: dict) -> str:
         missing: list[str] = []
@@ -1938,6 +1996,25 @@ class BTC5mStrategyService:
         )
         if stabilize_plan is not None:
             return self._with_arb_reference_state(stabilize_plan, reference_state)
+        unwind_plan = self._build_arb_inventory_unwind_plan(
+            market=market,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            pair_sum=pair_sum,
+            fair_up=fair_up,
+            fair_down=fair_down,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_up_ratio,
+            timing_regime=timing_regime,
+            cycle_budget=cycle_budget,
+            current_up_notional=current_up_notional,
+            current_down_notional=current_down_notional,
+            spot_context=spot_context,
+            bracket_phase=bracket_phase,
+            carry_note=carry_note,
+        )
+        if unwind_plan is not None:
+            return self._with_arb_reference_state(unwind_plan, reference_state)
         delta_note = f" | delta {spot_context.delta_bps:+.1f}bps" if spot_context is not None else ""
         self._record_strategy_snapshot(
             market=market,
@@ -3267,6 +3344,155 @@ class BTC5mStrategyService:
             bracket_phase=bracket_phase,
         )
 
+    def _build_arb_inventory_unwind_plan(
+        self,
+        *,
+        market: dict,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        pair_sum: float,
+        fair_up: float,
+        fair_down: float,
+        desired_up_ratio: float,
+        current_up_ratio: float,
+        timing_regime: str,
+        cycle_budget: float,
+        current_up_notional: float,
+        current_down_notional: float,
+        spot_context: ArbSpotContext | None,
+        bracket_phase: str,
+        carry_note: str = "",
+    ) -> StrategyPlan | None:
+        if bracket_phase != "redistribuir" or spot_context is None:
+            return None
+
+        desired_down_ratio = max(1.0 - desired_up_ratio, 0.0)
+        if current_up_ratio >= _ARB_UNWIND_EXTREME_RATIO:
+            target = up_outcome
+            target_fair = fair_up
+            target_ratio = current_up_ratio
+            desired_target_ratio = desired_up_ratio
+            current_target_notional = current_up_notional
+            other_notional = current_down_notional
+            if spot_context.delta_bps >= -_ARB_UNWIND_MIN_DELTA_BPS:
+                return None
+        elif current_up_ratio <= (1.0 - _ARB_UNWIND_EXTREME_RATIO):
+            target = down_outcome
+            target_fair = fair_down
+            target_ratio = max(1.0 - current_up_ratio, 0.0)
+            desired_target_ratio = desired_down_ratio
+            current_target_notional = current_down_notional
+            other_notional = current_up_notional
+            if spot_context.delta_bps <= _ARB_UNWIND_MIN_DELTA_BPS:
+                return None
+        else:
+            return None
+
+        ratio_gap = target_ratio - desired_target_ratio
+        if ratio_gap < _ARB_UNWIND_RATIO_TRIGGER:
+            return None
+
+        directional_target = self._arb_directional_target(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            spot_context=spot_context,
+            seconds_remaining=max(300 - self._seconds_into_window(market), 0),
+        )
+        if directional_target is not None and directional_target.asset_id == target.asset_id:
+            return None
+
+        sell_edge = target.best_bid - target_fair
+        if sell_edge < -_ARB_UNWIND_MAX_FAIR_DISCOUNT:
+            return None
+
+        target_position = self.db.get_copy_position(target.asset_id)
+        if target_position is None:
+            return None
+        current_position_size = float(target_position["size"] or 0.0)
+        if current_position_size <= 0 or target.best_bid <= 0:
+            return None
+
+        numerator = current_target_notional - (desired_target_ratio * (current_target_notional + other_notional))
+        needed_notional = numerator / max(1.0 - desired_target_ratio, 1e-9)
+        if needed_notional <= 0:
+            return None
+
+        unwind_budget = _round_down(
+            min(
+                needed_notional * _ARB_UNWIND_PROGRESS_FRACTION,
+                cycle_budget * _ARB_UNWIND_BUDGET_FRACTION,
+                current_target_notional,
+                current_position_size * target.best_bid,
+            ),
+            "0.01",
+        )
+        if unwind_budget < self._arb_min_notional():
+            return None
+
+        unwind_size = _round_down(min(unwind_budget / target.best_bid, current_position_size), "0.0001")
+        instruction = self._build_arb_sell_instruction(
+            market=market,
+            target=target,
+            shares=unwind_size,
+            price=target.best_bid,
+            pair_sum=pair_sum,
+            tranche_index=1,
+            reason_prefix="inventory_unwind",
+        )
+        if instruction is None:
+            return None
+
+        reduced_notional = instruction.notional
+        projected_up_notional = current_up_notional - (reduced_notional if target.asset_id == up_outcome.asset_id else 0.0)
+        projected_down_notional = current_down_notional - (
+            reduced_notional if target.asset_id == down_outcome.asset_id else 0.0
+        )
+        current_ratio_after = self._arb_current_up_ratio(
+            up_exposure=max(projected_up_notional, 0.0),
+            down_exposure=max(projected_down_notional, 0.0),
+        )
+        note = (
+            f"unwind {target.label} bid {target.best_bid:.3f} vs fair {target_fair:.3f} | "
+            f"sell edge {sell_edge * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
+            f"{timing_regime} | ventas 1 | "
+            f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
+            f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
+            f"fase {bracket_phase}{carry_note}"
+        )
+        return StrategyPlan(
+            instructions=(instruction,),
+            note=note,
+            primary_target=target,
+            secondary_target=None,
+            trigger=target,
+            window_seconds=self._seconds_into_window(market),
+            cycle_budget=round(reduced_notional, 6),
+            market_bias=f"Desapalancar {target.label}",
+            timing_regime=timing_regime,
+            price_mode="inventory-unwind",
+            primary_ratio=1.0,
+            primary_notional=reduced_notional,
+            secondary_notional=0.0,
+            replenishment_count=0,
+            trigger_value=target.best_bid,
+            pair_sum=pair_sum,
+            edge_pct=max(sell_edge, 0.0),
+            fair_value=target_fair,
+            spot_price=spot_context.current_price,
+            spot_anchor=spot_context.anchor_price,
+            spot_delta_bps=spot_context.delta_bps,
+            spot_fair_up=spot_context.fair_up,
+            spot_fair_down=spot_context.fair_down,
+            spot_source=spot_context.source,
+            spot_price_mode=spot_context.price_mode,
+            spot_age_ms=spot_context.age_ms,
+            spot_binance_price=spot_context.binance_price or 0.0,
+            spot_chainlink_price=spot_context.chainlink_price or 0.0,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_ratio_after,
+            bracket_phase=bracket_phase,
+        )
+
     def _ordered_targets_by_notional(
         self,
         *,
@@ -3443,6 +3669,47 @@ class BTC5mStrategyService:
             outcome=target.label,
             category="crypto",
             reason=f"arb_micro:pair:{pair_sum:.3f}:tranche-{tranche_index}",
+        )
+
+    def _build_arb_sell_instruction(
+        self,
+        *,
+        market: dict,
+        target: MarketOutcome,
+        shares: float,
+        price: float,
+        pair_sum: float,
+        tranche_index: int,
+        reason_prefix: str,
+    ) -> CopyInstruction | None:
+        existing = self.db.get_copy_position(target.asset_id)
+        if existing is None or shares <= 0 or price <= 0:
+            return None
+        current_size = float(existing["size"] or 0.0)
+        if current_size <= 0:
+            return None
+
+        size = _round_down(min(shares, current_size), "0.0001")
+        notional = _round_down(size * price, "0.01")
+        if size <= 0 or notional < self._arb_min_notional():
+            return None
+
+        action = SignalAction.CLOSE if size >= (current_size - 1e-9) else SignalAction.REDUCE
+        return CopyInstruction(
+            action=action,
+            side=TradeSide.SELL,
+            asset=target.asset_id,
+            condition_id=str(market.get("conditionId") or ""),
+            size=size,
+            price=price,
+            notional=size * price,
+            source_wallet="strategy:arb_micro",
+            source_signal_id=0,
+            title=str(market.get("question") or market.get("slug") or ""),
+            slug=str(market.get("slug") or ""),
+            outcome=target.label,
+            category="crypto",
+            reason=f"arb_micro:{reason_prefix}:{pair_sum:.3f}:tranche-{tranche_index}",
         )
 
     def _build_vidarx_plan(
@@ -4029,6 +4296,7 @@ class BTC5mStrategyService:
             snapshot_state["strategy_official_price_to_beat"] = f"{official_price_to_beat:.6f}"
         else:
             snapshot_state.setdefault("strategy_official_price_to_beat", "0.000000")
+        self._snapshot_microstructure_state(market=market, note=note)
         operability_state = self._derive_strategy_operability_state(note=note, extra_state=snapshot_state)
         self.db.set_bot_state("strategy_mode", self.settings.config.strategy_mode)
         self.db.set_bot_state("strategy_entry_mode", self.settings.config.strategy_entry_mode)
@@ -4629,6 +4897,79 @@ class BTC5mStrategyService:
         )
         return stats
 
+    def _attach_runtime_feeds(self) -> None:
+        market_feed = getattr(self.clob_client, "market_feed", None)
+        if market_feed is not None and hasattr(market_feed, "register_listener"):
+            market_feed.register_listener(self.event_bus.publish)
+        if self.spot_feed is not None and hasattr(self.spot_feed, "register_listener"):
+            self.spot_feed.register_listener(self.event_bus.publish)
+        if self.liquidation_feed is not None and hasattr(self.liquidation_feed, "register_listener"):
+            self.liquidation_feed.register_listener(self._handle_liquidation_payload)
+        if self.user_feed is not None and hasattr(self.user_feed, "register_listener"):
+            self.user_feed.register_listener(self._handle_user_payload)
+
+    def _handle_liquidation_payload(self, payload: dict[str, object]) -> None:
+        self.event_bus.emit(
+            kind="liquidation",
+            source=f"liquidation:{str(payload.get('exchange') or 'unknown')}",
+            payload=dict(payload),
+            asset_id=str(payload.get("symbol") or ""),
+            ts_exchange_ms=int(_safe_float(payload.get("timestamp"))),
+        )
+
+    def _handle_user_payload(self, payload: dict[str, object]) -> None:
+        event_type = str(payload.get("event_type") or payload.get("type") or "user_update").strip().lower()
+        kind = "user_trade" if event_type in {"trade", "matched"} else "user_order"
+        self.event_bus.emit(
+            kind=kind,
+            source="polymarket-user-ws",
+            payload=dict(payload),
+            asset_id=str(payload.get("asset_id") or payload.get("token_id") or ""),
+            market_id=str(payload.get("market") or payload.get("condition_id") or ""),
+            ts_exchange_ms=int(_safe_float(payload.get("timestamp") or payload.get("match_time") or payload.get("created_at"))),
+        )
+
+    def _snapshot_microstructure_state(
+        self,
+        *,
+        market: dict | None,
+        note: str,
+    ) -> None:
+        if not self.settings.config.microstructure_enabled:
+            return
+        up_exposure, down_exposure = self._current_market_exposure_split(market)
+        seconds_into_window = self._seconds_into_window(market) if market is not None else 0
+        spot_snapshot = self.spot_feed.get_snapshot() if self.spot_feed is not None else None
+        official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
+        self.telemetry.snapshot_market(
+            market=market,
+            official_price_to_beat=official_price_to_beat,
+            spot_snapshot=spot_snapshot,
+            seconds_into_window=seconds_into_window,
+            current_up_exposure=up_exposure,
+            current_down_exposure=down_exposure,
+            note=note,
+        )
+
+    def _current_market_exposure_split(self, market: dict | None) -> tuple[float, float]:
+        if market is None:
+            return 0.0, 0.0
+        slug = str(market.get("slug") or "").strip()
+        if not slug:
+            return 0.0, 0.0
+        up_exposure = 0.0
+        down_exposure = 0.0
+        for row in self.db.list_copy_positions():
+            if str(row["slug"] or "").strip() != slug:
+                continue
+            notional = abs(float(row["size"] or 0.0) * float(row["avg_price"] or 0.0))
+            outcome = str(row["outcome"] or "").strip().lower()
+            if outcome == "up":
+                up_exposure += notional
+            elif outcome == "down":
+                down_exposure += notional
+        return up_exposure, down_exposure
+
     def _log_cycle_summary(
         self,
         *,
@@ -4710,7 +5051,24 @@ class BTC5mStrategyService:
 
     def _runtime_guard_can_open(self, *, mode: str = "paper") -> tuple[bool, str]:
         if not self.settings.config.runtime_guard_enabled:
+            self.db.set_bot_state("runtime_guard_profile", "global-disabled")
             self.db.set_bot_state("runtime_guard_state", "disabled")
+            self.db.set_bot_state("runtime_guard_until", "0")
+            self.db.set_bot_state("runtime_guard_reason", "")
+            self.db.set_bot_state("runtime_guard_remaining_minutes", "0")
+            self.db.set_bot_state("runtime_guard_recent_close_count", "0")
+            self.db.set_bot_state("runtime_guard_recent_close_pnl", "0.000000")
+            self.db.set_bot_state("runtime_guard_loss_streak", "0")
+            return True, ""
+        if mode == "paper" and not self.settings.config.paper_runtime_guard_enabled:
+            self.db.set_bot_state("runtime_guard_profile", "paper-disabled")
+            self.db.set_bot_state("runtime_guard_state", "disabled")
+            self.db.set_bot_state("runtime_guard_until", "0")
+            self.db.set_bot_state("runtime_guard_reason", "")
+            self.db.set_bot_state("runtime_guard_remaining_minutes", "0")
+            self.db.set_bot_state("runtime_guard_recent_close_count", "0")
+            self.db.set_bot_state("runtime_guard_recent_close_pnl", "0.000000")
+            self.db.set_bot_state("runtime_guard_loss_streak", "0")
             return True, ""
         if mode == "paper":
             lookback_minutes = max(self.settings.config.paper_runtime_guard_lookback_minutes, 1)
@@ -4773,8 +5131,12 @@ class BTC5mStrategyService:
             live_allowed, live_control_note = self._live_control_can_execute(mode=mode)
             if not live_allowed:
                 raise RuntimeError(live_control_note)
-            return self.live_broker.execute(instruction)
-        return self.paper_broker.execute(instruction)
+        if mode in {"live", "shadow"} and not str(instruction.execution_profile or "").strip():
+            decision = self.telemetry.latest_decision() if self.telemetry is not None else None
+            selected_execution = str(getattr(decision, "selected_execution", "") or "").strip().lower()
+            if selected_execution and selected_execution != "no_trade":
+                instruction = instruction.model_copy(update={"execution_profile": selected_execution})
+        return self.execution_engine.execute(mode=mode, instruction=instruction)
 
     def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:
         if self.settings.config.strategy_entry_mode in {"vidarx_micro", "arb_micro"}:
@@ -5308,7 +5670,7 @@ class BTC5mStrategyService:
             reason=f"vidarx_micro:{reason_label}:{entry_kind}:{bucket_price:.2f}:tranche-{tranche_index}",
         )
 
-    def _settle_resolved_paper_positions(self, stats: dict[str, int]) -> None:
+    def _settle_resolved_paper_positions(self, stats: dict[str, int], mode: str = "paper") -> None:
         if not self.db.list_copy_positions():
             return
 
@@ -5345,7 +5707,7 @@ class BTC5mStrategyService:
                 category=str(row["category"] or "crypto"),
                 reason=f"strategy_resolution:{slug}:{row['outcome'] or ''}",
             )
-            result = self.paper_broker.execute(instruction)
+            result = self._execute_instruction(mode=mode, instruction=instruction)
             stats["opportunities"] += 1
             if result.status == "filled":
                 stats["filled"] += 1

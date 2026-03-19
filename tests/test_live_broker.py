@@ -12,6 +12,7 @@ class _FakeCLOBClient:
     def __init__(self, response: dict | None = None) -> None:
         self.response = response or {"orderID": "live-123", "status": "matched"}
         self.calls: list[dict] = []
+        self.limit_calls: list[dict] = []
 
     def place_market_order(
         self,
@@ -31,6 +32,28 @@ class _FakeCLOBClient:
                 "notional": notional,
                 "limit_price": limit_price,
                 "order_type": order_type,
+            }
+        )
+        return dict(self.response)
+
+    def place_limit_order(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        price: float,
+        size: float,
+        order_type: str = "GTC",
+        post_only: bool = False,
+    ) -> dict:
+        self.limit_calls.append(
+            {
+                "token_id": token_id,
+                "side": side,
+                "price": price,
+                "size": size,
+                "order_type": order_type,
+                "post_only": post_only,
             }
         )
         return dict(self.response)
@@ -176,3 +199,25 @@ def test_live_broker_skips_when_orderbook_is_missing(tmp_path: Path) -> None:
     assert float(position["size"]) == 10.0
     assert executions == []
     db.close()
+
+
+def test_live_broker_maker_profile_submits_limit_order_without_mutating_position(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    clob = _FakeCLOBClient(response={"orderID": "maker-1", "status": "live"})
+    broker = LiveBroker(
+        db,
+        clob,
+        EnvSettings(live_trading=True),
+        execution_profile="maker_post_only_gtc",
+    )
+
+    result = broker.execute(
+        _instruction(side=TradeSide.BUY, action=SignalAction.OPEN, size=10.0, price=0.42)
+    )
+
+    assert result.status == "submitted"
+    assert db.get_copy_position("asset-1") is None
+    assert clob.calls == []
+    assert clob.limit_calls[0]["order_type"] == "GTC"
+    assert clob.limit_calls[0]["post_only"] is True

@@ -8,6 +8,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.event_bus import BaseEvent
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -66,6 +68,7 @@ class SpotFeed:
         self._basis_updated_at = 0.0
         self._rest_snapshot: SpotSnapshot | None = None
         self._rest_snapshot_at = 0.0
+        self._listeners: list[callable] = []
 
         self.session = requests.Session()
         retries = Retry(
@@ -105,6 +108,10 @@ class SpotFeed:
         if signaled:
             self._update_event.clear()
         return signaled
+
+    def register_listener(self, listener) -> None:  # noqa: ANN001
+        if listener not in self._listeners:
+            self._listeners.append(listener)
 
     def get_snapshot(self) -> SpotSnapshot:
         now = time.time()
@@ -244,7 +251,11 @@ class SpotFeed:
             return
 
         updated = False
-        for symbol, price in _iter_price_points(payload):
+        for item in _iter_spot_events(payload):
+            symbol = str(item.get("symbol") or "").strip().lower()
+            price = _coerce_price(item.get("price"))
+            if not symbol or price is None:
+                continue
             now = time.time()
             with self._lock:
                 self._prices[symbol] = (price, now)
@@ -260,6 +271,14 @@ class SpotFeed:
                         self._basis = price - binance
                         self._basis_updated_at = now
             updated = True
+            self._emit_event(
+                symbol=symbol,
+                price=price,
+                side=str(item.get("side") or ""),
+                quantity=float(item.get("quantity") or 0.0),
+                timestamp_ms=int(item.get("timestamp_ms") or 0),
+                source_kind=str(item.get("source_kind") or ""),
+            )
         if updated:
             self._update_event.set()
 
@@ -305,6 +324,39 @@ class SpotFeed:
         if abs(ts - target_ts) <= tolerance_seconds:
             return price
         return None
+
+    def _emit_event(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        side: str,
+        quantity: float,
+        timestamp_ms: int,
+        source_kind: str,
+    ) -> None:
+        if not self._listeners:
+            return
+        recv_ns = time.time_ns()
+        payload = {
+            "symbol": symbol,
+            "price": price,
+            "side": str(side or "").strip().lower(),
+            "quantity": float(quantity or 0.0),
+            "source_kind": source_kind,
+            "timestamp": int(timestamp_ms or 0),
+        }
+        event = BaseEvent(
+            kind="spot_price",
+            source=f"spot-feed:{self._ws_kind}",
+            payload=payload,
+            asset_id=symbol,
+            ts_exchange_ms=int(timestamp_ms or 0),
+            ts_recv_ns=recv_ns,
+            ts_process_ns=recv_ns,
+        )
+        for listener in list(self._listeners):
+            listener(event)
 
     def _fetch_rest_snapshot(self) -> SpotSnapshot:
         prices: dict[str, float | None] = {"btcusdt": None, "btc/usd": None}
@@ -368,12 +420,25 @@ class SpotFeed:
 
 
 def _iter_price_points(payload: Any) -> list[tuple[str, float]]:
-    points: list[tuple[str, float]] = []
-    _walk_price_points(payload, points)
+    points = [(str(item.get("symbol") or ""), float(item["price"])) for item in _iter_spot_events(payload) if item.get("price") is not None]
     deduped: dict[str, float] = {}
     for symbol, price in points:
         deduped[symbol] = price
     return list(deduped.items())
+
+
+def _iter_spot_events(payload: Any) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    _walk_spot_events(payload, events)
+    deduped: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for item in events:
+        key = (
+            str(item.get("symbol") or ""),
+            int(item.get("timestamp_ms") or 0),
+            str(item.get("source_kind") or ""),
+        )
+        deduped[key] = item
+    return list(deduped.values())
 
 
 def _polymarket_prices_subscription_message() -> str:
@@ -391,10 +456,10 @@ def _polymarket_chainlink_subscription_message() -> str:
     )
 
 
-def _walk_price_points(payload: Any, sink: list[tuple[str, float]]) -> None:
+def _walk_spot_events(payload: Any, sink: list[dict[str, Any]]) -> None:
     if isinstance(payload, list):
         for item in payload:
-            _walk_price_points(item, sink)
+            _walk_spot_events(item, sink)
         return
 
     if not isinstance(payload, dict):
@@ -409,14 +474,32 @@ def _walk_price_points(payload: Any, sink: list[tuple[str, float]]) -> None:
                     continue
                 historical_price = _extract_price(item)
                 if historical_price is not None:
-                    sink.append((symbol, historical_price))
+                    sink.append(
+                        {
+                            "symbol": symbol,
+                            "price": historical_price,
+                            "quantity": _coerce_quantity(item.get("q") or item.get("size") or item.get("v")),
+                            "side": _extract_side(item),
+                            "timestamp_ms": int(_coerce_quantity(item.get("timestamp") or item.get("T") or item.get("E") or 0)),
+                            "source_kind": _extract_source_kind(item),
+                        }
+                    )
                     break
     price = _extract_price(payload)
     if symbol and price is not None:
-        sink.append((symbol, price))
+        sink.append(
+            {
+                "symbol": symbol,
+                "price": price,
+                "quantity": _coerce_quantity(payload.get("q") or payload.get("size") or payload.get("v")),
+                "side": _extract_side(payload),
+                "timestamp_ms": int(_coerce_quantity(payload.get("timestamp") or payload.get("T") or payload.get("E") or 0)),
+                "source_kind": _extract_source_kind(payload),
+            }
+        )
 
     for value in payload.values():
-        _walk_price_points(value, sink)
+        _walk_spot_events(value, sink)
 
 
 def _normalize_symbol(raw_symbol: object) -> str:
@@ -440,6 +523,39 @@ def _extract_price(payload: dict[str, Any]) -> float | None:
     if best_bid is not None and best_ask is not None:
         return (best_bid + best_ask) / 2
     return None
+
+
+def _extract_side(payload: dict[str, Any]) -> str:
+    side = str(payload.get("side") or "").strip().lower()
+    if side in {"buy", "sell"}:
+        return side
+    buyer_is_maker = payload.get("m")
+    if buyer_is_maker is True:
+        return "sell"
+    if buyer_is_maker is False:
+        return "buy"
+    return "unknown"
+
+
+def _extract_source_kind(payload: dict[str, Any]) -> str:
+    event_type = str(payload.get("e") or payload.get("type") or payload.get("topic") or "").strip().lower()
+    if event_type:
+        return event_type
+    if "best_bid" in payload or "best_ask" in payload:
+        return "book_ticker"
+    return "price"
+
+
+def _coerce_quantity(raw_value: object) -> float:
+    if raw_value is None:
+        return 0.0
+    try:
+        quantity = float(raw_value)
+    except (TypeError, ValueError):
+        return 0.0
+    if quantity <= 0:
+        return 0.0
+    return quantity
 
 
 def _coerce_price(raw_value: object) -> float | None:

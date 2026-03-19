@@ -8,6 +8,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from app.core.event_bus import BaseEvent
+
 try:
     import websocket
 except ImportError:  # pragma: no cover - optional dependency at runtime
@@ -49,6 +51,7 @@ class MarketFeed:
         self._update_event = threading.Event()
         self._ws_app = None
         self._warned_unavailable = False
+        self._listeners: list[callable] = []
 
     def ensure_assets(self, asset_ids: list[str] | tuple[str, ...]) -> bool:
         normalized = tuple(sorted({str(asset).strip() for asset in asset_ids if str(asset).strip()}))
@@ -155,6 +158,10 @@ class MarketFeed:
             self._update_event.clear()
         return signaled
 
+    def register_listener(self, listener) -> None:  # noqa: ANN001
+        if listener not in self._listeners:
+            self._listeners.append(listener)
+
     def _ws_supported(self) -> bool:
         if not self.enabled:
             return False
@@ -181,7 +188,7 @@ class MarketFeed:
             def on_open(ws_app) -> None:  # noqa: ANN001
                 self._connected_event.set()
                 try:
-                    ws_app.send(json.dumps({"type": "market", "assets_ids": list(asset_ids)}))
+                    ws_app.send(json.dumps({"type": "market", "assets_ids": list(asset_ids), "custom_feature_enabled": True}))
                 except Exception as error:  # noqa: BLE001
                     self.logger.warning("market feed subscribe failed: %s", error)
                     return
@@ -256,6 +263,15 @@ class MarketFeed:
                 continue
             if event_type == "best_bid_ask":
                 self._apply_best_bid_ask_payload(item)
+                continue
+            if event_type == "last_trade_price":
+                self._emit_trade_payload(item)
+                continue
+            if event_type == "tick_size_change":
+                self._emit_event("tick_size_change", item)
+                continue
+            if event_type in {"new_market", "market_resolved"}:
+                self._emit_event(event_type, item)
 
     def _store_book_from_payload(self, payload: dict[str, Any]) -> None:
         asset_id = _payload_asset_id(payload)
@@ -266,6 +282,7 @@ class MarketFeed:
             self._books[asset_id] = book
             self._updated_at[asset_id] = time.time()
         self._update_event.set()
+        self._emit_event("book_snapshot", {"asset_id": asset_id, "book": deepcopy(book), **payload}, asset_id=asset_id)
 
     def _apply_price_change_payload(self, payload: dict[str, Any]) -> None:
         asset_id = _payload_asset_id(payload)
@@ -277,6 +294,7 @@ class MarketFeed:
             self._books[asset_id] = updated
             self._updated_at[asset_id] = time.time()
         self._update_event.set()
+        self._emit_event("book_delta", {"asset_id": asset_id, "book": deepcopy(updated), **payload}, asset_id=asset_id)
 
     def _apply_best_bid_ask_payload(self, payload: dict[str, Any]) -> None:
         asset_id = _payload_asset_id(payload)
@@ -288,6 +306,33 @@ class MarketFeed:
             self._books[asset_id] = updated
             self._updated_at[asset_id] = time.time()
         self._update_event.set()
+        self._emit_event("best_bid_ask", {"asset_id": asset_id, "book": deepcopy(updated), **payload}, asset_id=asset_id)
+
+    def _emit_trade_payload(self, payload: dict[str, Any]) -> None:
+        normalized = _normalized_trade_payload(payload)
+        if normalized is None:
+            return
+        self._update_event.set()
+        self._emit_event("market_trade", normalized, asset_id=str(normalized.get("asset_id") or ""))
+
+    def _emit_event(self, kind: str, payload: dict[str, Any], *, asset_id: str | None = None) -> None:
+        if not self._listeners:
+            return
+        recv_ns = time.time_ns()
+        event = BaseEvent(
+            kind=str(kind or "").strip() or "unknown",
+            source="polymarket-market-ws",
+            payload=dict(payload or {}),
+            market_id=str(payload.get("market") or ""),
+            asset_id=asset_id or _payload_asset_id(payload),
+            window_id=str(payload.get("slug") or ""),
+            ts_exchange_ms=int(_coerce_float(payload.get("timestamp") or payload.get("matchtime") or payload.get("event_time") or 0)),
+            ts_recv_ns=recv_ns,
+            ts_process_ns=recv_ns,
+            seq=int(_coerce_float(payload.get("id") or payload.get("seq") or 0)) or None,
+        )
+        for listener in list(self._listeners):
+            listener(event)
 
 
 def _payload_asset_id(payload: dict[str, Any]) -> str:
@@ -304,6 +349,26 @@ def _canonical_book(payload: dict[str, Any]) -> dict[str, list[dict[str, str]]] 
     if not bids and not asks:
         return None
     return {"bids": bids, "asks": asks}
+
+
+def _normalized_trade_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    asset_id = _payload_asset_id(payload)
+    price = _coerce_float(payload.get("price") or payload.get("last_trade_price"))
+    size = _coerce_float(payload.get("size") or payload.get("quantity") or payload.get("matched_amount"))
+    side = str(payload.get("side") or payload.get("aggressor_side") or payload.get("taker_side") or "").strip().lower()
+    if not asset_id or price <= 0 or size <= 0:
+        return None
+    if side not in {"buy", "sell"}:
+        side = "unknown"
+    return {
+        **payload,
+        "asset_id": asset_id,
+        "price": price,
+        "size": size,
+        "notional": price * size,
+        "side": side,
+        "timestamp": int(_coerce_float(payload.get("timestamp") or payload.get("matchtime") or payload.get("event_time") or 0)),
+    }
 
 
 def _apply_price_changes(book: dict[str, list[dict[str, str]]], payload: dict[str, Any]) -> dict[str, list[dict[str, str]]]:

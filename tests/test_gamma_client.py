@@ -157,3 +157,31 @@ def test_get_market_by_slug_refreshes_event_when_first_event_payload_is_incomple
     second_market = client.get_market_by_slug(slug)
     assert second_market is not None
     assert second_market["events"][0]["eventMetadata"]["priceToBeat"] == 71840.27507838454
+
+
+def test_prefetch_next_btc5m_window_fetches_following_slug() -> None:
+    base_url = "https://gamma-api.polymarket.com"
+    session = _FakeSession(
+        {
+            (f"{base_url}/markets/slug/btc-updown-5m-1773913800", ()): _FakeResponse(
+                {
+                    "slug": "btc-updown-5m-1773913800",
+                    "question": "Bitcoin Up or Down",
+                    "events": [{"eventMetadata": {"priceToBeat": 72000.0}}],
+                }
+            )
+        }
+    )
+    client = GammaClient(base_url)
+    client.session = session
+
+    market = client.prefetch_next_btc5m_window("btc-updown-5m-1773913500")
+
+    assert market is not None
+    assert market["slug"] == "btc-updown-5m-1773913800"
+
+
+def test_prefetch_next_btc5m_window_ignores_non_matching_slug() -> None:
+    client = GammaClient("https://gamma-api.polymarket.com")
+
+    assert client.prefetch_next_btc5m_window("some-other-market") is None
