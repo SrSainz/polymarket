@@ -83,6 +83,24 @@ def test_report_includes_variant_and_incubation_summary(tmp_path: Path) -> None:
         json.dumps({"generated_at": "2026-03-18T09:00:00Z", "windows": 2, "events": 60, "trades": 4}),
         encoding="utf-8",
     )
+    (research_root / "runtime").mkdir(parents=True, exist_ok=True)
+    (research_root / "runtime" / "diagnostics_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-18T11:00:00Z",
+                "status": "watch",
+                "summary": "Estado watch: stale book moderado.",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "title": "Latencia del libro",
+                        "detail": "Muchas decisiones bloqueadas por book_age_ms.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     content, path = ReportService(db, tmp_path / "reports").generate()
 
@@ -93,6 +111,8 @@ def test_report_includes_variant_and_incubation_summary(tmp_path: Path) -> None:
     assert "btc-updown-5m-report" in content
     assert "Lista para escalar" in content
     assert "## Backtest / Experiments" in content
+    assert "## Runtime Diagnostics" in content
+    assert "Latencia del libro" in content
     assert "## Native Dataset" in content
     assert "## Wallet Hypotheses" in content
     assert "Priorizar variantes crypto-first" in content

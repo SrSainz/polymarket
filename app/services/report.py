@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.incubation_policy import evaluate_incubation_progress
-from app.core.lab_artifacts import load_dataset_summary, load_experiment_leaderboard, load_wallet_hypotheses
+from app.core.lab_artifacts import (
+    load_dataset_summary,
+    load_experiment_leaderboard,
+    load_runtime_diagnostics,
+    load_wallet_hypotheses,
+)
 from app.core.strategy_monitoring import build_incubation_summary, build_recent_resolution_windows
 from app.db import Database
 
@@ -46,6 +51,7 @@ class ReportService:
         research_root = self.reports_dir.parent / "research"
         experiment_payload = load_experiment_leaderboard(research_root)
         dataset_payload = load_dataset_summary(research_root)
+        diagnostics_payload = load_runtime_diagnostics(research_root)
         wallet_payload = load_wallet_hypotheses(research_root)
         active_experiment = _active_experiment_row(experiment_payload, variant=strategy_variant)
         incubation_transition = evaluate_incubation_progress(
@@ -101,6 +107,23 @@ class ReportService:
             lines.append(f"- Fill rate: {float(active_experiment.get('fill_rate') or 0.0) * 100:.2f}%")
             lines.append(f"- Hit rate: {float(active_experiment.get('hit_rate') or 0.0) * 100:.2f}%")
             lines.append(f"- Real edge: {float(active_experiment.get('real_edge_bps') or 0.0):.2f} bps")
+        lines.append("")
+        lines.append("## Runtime Diagnostics")
+        lines.append(f"- Generated at: {diagnostics_payload.get('generated_at') or '-'}")
+        lines.append(f"- Status: {diagnostics_payload.get('status') or '-'}")
+        lines.append(f"- Summary: {diagnostics_payload.get('summary') or '-'}")
+        findings = diagnostics_payload.get("findings") if isinstance(diagnostics_payload.get("findings"), list) else []
+        if not findings:
+            lines.append("- Findings: None")
+        else:
+            for item in findings[:4]:
+                if not isinstance(item, dict):
+                    continue
+                lines.append(
+                    "- "
+                    f"[{item.get('severity') or 'info'}] {item.get('title') or '-'} | "
+                    f"{item.get('detail') or ''}"
+                )
         lines.append("")
         lines.append("## Native Dataset")
         lines.append(f"- Generated at: {dataset_payload.get('generated_at') or '-'}")

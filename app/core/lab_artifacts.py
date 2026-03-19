@@ -25,6 +25,10 @@ def dataset_windows_dir(research_root: Path) -> Path:
     return research_root / "datasets" / "btc5m" / "windows"
 
 
+def runtime_diagnostics_path(research_root: Path) -> Path:
+    return research_root / "runtime" / "diagnostics_latest.json"
+
+
 def load_experiment_leaderboard(research_root: Path) -> dict[str, Any]:
     return _load_json(experiment_leaderboard_path(research_root), default={"generated_at": "", "variants": []})
 
@@ -35,6 +39,13 @@ def load_wallet_hypotheses(research_root: Path) -> dict[str, Any]:
 
 def load_dataset_summary(research_root: Path) -> dict[str, Any]:
     return _load_json(dataset_summary_path(research_root), default={"generated_at": "", "windows": 0, "events": 0, "bundles": []})
+
+
+def load_runtime_diagnostics(research_root: Path) -> dict[str, Any]:
+    return _load_json(
+        runtime_diagnostics_path(research_root),
+        default={"generated_at": "", "status": "unknown", "summary": "", "findings": []},
+    )
 
 
 def dump_json(path: Path, payload: dict[str, Any]) -> None:

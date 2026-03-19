@@ -19,6 +19,7 @@ from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.clob_client import CLOBClient
 from app.polymarket.gamma_client import GammaClient
 from app.polymarket.spot_feed import SpotFeed, SpotSnapshot
+from app.services.runtime_diagnostics import RuntimeDiagnosticsService, evaluate_runtime_guard
 from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.settings import AppSettings
@@ -272,6 +273,7 @@ class BTC5mStrategyService:
         trade_notifier: TelegramTradeNotifierService,
         settings: AppSettings,
         logger: logging.Logger,
+        runtime_diagnostics: RuntimeDiagnosticsService | None = None,
         spot_feed: SpotFeed | None = None,
     ) -> None:
         self.db = db
@@ -284,6 +286,7 @@ class BTC5mStrategyService:
         self.trade_notifier = trade_notifier
         self.settings = settings
         self.logger = logger
+        self.runtime_diagnostics = runtime_diagnostics
         self.spot_feed = spot_feed
         self.risk = RiskManager(settings.config)
         self._cached_market: dict | None = None
@@ -339,6 +342,20 @@ class BTC5mStrategyService:
                 mode=mode,
                 stats=stats,
                 note=live_control_note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        guard_allowed, guard_note = self._runtime_guard_can_open()
+        if not guard_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(note=guard_note)
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=guard_note,
                 cash_balance=cash_balance,
                 allowance=allowance,
                 total_exposure=total_exposure,
@@ -540,6 +557,23 @@ class BTC5mStrategyService:
                 mode="paper",
                 stats=stats,
                 note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        guard_allowed, guard_note = self._runtime_guard_can_open()
+        if not guard_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                note=guard_note,
+                extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=guard_note,
                 cash_balance=cash_balance,
                 allowance=allowance,
                 total_exposure=total_exposure,
@@ -850,6 +884,23 @@ class BTC5mStrategyService:
                 mode="paper",
                 stats=stats,
                 note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        guard_allowed, guard_note = self._runtime_guard_can_open()
+        if not guard_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                note=guard_note,
+                extra_state=self._vidarx_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=guard_note,
                 cash_balance=cash_balance,
                 allowance=allowance,
                 total_exposure=total_exposure,
@@ -4283,6 +4334,11 @@ class BTC5mStrategyService:
         live_total_capital: float,
     ) -> dict[str, int]:
         self._run_autonomous_exits(mode=mode, stats=stats)
+        if self.runtime_diagnostics is not None:
+            try:
+                self.runtime_diagnostics.generate_if_due()
+            except Exception as error:  # noqa: BLE001
+                self.logger.warning("runtime diagnostics generation failed: %s", error)
         self.daily_summary.send_if_due()
         self._log_cycle_summary(
             mode=mode,
@@ -4373,6 +4429,53 @@ class BTC5mStrategyService:
             return True, ""
         reason = str(self.db.get_bot_state("live_control_reason") or "").strip()
         return False, reason or "live pausado desde el live control center"
+
+    def _runtime_guard_can_open(self) -> tuple[bool, str]:
+        if not self.settings.config.runtime_guard_enabled:
+            self.db.set_bot_state("runtime_guard_state", "disabled")
+            return True, ""
+        now_ts = int(time.time())
+        try:
+            existing_until = int(str(self.db.get_bot_state("runtime_guard_until") or "0").strip())
+        except (TypeError, ValueError):
+            existing_until = 0
+        existing_reason = str(self.db.get_bot_state("runtime_guard_reason") or "").strip()
+        if existing_until > now_ts:
+            remaining_minutes = max(int((existing_until - now_ts) / 60), 1)
+            self.db.set_bot_state("runtime_guard_state", "cooldown")
+            self.db.set_bot_state("runtime_guard_remaining_minutes", str(remaining_minutes))
+            message = existing_reason or "cooldown por mal rendimiento reciente"
+            return False, f"runtime guard {remaining_minutes}m: {message}"
+
+        cutoff_ts = now_ts - max(self.settings.config.runtime_guard_lookback_minutes, 1) * 60
+        execution_limit = max(self.settings.config.runtime_diagnostics_execution_limit, 50)
+        recent_executions = self.db.get_recent_executions_since(cutoff_ts, limit=execution_limit)
+        decision = evaluate_runtime_guard(
+            recent_executions,
+            now_ts=now_ts,
+            lookback_minutes=self.settings.config.runtime_guard_lookback_minutes,
+            loss_streak_limit=self.settings.config.runtime_guard_loss_streak,
+            max_recent_close_pnl=self.settings.config.runtime_guard_max_recent_pnl,
+            cooldown_minutes=self.settings.config.runtime_guard_cooldown_minutes,
+        )
+        self.db.set_bot_state("runtime_guard_recent_close_count", str(int(decision["recent_close_count"])))
+        self.db.set_bot_state("runtime_guard_recent_close_pnl", f"{float(decision['recent_close_pnl']):.6f}")
+        self.db.set_bot_state("runtime_guard_loss_streak", str(int(decision["consecutive_losses"])))
+        if decision["blocked"]:
+            self.db.set_bot_state("runtime_guard_state", "cooldown")
+            self.db.set_bot_state("runtime_guard_until", str(int(decision["cooldown_until"])))
+            self.db.set_bot_state("runtime_guard_reason", str(decision["reason"]))
+            self.db.set_bot_state(
+                "runtime_guard_remaining_minutes",
+                str(max(self.settings.config.runtime_guard_cooldown_minutes, 1)),
+            )
+            return False, f"runtime guard: {decision['reason']}"
+
+        self.db.set_bot_state("runtime_guard_state", "ready")
+        self.db.set_bot_state("runtime_guard_until", "0")
+        self.db.set_bot_state("runtime_guard_reason", "")
+        self.db.set_bot_state("runtime_guard_remaining_minutes", "0")
+        return True, ""
 
     def _execute_instruction(self, *, mode: str, instruction: CopyInstruction) -> ExecutionResult:
         if mode == "live":

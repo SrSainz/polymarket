@@ -15,6 +15,7 @@ from app.core.incubation_policy import evaluate_incubation_progress
 from app.core.lab_artifacts import (
     load_dataset_summary,
     load_experiment_leaderboard,
+    load_runtime_diagnostics,
     load_wallet_hypotheses,
     research_root_from_db,
 )
@@ -269,6 +270,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_entry_mode = _bot_state_text(conn, "strategy_entry_mode")
         strategy_variant = _bot_state_text(conn, "strategy_variant") or "default"
         strategy_notes = _bot_state_text(conn, "strategy_notes")
+        runtime_guard_state = _bot_state_text(conn, "runtime_guard_state")
+        runtime_guard_reason = _bot_state_text(conn, "runtime_guard_reason")
+        runtime_guard_until = _bot_state_int(conn, "runtime_guard_until")
+        runtime_guard_remaining_minutes = _bot_state_int(conn, "runtime_guard_remaining_minutes")
         strategy_incubation_stage = _bot_state_text(conn, "strategy_incubation_stage")
         strategy_incubation_auto_promote = _bot_state_int(conn, "strategy_incubation_auto_promote")
         strategy_incubation_min_days = _bot_state_int(conn, "strategy_incubation_min_days")
@@ -370,6 +375,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
 
     experiment_payload = load_experiment_leaderboard(research_root)
     dataset_payload = load_dataset_summary(research_root)
+    diagnostics_payload = load_runtime_diagnostics(research_root)
     wallet_payload = load_wallet_hypotheses(research_root)
     active_experiment = _active_experiment_row(experiment_payload, variant=strategy_variant)
     incubation_transition = evaluate_incubation_progress(
@@ -635,6 +641,14 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_variant_leaderboard": variant_leaderboard,
         "strategy_wallet_patterns": wallet_patterns,
         "strategy_wallet_hypotheses": wallet_hypotheses,
+        "runtime_diagnostics_generated_at": str(diagnostics_payload.get("generated_at") or ""),
+        "runtime_diagnostics_status": str(diagnostics_payload.get("status") or ""),
+        "runtime_diagnostics_summary": str(diagnostics_payload.get("summary") or ""),
+        "runtime_diagnostics_findings": diagnostics_payload.get("findings") if isinstance(diagnostics_payload.get("findings"), list) else [],
+        "runtime_guard_state": str(runtime_guard_state or ""),
+        "runtime_guard_reason": str(runtime_guard_reason or ""),
+        "runtime_guard_until": int(runtime_guard_until),
+        "runtime_guard_remaining_minutes": int(runtime_guard_remaining_minutes),
         "strategy_dataset_generated_at": str(dataset_payload.get("generated_at") or ""),
         "strategy_dataset_windows": int(dataset_payload.get("windows") or 0),
         "strategy_dataset_events": int(dataset_payload.get("events") or 0),

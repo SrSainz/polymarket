@@ -44,6 +44,19 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_operability_reason", "Hay plan activo y el motor esta ejecutando o acompanando el bracket actual.")
     db.set_bot_state("strategy_operability_blocking", "0")
     db.close()
+    runtime_dir = tmp_path / "research" / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    (runtime_dir / "diagnostics_latest.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-19T10:00:00Z",
+                "status": "degraded",
+                "summary": "Estado degraded: 2 hallazgos.",
+                "findings": [{"severity": "medium", "title": "Libro viejo", "detail": "stale book alto"}],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     summary = _summary_payload(
         db_path,
@@ -68,6 +81,8 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     assert summary["strategy_operability_label"] == "Comprando"
     assert summary["strategy_operability_reason"].startswith("Hay plan activo")
     assert summary["strategy_operability_blocking"] is False
+    assert summary["runtime_diagnostics_status"] == "degraded"
+    assert summary["runtime_diagnostics_findings"][0]["title"] == "Libro viejo"
 
 
 def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:

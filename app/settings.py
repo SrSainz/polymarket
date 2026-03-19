@@ -139,6 +139,16 @@ class BotConfig(BaseModel):
     telegram_status_summary_enabled: bool = False
     telegram_status_summary_interval_minutes: int = 30
     telegram_status_summary_recent_limit: int = 5
+    runtime_diagnostics_enabled: bool = True
+    runtime_diagnostics_interval_minutes: int = 60
+    runtime_diagnostics_lookback_minutes: int = 180
+    runtime_diagnostics_execution_limit: int = 200
+    runtime_diagnostics_decision_limit: int = 1200
+    runtime_guard_enabled: bool = True
+    runtime_guard_lookback_minutes: int = 180
+    runtime_guard_loss_streak: int = 3
+    runtime_guard_max_recent_pnl: float = -35.0
+    runtime_guard_cooldown_minutes: int = 45
 
     max_position_per_market: float = 75.0
     max_total_exposure: float = 250.0
@@ -252,6 +262,20 @@ class BotConfig(BaseModel):
             raise ValueError("spot_feed_stale_seconds must be > 0")
         if self.dynamic_max_allocation_pct < 0 or self.dynamic_max_allocation_pct > 1:
             raise ValueError("dynamic_max_allocation_pct must be between 0 and 1")
+        if self.runtime_diagnostics_interval_minutes < 1:
+            raise ValueError("runtime_diagnostics_interval_minutes must be >= 1")
+        if self.runtime_diagnostics_lookback_minutes < 1:
+            raise ValueError("runtime_diagnostics_lookback_minutes must be >= 1")
+        if self.runtime_diagnostics_execution_limit < 1:
+            raise ValueError("runtime_diagnostics_execution_limit must be >= 1")
+        if self.runtime_diagnostics_decision_limit < 1:
+            raise ValueError("runtime_diagnostics_decision_limit must be >= 1")
+        if self.runtime_guard_lookback_minutes < 1:
+            raise ValueError("runtime_guard_lookback_minutes must be >= 1")
+        if self.runtime_guard_loss_streak < 1:
+            raise ValueError("runtime_guard_loss_streak must be >= 1")
+        if self.runtime_guard_cooldown_minutes < 1:
+            raise ValueError("runtime_guard_cooldown_minutes must be >= 1")
         if self.btc5m_reserved_notional < 0:
             raise ValueError("btc5m_reserved_notional must be >= 0")
         if self.btc5m_reserved_allocation_pct < 0 or self.btc5m_reserved_allocation_pct > 1:

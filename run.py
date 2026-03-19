@@ -21,6 +21,7 @@ from app.services.dashboard_server import run_dashboard_server
 from app.services.experiment_runner import ExperimentRunner
 from app.services.historical_dataset_builder import HistoricalDatasetBuilder
 from app.services.report import ReportService
+from app.services.runtime_diagnostics import RuntimeDiagnosticsService
 from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.services.wallet_pattern_miner import WalletPatternMiner
@@ -60,6 +61,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyS
     autonomous_decider = AutonomousDecider(settings.config, db)
     daily_summary = TelegramDailySummaryService(db, settings.config, settings.env, logger)
     trade_notifier = TelegramTradeNotifierService(settings.config, settings.env, logger)
+    runtime_diagnostics = RuntimeDiagnosticsService(db, settings.paths.research_dir, settings, logger)
 
     strategy_service = BTC5mStrategyService(
         db,
@@ -72,6 +74,7 @@ def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyS
         trade_notifier,
         settings,
         logger,
+        runtime_diagnostics=runtime_diagnostics,
         spot_feed=spot_feed,
     )
     report_service = ReportService(db, settings.paths.reports_dir)
@@ -147,7 +150,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BTC 5m microstructure lab for Polymarket")
     parser.add_argument(
         "command",
-        choices=["paper", "live", "once", "dashboard", "report", "dataset", "experiments", "hypotheses"],
+        choices=["paper", "live", "once", "dashboard", "report", "dataset", "experiments", "hypotheses", "diagnostics"],
         help="Command to run",
     )
     return parser.parse_args()
@@ -247,6 +250,16 @@ def main() -> int:
             print(
                 "hypotheses => "
                 f"wallets={len(payload.get('wallets', []))} hypotheses={len(payload.get('hypotheses', []))}"
+            )
+            return 0
+
+        if args.command == "diagnostics":
+            diagnostics = RuntimeDiagnosticsService(db, settings.paths.research_dir, settings)
+            payload = diagnostics.generate()
+            print(
+                "diagnostics => "
+                f"status={payload['status']} findings={len(payload.get('findings', []))} "
+                f"summary={payload['summary']}"
             )
             return 0
 
