@@ -67,6 +67,10 @@ runtime_guard_lookback_minutes: 180
 runtime_guard_loss_streak: 3
 runtime_guard_max_recent_pnl: -35.0
 runtime_guard_cooldown_minutes: 45
+paper_runtime_guard_lookback_minutes: 180
+paper_runtime_guard_loss_streak: 4
+paper_runtime_guard_max_recent_pnl: -90.0
+paper_runtime_guard_cooldown_minutes: 15
 
 allowed_tags:
   - "crypto"

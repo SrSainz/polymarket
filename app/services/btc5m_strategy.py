@@ -370,7 +370,7 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        guard_allowed, guard_note = self._runtime_guard_can_open()
+        guard_allowed, guard_note = self._runtime_guard_can_open(mode=mode)
         if not guard_allowed:
             stats["blocked"] += 1
             self._record_strategy_snapshot(market=market, note=guard_note)
@@ -589,7 +589,7 @@ class BTC5mStrategyService:
             )
 
         seconds_into_window = self._seconds_into_window(market)
-        guard_allowed, guard_note = self._runtime_guard_can_open()
+        guard_allowed, guard_note = self._runtime_guard_can_open(mode="paper")
         if not guard_allowed:
             stats["blocked"] += 1
             self._record_strategy_snapshot(
@@ -923,7 +923,7 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        guard_allowed, guard_note = self._runtime_guard_can_open()
+        guard_allowed, guard_note = self._runtime_guard_can_open(mode="paper")
         if not guard_allowed:
             stats["blocked"] += 1
             self._record_strategy_snapshot(
@@ -4708,10 +4708,23 @@ class BTC5mStrategyService:
         reason = str(self.db.get_bot_state("live_control_reason") or "").strip()
         return False, reason or "live pausado desde el live control center"
 
-    def _runtime_guard_can_open(self) -> tuple[bool, str]:
+    def _runtime_guard_can_open(self, *, mode: str = "paper") -> tuple[bool, str]:
         if not self.settings.config.runtime_guard_enabled:
             self.db.set_bot_state("runtime_guard_state", "disabled")
             return True, ""
+        if mode == "paper":
+            lookback_minutes = max(self.settings.config.paper_runtime_guard_lookback_minutes, 1)
+            loss_streak_limit = max(self.settings.config.paper_runtime_guard_loss_streak, 1)
+            max_recent_close_pnl = float(self.settings.config.paper_runtime_guard_max_recent_pnl)
+            cooldown_minutes = max(self.settings.config.paper_runtime_guard_cooldown_minutes, 1)
+            guard_profile = "paper"
+        else:
+            lookback_minutes = max(self.settings.config.runtime_guard_lookback_minutes, 1)
+            loss_streak_limit = max(self.settings.config.runtime_guard_loss_streak, 1)
+            max_recent_close_pnl = float(self.settings.config.runtime_guard_max_recent_pnl)
+            cooldown_minutes = max(self.settings.config.runtime_guard_cooldown_minutes, 1)
+            guard_profile = "live"
+        self.db.set_bot_state("runtime_guard_profile", guard_profile)
         now_ts = int(time.time())
         try:
             existing_until = int(str(self.db.get_bot_state("runtime_guard_until") or "0").strip())
@@ -4725,16 +4738,16 @@ class BTC5mStrategyService:
             message = existing_reason or "cooldown por mal rendimiento reciente"
             return False, f"runtime guard {remaining_minutes}m: {message}"
 
-        cutoff_ts = now_ts - max(self.settings.config.runtime_guard_lookback_minutes, 1) * 60
+        cutoff_ts = now_ts - lookback_minutes * 60
         execution_limit = max(self.settings.config.runtime_diagnostics_execution_limit, 50)
         recent_executions = self.db.get_recent_executions_since(cutoff_ts, limit=execution_limit)
         decision = evaluate_runtime_guard(
             recent_executions,
             now_ts=now_ts,
-            lookback_minutes=self.settings.config.runtime_guard_lookback_minutes,
-            loss_streak_limit=self.settings.config.runtime_guard_loss_streak,
-            max_recent_close_pnl=self.settings.config.runtime_guard_max_recent_pnl,
-            cooldown_minutes=self.settings.config.runtime_guard_cooldown_minutes,
+            lookback_minutes=lookback_minutes,
+            loss_streak_limit=loss_streak_limit,
+            max_recent_close_pnl=max_recent_close_pnl,
+            cooldown_minutes=cooldown_minutes,
         )
         self.db.set_bot_state("runtime_guard_recent_close_count", str(int(decision["recent_close_count"])))
         self.db.set_bot_state("runtime_guard_recent_close_pnl", f"{float(decision['recent_close_pnl']):.6f}")
@@ -4745,7 +4758,7 @@ class BTC5mStrategyService:
             self.db.set_bot_state("runtime_guard_reason", str(decision["reason"]))
             self.db.set_bot_state(
                 "runtime_guard_remaining_minutes",
-                str(max(self.settings.config.runtime_guard_cooldown_minutes, 1)),
+                str(cooldown_minutes),
             )
             return False, f"runtime guard: {decision['reason']}"
 

@@ -2955,7 +2955,7 @@ def test_runtime_guard_primes_feed_and_marks_operability_blocking(tmp_path: Path
         logger=logging.getLogger("test-btc5m-runtime-guard"),
         spot_feed=None,
     )
-    service._runtime_guard_can_open = lambda: (False, "runtime guard 35m: PnL reciente -60.79")  # type: ignore[method-assign]
+    service._runtime_guard_can_open = lambda mode="paper": (False, "runtime guard 35m: PnL reciente -60.79")  # type: ignore[method-assign]
 
     stats = service.run(mode="paper")
 
@@ -2969,6 +2969,51 @@ def test_runtime_guard_primes_feed_and_marks_operability_blocking(tmp_path: Path
     assert db.get_bot_state("strategy_operability_label") == "Guardado por riesgo"
     assert db.get_bot_state("strategy_operability_blocking") == "1"
     assert "runtime guard" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_runtime_guard_uses_paper_profile_thresholds(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            paper_runtime_guard_lookback_minutes=90,
+            paper_runtime_guard_loss_streak=5,
+            paper_runtime_guard_max_recent_pnl=-120.0,
+            paper_runtime_guard_cooldown_minutes=12,
+        ),
+        logger=logging.getLogger("test-btc5m-paper-runtime-guard"),
+        spot_feed=None,
+    )
+
+    with patch("app.services.btc5m_strategy.evaluate_runtime_guard") as evaluate_mock:
+        evaluate_mock.return_value = {
+            "blocked": False,
+            "recent_close_count": 0,
+            "recent_close_pnl": 0.0,
+            "consecutive_losses": 0,
+            "cooldown_until": 0,
+            "reason": "",
+        }
+        allowed, note = service._runtime_guard_can_open(mode="paper")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.get_bot_state("runtime_guard_profile") == "paper"
+    _, kwargs = evaluate_mock.call_args
+    assert kwargs["lookback_minutes"] == 90
+    assert kwargs["loss_streak_limit"] == 5
+    assert kwargs["max_recent_close_pnl"] == -120.0
+    assert kwargs["cooldown_minutes"] == 12
     db.close()
 
 
