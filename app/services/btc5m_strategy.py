@@ -105,6 +105,13 @@ _ARB_REPAIR_NET_EDGE_FLOOR = 0.005
 _ARB_REPAIR_FAIR_SLACK = 0.02
 _ARB_REPAIR_PROGRESS_FRACTION = 0.65
 _ARB_REPAIR_BUDGET_FRACTION = 0.45
+_ARB_STABILIZE_RATIO_TRIGGER = 0.22
+_ARB_STABILIZE_EXTREME_RATIO = 0.90
+_ARB_STABILIZE_MAX_PAIR_SUM = 1.015
+_ARB_STABILIZE_MAX_NEG_NET_EDGE = -0.015
+_ARB_STABILIZE_PROGRESS_FRACTION = 0.35
+_ARB_STABILIZE_BUDGET_FRACTION = 0.18
+_ARB_STABILIZE_MIN_DELTA_BPS = 1.0
 _ARB_BURST_COOLDOWN_MIN_SECONDS = 0.8
 _ARB_BURST_COOLDOWN_MAX_SECONDS = 2.6
 _ARB_MAX_PLAN_INSTRUCTIONS = 72
@@ -1373,11 +1380,6 @@ class BTC5mStrategyService:
         slug = str(market.get("slug") or "")
         condition_id = str(market.get("conditionId") or "")
         existing_market_notional = self._get_condition_exposure(condition_id)
-        current_up_notional, current_down_notional = self._get_condition_outcome_exposures(condition_id)
-        current_up_ratio = self._arb_current_up_ratio(
-            up_exposure=current_up_notional,
-            down_exposure=current_down_notional,
-        )
         window_state = self.db.get_strategy_window(slug)
         market_cap = self._arb_market_exposure_cap(effective_bankroll)
         total_cap = self._arb_total_exposure_cap(effective_bankroll)
@@ -1420,6 +1422,17 @@ class BTC5mStrategyService:
         else:
             primary_target, secondary_target = up_outcome, down_outcome
 
+        current_up_notional, current_down_notional = self._get_condition_outcome_exposures(
+            condition_id,
+            price_marks={
+                up_outcome.asset_id: self._arb_mark_price(up_outcome),
+                down_outcome.asset_id: self._arb_mark_price(down_outcome),
+            },
+        )
+        current_up_ratio = self._arb_current_up_ratio(
+            up_exposure=current_up_notional,
+            down_exposure=current_down_notional,
+        )
         pair_sum = up_outcome.best_ask + down_outcome.best_ask
         directional_target = self._arb_directional_target(
             up_outcome=up_outcome,
@@ -1902,6 +1915,29 @@ class BTC5mStrategyService:
         )
         if repair_plan is not None:
             return self._with_arb_reference_state(repair_plan, reference_state)
+        stabilize_plan = self._build_arb_stabilize_plan(
+            market=market,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            pair_sum=pair_sum,
+            fair_up=fair_up,
+            fair_down=fair_down,
+            up_net_edge=up_net_edge,
+            down_net_edge=down_net_edge,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_up_ratio,
+            timing_regime=timing_regime,
+            cycle_budget=cycle_budget,
+            cash_balance=cash_balance,
+            remaining_instruction_capacity=remaining_instruction_capacity,
+            current_up_notional=current_up_notional,
+            current_down_notional=current_down_notional,
+            spot_context=spot_context,
+            bracket_phase=bracket_phase,
+            carry_note=carry_note,
+        )
+        if stabilize_plan is not None:
+            return self._with_arb_reference_state(stabilize_plan, reference_state)
         delta_note = f" | delta {spot_context.delta_bps:+.1f}bps" if spot_context is not None else ""
         self._record_strategy_snapshot(
             market=market,
@@ -2353,23 +2389,40 @@ class BTC5mStrategyService:
     def _arb_total_exposure_cap(self, effective_bankroll: float) -> float:
         return max(self._arb_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
 
-    def _get_condition_outcome_exposures(self, condition_id: str) -> tuple[float, float]:
+    def _get_condition_outcome_exposures(
+        self,
+        condition_id: str,
+        *,
+        price_marks: dict[str, float] | None = None,
+    ) -> tuple[float, float]:
         up_exposure = 0.0
         down_exposure = 0.0
+        marks = price_marks or {}
         for row in self.db.list_copy_positions():
             if str(row["condition_id"] or "") != condition_id:
                 continue
             size = float(row["size"] or 0.0)
             avg_price = float(row["avg_price"] or 0.0)
-            if size <= 0 or avg_price <= 0:
+            asset = str(row["asset"] or "")
+            mark_price = _safe_float(marks.get(asset))
+            if mark_price <= 0:
+                mark_price = avg_price
+            if size <= 0 or mark_price <= 0:
                 continue
-            exposure = abs(size * avg_price)
+            exposure = abs(size * mark_price)
             outcome = str(row["outcome"] or "").strip().lower()
             if outcome == "up":
                 up_exposure += exposure
             elif outcome == "down":
                 down_exposure += exposure
         return up_exposure, down_exposure
+
+    def _arb_mark_price(self, outcome: MarketOutcome) -> float:
+        if outcome.best_bid > 0 and outcome.best_ask > 0:
+            return (outcome.best_bid + outcome.best_ask) / 2
+        if outcome.best_bid > 0:
+            return outcome.best_bid
+        return outcome.best_ask
 
     def _arb_current_up_ratio(self, *, up_exposure: float, down_exposure: float) -> float:
         total = up_exposure + down_exposure
@@ -3044,6 +3097,171 @@ class BTC5mStrategyService:
             spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
             spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
             spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_ratio_after,
+            bracket_phase=bracket_phase,
+        )
+
+    def _build_arb_stabilize_plan(
+        self,
+        *,
+        market: dict,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        pair_sum: float,
+        fair_up: float,
+        fair_down: float,
+        up_net_edge: float,
+        down_net_edge: float,
+        desired_up_ratio: float,
+        current_up_ratio: float,
+        timing_regime: str,
+        cycle_budget: float,
+        cash_balance: float,
+        remaining_instruction_capacity: int,
+        current_up_notional: float,
+        current_down_notional: float,
+        spot_context: ArbSpotContext | None,
+        bracket_phase: str,
+        carry_note: str = "",
+    ) -> StrategyPlan | None:
+        if bracket_phase != "redistribuir" or spot_context is None:
+            return None
+        ratio_gap = desired_up_ratio - current_up_ratio
+        ratio_gap_abs = abs(ratio_gap)
+        if ratio_gap_abs < _ARB_STABILIZE_RATIO_TRIGGER:
+            return None
+        if pair_sum > _ARB_STABILIZE_MAX_PAIR_SUM:
+            return None
+        if current_up_ratio < (1.0 - _ARB_STABILIZE_EXTREME_RATIO) or current_up_ratio > _ARB_STABILIZE_EXTREME_RATIO:
+            extreme_imbalance = True
+        else:
+            extreme_imbalance = False
+        if not extreme_imbalance:
+            return None
+
+        seconds_remaining = max(300 - self._seconds_into_window(market), 0)
+        directional_target = self._arb_directional_target(
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            spot_context=spot_context,
+            seconds_remaining=seconds_remaining,
+        )
+        desired_down_ratio = max(1.0 - desired_up_ratio, 0.0)
+        if ratio_gap > 0:
+            target = up_outcome
+            fair_value = fair_up
+            net_edge = up_net_edge
+            desired_target_ratio = desired_up_ratio
+            current_target_notional = current_up_notional
+            other_notional = current_down_notional
+            if spot_context.delta_bps < _ARB_STABILIZE_MIN_DELTA_BPS:
+                return None
+        else:
+            target = down_outcome
+            fair_value = fair_down
+            net_edge = down_net_edge
+            desired_target_ratio = desired_down_ratio
+            current_target_notional = current_down_notional
+            other_notional = current_up_notional
+            if spot_context.delta_bps > -_ARB_STABILIZE_MIN_DELTA_BPS:
+                return None
+
+        if directional_target is not None and target.asset_id != directional_target.asset_id:
+            return None
+        if desired_target_ratio <= 0 or desired_target_ratio >= 0.999:
+            return None
+        if target.best_ask > fair_value + _ARB_REPAIR_FAIR_SLACK:
+            return None
+        if net_edge < _ARB_STABILIZE_MAX_NEG_NET_EDGE:
+            return None
+
+        numerator = (desired_target_ratio * (current_target_notional + other_notional)) - current_target_notional
+        needed_notional = numerator / max(1.0 - desired_target_ratio, 1e-9)
+        if needed_notional <= 0:
+            return None
+
+        stabilize_budget = _round_down(
+            min(
+                needed_notional * _ARB_STABILIZE_PROGRESS_FRACTION,
+                cycle_budget * _ARB_STABILIZE_BUDGET_FRACTION,
+                cash_balance,
+            ),
+            "0.01",
+        )
+        if stabilize_budget < self._arb_min_notional():
+            return None
+
+        stabilize_levels = self._build_arb_repair_levels(
+            target=target,
+            budget=stabilize_budget,
+            fair_value=max(fair_value, target.best_ask - _ARB_REPAIR_FAIR_SLACK),
+        )
+        if not stabilize_levels:
+            return None
+
+        instructions = [
+            instruction
+            for idx, level in enumerate(stabilize_levels[:remaining_instruction_capacity], start=1)
+            if (
+                instruction := self._build_arb_instruction(
+                    market=market,
+                    target=target,
+                    shares=level.shares,
+                    price=level.price,
+                    pair_sum=pair_sum,
+                    tranche_index=idx,
+                )
+            )
+            is not None
+        ]
+        if not instructions:
+            return None
+
+        primary_notional = sum(item.notional for item in instructions)
+        projected_up_notional = current_up_notional + (primary_notional if target.asset_id == up_outcome.asset_id else 0.0)
+        projected_down_notional = current_down_notional + (primary_notional if target.asset_id == down_outcome.asset_id else 0.0)
+        current_ratio_after = self._arb_current_up_ratio(
+            up_exposure=projected_up_notional,
+            down_exposure=projected_down_notional,
+        )
+        note = (
+            f"stabilize {target.label} ask {target.best_ask:.3f} ~ fair {fair_value:.3f} | "
+            f"net {net_edge * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
+            f"{timing_regime} | compras {len(instructions)} | "
+            f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
+            f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
+            f"fase {bracket_phase}{carry_note}"
+        )
+        return StrategyPlan(
+            instructions=tuple(instructions),
+            note=note,
+            primary_target=target,
+            secondary_target=None,
+            trigger=target,
+            window_seconds=self._seconds_into_window(market),
+            cycle_budget=round(primary_notional, 6),
+            market_bias=f"Stabilize {target.label}",
+            timing_regime=timing_regime,
+            price_mode="stabilize-bracket",
+            primary_ratio=1.0,
+            primary_notional=primary_notional,
+            secondary_notional=0.0,
+            replenishment_count=0,
+            trigger_value=target.best_ask,
+            pair_sum=pair_sum,
+            edge_pct=max(net_edge, 0.0),
+            fair_value=fair_value,
+            spot_price=spot_context.current_price,
+            spot_anchor=spot_context.anchor_price,
+            spot_delta_bps=spot_context.delta_bps,
+            spot_fair_up=spot_context.fair_up,
+            spot_fair_down=spot_context.fair_down,
+            spot_source=spot_context.source,
+            spot_price_mode=spot_context.price_mode,
+            spot_age_ms=spot_context.age_ms,
+            spot_binance_price=spot_context.binance_price or 0.0,
+            spot_chainlink_price=spot_context.chainlink_price or 0.0,
             desired_up_ratio=desired_up_ratio,
             current_up_ratio=current_ratio_after,
             bracket_phase=bracket_phase,
@@ -4205,10 +4423,33 @@ class BTC5mStrategyService:
         has_official = official_price_to_beat > 0
         has_local_anchor = local_anchor_price > 0
         age_limit = max(int(self.settings.config.btc5m_reference_max_age_ms), 100)
+        soft_age_limit = max(int(self.settings.config.btc5m_reference_soft_max_age_ms), age_limit)
+        soft_budget_scale = float(self.settings.config.btc5m_reference_soft_budget_scale)
 
         if not source_text:
             return ArbReferenceState(comparable=False, quality="missing", note="sin spot de referencia")
         if age_ms > age_limit:
+            if age_ms <= soft_age_limit and has_rtds and has_chainlink and has_official:
+                return ArbReferenceState(
+                    comparable=True,
+                    quality="soft-stale-official",
+                    note=f"RTDS ligeramente vieja: {age_ms}ms > {age_limit}ms; operando reducido",
+                    budget_scale=soft_budget_scale,
+                )
+            if (
+                age_ms <= soft_age_limit
+                and has_rtds
+                and has_chainlink
+                and self.settings.config.btc5m_allow_rtds_anchor_fallback
+                and has_local_anchor
+                and anchor_source_text.startswith("polymarket")
+            ):
+                return ArbReferenceState(
+                    comparable=True,
+                    quality="soft-stale-rtds",
+                    note=f"RTDS ligeramente vieja: {age_ms}ms > {age_limit}ms; ancla RTDS reducida",
+                    budget_scale=min(soft_budget_scale, 0.45),
+                )
             return ArbReferenceState(
                 comparable=False,
                 quality="stale",

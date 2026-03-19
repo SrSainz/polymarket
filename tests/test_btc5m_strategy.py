@@ -2333,6 +2333,91 @@ def test_arb_micro_does_not_repair_underweight_leg_without_positive_edge(tmp_pat
     db.close()
 
 
+def test_arb_micro_stabilizes_extreme_one_sided_inventory_when_spot_aligns(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-stabilize"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=145)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Stabilize Bracket",
+        "slug": slug,
+        "conditionId": "cond-arb-stabilize",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "500"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.60"}],
+                "asks": [{"price": "0.61", "size": "500"}, {"price": "0.62", "size": "500"}],
+            },
+        },
+        balance=1000.0,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70992.0,
+            lead_price=70992.0,
+            binance_price=70992.0,
+            chainlink_price=71017.17,
+            basis=0.0,
+            source="polymarket-rtds+binance",
+            age_ms=18,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-stabilize"),
+        spot_feed=spot_feed,
+    )
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "71017.17000000")
+    seeded = service.paper_broker.execute(
+        CopyInstruction(
+            action=SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset="asset-up",
+            condition_id=market["conditionId"],
+            size=50.0,
+            price=0.40,
+            notional=20.0,
+            source_wallet="strategy:test-seed",
+            source_signal_id=0,
+            title=market["question"],
+            slug=slug,
+            outcome="Up",
+            category="crypto",
+            reason="test-seed",
+        )
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert seeded.status == "filled"
+    assert stats["filled"] > 0
+    positions = db.list_copy_positions()
+    assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
+    assert db.get_bot_state("strategy_price_mode") == "stabilize-bracket"
+    assert "stabilize Down" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
 def test_btc5m_operating_bankroll_keeps_reserved_profit_out_of_reinvestment(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -2997,6 +3082,80 @@ def test_arb_micro_strict_realism_skips_degraded_reference(tmp_path: Path) -> No
     assert db.get_bot_state("strategy_operability_label") == "Referencia degradada"
     assert db.get_bot_state("strategy_operability_blocking") == "1"
     assert "realism gate" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_strict_realism_allows_soft_stale_official_rtds(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-soft-stale-realism"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=95)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Soft Stale Realism",
+        "slug": slug,
+        "conditionId": "cond-arb-soft-stale-realism",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [
+            {
+                "startTime": start_time,
+                "eventMetadata": {"priceToBeat": 71775.07326019551},
+            }
+        ],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "250"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.60"}],
+                "asks": [{"price": "0.61", "size": "250"}],
+            },
+        },
+        balance=1000.0,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=71750.0,
+            lead_price=71750.0,
+            binance_price=71750.0,
+            chainlink_price=71775.07,
+            basis=25.07,
+            source="polymarket-rtds+binance",
+            age_ms=1600,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=1000.0,
+            strategy_trade_allocation_pct=0.05,
+            btc5m_strict_realism_mode=True,
+        ),
+        logger=logging.getLogger("test-btc5m-soft-stale-realism"),
+        spot_feed=spot_feed,
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert stats["failed"] == 0
+    assert db.get_bot_state("strategy_reference_comparable") == "1"
+    assert db.get_bot_state("strategy_reference_quality") == "soft-stale-official"
+    assert "realism gate" not in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 

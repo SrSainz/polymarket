@@ -43,6 +43,11 @@ btc5m_reserved_allocation_pct: 0.0
 btc5m_reserve_protected_pct: 0.0
 btc5m_ignore_global_exposure_limit: true
 btc5m_relaxed_risk: true
+btc5m_strict_realism_mode: true
+btc5m_reference_max_age_ms: 1200
+btc5m_reference_soft_max_age_ms: 2200
+btc5m_reference_soft_budget_scale: 0.55
+btc5m_allow_rtds_anchor_fallback: true
 
 autonomous_decisions_enabled: false
 manual_confirmation_enabled: false
