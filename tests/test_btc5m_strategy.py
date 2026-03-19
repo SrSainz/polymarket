@@ -42,12 +42,29 @@ class _FailingGammaClient:
 
 
 class _FakeCLOBClient:
-    def __init__(self, books: dict[str, dict], balance: float = 50.0) -> None:
+    def __init__(self, books: dict[str, dict], balance: float = 50.0, *, feed_mode: str = "auto", feed_connected: bool = False) -> None:
         self.books = books
         self.balance = balance
+        self.feed_mode = feed_mode
+        self.feed_connected = feed_connected
+        self.tracked_assets: tuple[str, ...] = ()
 
     def get_collateral_balance(self) -> dict[str, float]:
         return {"balance": self.balance, "allowance": self.balance}
+
+    def track_assets(self, token_ids):  # noqa: ANN001
+        self.tracked_assets = tuple(str(token_id) for token_id in token_ids)
+
+    def market_feed_status(self):  # noqa: ANN001
+        mode = self.feed_mode
+        if mode == "auto":
+            mode = "websocket-warming" if self.tracked_assets else "websocket-idle"
+        return SimpleNamespace(
+            mode=mode,
+            connected=self.feed_connected,
+            tracked_assets=len(self.tracked_assets),
+            age_ms=0,
+        )
 
     def get_book(self, token_id: str) -> dict:
         return self.books[token_id]
@@ -2749,6 +2766,42 @@ def test_record_strategy_snapshot_keeps_market_official_over_zero_snapshot(tmp_p
     db.close()
 
 
+def test_record_strategy_snapshot_clears_stale_market_and_trigger_state(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-stale")
+    db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Stale")
+    db.set_bot_state("strategy_target_outcome", "Up")
+    db.set_bot_state("strategy_target_price", "0.810000")
+    db.set_bot_state("strategy_trigger_outcome", "Down")
+    db.set_bot_state("strategy_trigger_price_seen", "0.190000")
+    db.set_bot_state("strategy_official_price_to_beat", "71234.560000")
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-clear-stale-snapshot"),
+        spot_feed=None,
+    )
+
+    service._record_strategy_snapshot(note="no active btc5m market")
+
+    assert db.get_bot_state("strategy_market_slug") == ""
+    assert db.get_bot_state("strategy_market_title") == ""
+    assert db.get_bot_state("strategy_target_outcome") == ""
+    assert db.get_bot_state("strategy_target_price") == "0.000000"
+    assert db.get_bot_state("strategy_trigger_outcome") == ""
+    assert db.get_bot_state("strategy_trigger_price_seen") == "0.000000"
+    assert db.get_bot_state("strategy_official_price_to_beat") == "0.000000"
+    db.close()
+
+
 def test_market_official_price_to_beat_refetches_partial_market_by_slug(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -2786,6 +2839,51 @@ def test_market_official_price_to_beat_refetches_partial_market_by_slug(tmp_path
     official = service._market_official_price_to_beat(partial_market)
 
     assert round(official, 2) == 71771.65
+    db.close()
+
+
+def test_runtime_guard_primes_feed_and_marks_operability_blocking(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Runtime Guard",
+        "slug": "btc-updown-5m-runtime-guard",
+        "conditionId": "cond-runtime-guard",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(books={}, balance=1000.0)
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-runtime-guard"),
+        spot_feed=None,
+    )
+    service._runtime_guard_can_open = lambda: (False, "runtime guard 35m: PnL reciente -60.79")  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert stats["blocked"] == 1
+    assert clob.tracked_assets == ("asset-up", "asset-down")
+    assert str(db.get_bot_state("strategy_market_slug") or "").startswith("btc-updown-5m-")
+    assert db.get_bot_state("strategy_market_title") == "Bitcoin Up or Down - Runtime Guard"
+    assert db.get_bot_state("strategy_feed_tracked_assets") == "2"
+    assert db.get_bot_state("strategy_data_source") == "websocket-warming"
+    assert db.get_bot_state("strategy_operability_state") == "runtime_guard"
+    assert db.get_bot_state("strategy_operability_label") == "Guardado por riesgo"
+    assert db.get_bot_state("strategy_operability_blocking") == "1"
+    assert "runtime guard" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 

@@ -1188,8 +1188,13 @@ def _reset_runtime_state(db_path: Path) -> dict:
         for table in tables:
             count_row = conn.execute(f"SELECT COUNT(*) AS value FROM {table}").fetchone()
             deleted[table] = int(count_row["value"]) if count_row else 0
+        bot_state_count = conn.execute(
+            "SELECT COUNT(*) AS value FROM bot_state WHERE key LIKE 'strategy_%' OR key LIKE 'runtime_guard_%'"
+        ).fetchone()
+        deleted["bot_state_runtime"] = int(bot_state_count["value"]) if bot_state_count else 0
         with conn:
             for table in tables:
                 conn.execute(f"DELETE FROM {table}")
+            conn.execute("DELETE FROM bot_state WHERE key LIKE 'strategy_%' OR key LIKE 'runtime_guard_%'")
     _MIDPOINT_CACHE.clear()
     return {"ok": True, "deleted": deleted, "reset_at_utc": datetime.now(timezone.utc).isoformat()}

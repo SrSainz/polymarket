@@ -296,6 +296,15 @@ function feedModeInfo(summary) {
       connected,
     };
   }
+  if (source === "websocket-idle") {
+    return {
+      label: "WS inactivo",
+      meta: connected ? `${trackedAssets} assets sin suscripcion activa` : "sin suscripcion activa",
+      className: "feed-pill warming",
+      summaryLabel: `ws inactivo / ${trackedAssets} assets`,
+      connected,
+    };
+  }
   return {
     label: "REST fallback",
     meta: connected ? "cache parcial" : "sin ws",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 from app.polymarket.clob_client import CLOBClient
-from app.polymarket.market_feed import FeedStatus, _apply_price_changes, _canonical_book
+from app.polymarket.market_feed import FeedStatus, MarketFeed, _apply_price_changes, _canonical_book
 from app.settings import EnvSettings
 
 
@@ -80,3 +82,14 @@ def test_clob_client_prefers_market_feed_before_rest() -> None:
     assert status.mode == "websocket"
     assert status.connected is True
     assert status.tracked_assets == 2
+
+
+def test_market_feed_reports_idle_when_no_assets_tracked() -> None:
+    feed = MarketFeed("wss://clob.example/ws", logging.getLogger("test-market-feed"), enabled=True)
+    feed._ws_supported = lambda: True  # type: ignore[method-assign]
+
+    status = feed.status()
+
+    assert status.mode == "websocket-idle"
+    assert status.connected is False
+    assert status.tracked_assets == 0

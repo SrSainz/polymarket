@@ -348,20 +348,6 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        guard_allowed, guard_note = self._runtime_guard_can_open()
-        if not guard_allowed:
-            stats["blocked"] += 1
-            self._record_strategy_snapshot(note=guard_note)
-            return self._complete_cycle(
-                mode=mode,
-                stats=stats,
-                note=guard_note,
-                cash_balance=cash_balance,
-                allowance=allowance,
-                total_exposure=total_exposure,
-                live_total_capital=live_total_capital,
-            )
-
         market = self._discover_market()
         if market is None:
             stats["skipped"] += 1
@@ -371,6 +357,20 @@ class BTC5mStrategyService:
                 mode=mode,
                 stats=stats,
                 note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        guard_allowed, guard_note = self._runtime_guard_can_open()
+        if not guard_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(market=market, note=guard_note)
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=guard_note,
                 cash_balance=cash_balance,
                 allowance=allowance,
                 total_exposure=total_exposure,
@@ -563,23 +563,6 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        guard_allowed, guard_note = self._runtime_guard_can_open()
-        if not guard_allowed:
-            stats["blocked"] += 1
-            self._record_strategy_snapshot(
-                note=guard_note,
-                extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
-            )
-            return self._complete_cycle(
-                mode="paper",
-                stats=stats,
-                note=guard_note,
-                cash_balance=cash_balance,
-                allowance=allowance,
-                total_exposure=total_exposure,
-                live_total_capital=live_total_capital,
-            )
-
         market = self._discover_market()
         if market is None:
             stats["skipped"] += 1
@@ -592,6 +575,29 @@ class BTC5mStrategyService:
                 mode="paper",
                 stats=stats,
                 note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        seconds_into_window = self._seconds_into_window(market)
+        guard_allowed, guard_note = self._runtime_guard_can_open()
+        if not guard_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                market=market,
+                note=guard_note,
+                extra_state=self._arb_state_defaults(
+                    market=market,
+                    seconds_into_window=seconds_into_window,
+                    strategy_resolution_mode="paper-settle-at-close",
+                ),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=guard_note,
                 cash_balance=cash_balance,
                 allowance=allowance,
                 total_exposure=total_exposure,
@@ -890,23 +896,6 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        guard_allowed, guard_note = self._runtime_guard_can_open()
-        if not guard_allowed:
-            stats["blocked"] += 1
-            self._record_strategy_snapshot(
-                note=guard_note,
-                extra_state=self._vidarx_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
-            )
-            return self._complete_cycle(
-                mode="paper",
-                stats=stats,
-                note=guard_note,
-                cash_balance=cash_balance,
-                allowance=allowance,
-                total_exposure=total_exposure,
-                live_total_capital=live_total_capital,
-            )
-
         market = self._discover_market()
         if market is None:
             stats["skipped"] += 1
@@ -921,6 +910,24 @@ class BTC5mStrategyService:
                 mode="paper",
                 stats=stats,
                 note=note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        guard_allowed, guard_note = self._runtime_guard_can_open()
+        if not guard_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                market=market,
+                note=guard_note,
+                extra_state=self._vidarx_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+            )
+            return self._complete_cycle(
+                mode="paper",
+                stats=stats,
+                note=guard_note,
                 cash_balance=cash_balance,
                 allowance=allowance,
                 total_exposure=total_exposure,
@@ -1165,6 +1172,20 @@ class BTC5mStrategyService:
             except Exception as error:  # noqa: BLE001
                 self.logger.debug("market feed prime skipped: %s", error)
 
+    def _incomplete_book_note(self, *, label: str, book: dict) -> str:
+        missing: list[str] = []
+        if _best_ask(book) is None:
+            missing.append("best_ask")
+        if _best_bid(book) is None:
+            missing.append("best_bid")
+        if _best_ask_size(book) is None:
+            missing.append("best_ask_size")
+        if not _ask_levels(book):
+            missing.append("ask_levels")
+        if not missing:
+            return f"incomplete book for {label}"
+        return f"incomplete book for {label}: missing {', '.join(missing)}"
+
     def _build_opportunity(self, market: dict) -> StrategyOpportunity | None:
         outcomes = _parse_json_list(market.get("outcomes"))
         token_ids = _parse_json_list(market.get("clobTokenIds"))
@@ -1183,7 +1204,7 @@ class BTC5mStrategyService:
             best_ask_size = _best_ask_size(book)
             ask_levels = _ask_levels(book)
             if best_ask is None or best_bid is None or best_ask_size is None or not ask_levels:
-                self._record_strategy_snapshot(market=market, note=f"incomplete book for {label}")
+                self._record_strategy_snapshot(market=market, note=self._incomplete_book_note(label=str(label), book=book))
                 return None
             priced_outcomes.append(
                 MarketOutcome(
@@ -1300,7 +1321,7 @@ class BTC5mStrategyService:
             best_ask_size = _best_ask_size(book)
             ask_levels = _ask_levels(book)
             if best_ask is None or best_bid is None or best_ask_size is None or not ask_levels:
-                self._record_strategy_snapshot(market=market, note=f"incomplete book for {label}")
+                self._record_strategy_snapshot(market=market, note=self._incomplete_book_note(label=str(label), book=book))
                 return None
             priced_outcomes.append(
                 MarketOutcome(
@@ -3231,7 +3252,7 @@ class BTC5mStrategyService:
             best_ask_size = _best_ask_size(book)
             ask_levels = _ask_levels(book)
             if best_ask is None or best_bid is None or best_ask_size is None or not ask_levels:
-                self._record_strategy_snapshot(market=market, note=f"incomplete book for {label}")
+                self._record_strategy_snapshot(market=market, note=self._incomplete_book_note(label=str(label), book=book))
                 return None
             priced_outcomes.append(
                 MarketOutcome(
@@ -3769,6 +3790,27 @@ class BTC5mStrategyService:
         extra_state: dict[str, str] | None = None,
     ) -> None:
         snapshot_state = dict(extra_state or {})
+        official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
+        if market is not None:
+            snapshot_state.setdefault("strategy_market_slug", str(market.get("slug") or ""))
+            snapshot_state.setdefault("strategy_market_title", str(market.get("question") or market.get("slug") or ""))
+        else:
+            snapshot_state.setdefault("strategy_market_slug", "")
+            snapshot_state.setdefault("strategy_market_title", "")
+        if opportunity is not None:
+            snapshot_state.setdefault("strategy_target_outcome", opportunity.target.label)
+            snapshot_state.setdefault("strategy_target_price", f"{opportunity.target.best_ask:.6f}")
+            snapshot_state.setdefault("strategy_trigger_outcome", opportunity.trigger.label)
+            snapshot_state.setdefault("strategy_trigger_price_seen", f"{opportunity.trigger.best_ask:.6f}")
+        else:
+            snapshot_state.setdefault("strategy_target_outcome", "")
+            snapshot_state.setdefault("strategy_target_price", "0.000000")
+            snapshot_state.setdefault("strategy_trigger_outcome", "")
+            snapshot_state.setdefault("strategy_trigger_price_seen", "0.000000")
+        if official_price_to_beat > 0:
+            snapshot_state["strategy_official_price_to_beat"] = f"{official_price_to_beat:.6f}"
+        else:
+            snapshot_state.setdefault("strategy_official_price_to_beat", "0.000000")
         operability_state = self._derive_strategy_operability_state(note=note, extra_state=snapshot_state)
         self.db.set_bot_state("strategy_mode", self.settings.config.strategy_mode)
         self.db.set_bot_state("strategy_entry_mode", self.settings.config.strategy_entry_mode)
@@ -3814,22 +3856,10 @@ class BTC5mStrategyService:
         self.db.set_bot_state("strategy_last_note", note)
         self.db.set_bot_state("strategy_last_updated_at", str(int(datetime.now(timezone.utc).timestamp())))
         self._record_market_feed_state()
-        official_price_to_beat = 0.0
-        if market is not None:
-            self.db.set_bot_state("strategy_market_slug", str(market.get("slug") or ""))
-            self.db.set_bot_state("strategy_market_title", str(market.get("question") or market.get("slug") or ""))
-            official_price_to_beat = self._market_official_price_to_beat(market)
-        if opportunity is not None:
-            self.db.set_bot_state("strategy_target_outcome", opportunity.target.label)
-            self.db.set_bot_state("strategy_target_price", f"{opportunity.target.best_ask:.6f}")
-            self.db.set_bot_state("strategy_trigger_outcome", opportunity.trigger.label)
-            self.db.set_bot_state("strategy_trigger_price_seen", f"{opportunity.trigger.best_ask:.6f}")
         for key, value in self._strategy_operability_entries(operability_state).items():
             self.db.set_bot_state(key, value)
         for key, value in snapshot_state.items():
             self.db.set_bot_state(key, value)
-        if market is not None and official_price_to_beat > 0:
-            self.db.set_bot_state("strategy_official_price_to_beat", f"{official_price_to_beat:.6f}")
 
     def _derive_strategy_operability_state(
         self,
@@ -3861,6 +3891,13 @@ class BTC5mStrategyService:
                 state="degraded_reference",
                 label="Referencia degradada",
                 reason=note_text.split(":", 1)[-1].strip() or "La referencia no es comparable a Polymarket.",
+                blocking=True,
+            )
+        if "runtime guard" in note_lower:
+            return StrategyOperabilityState(
+                state="runtime_guard",
+                label="Guardado por riesgo",
+                reason=note_text or "La proteccion runtime ha pausado nuevas aperturas tras el rendimiento reciente.",
                 blocking=True,
             )
         if "no active btc5m market" in note_lower:

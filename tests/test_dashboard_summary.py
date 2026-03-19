@@ -6,7 +6,7 @@ from pathlib import Path
 from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
-from app.services.dashboard_server import _apply_live_control_action, _summary_payload
+from app.services.dashboard_server import _apply_live_control_action, _reset_runtime_state, _summary_payload
 
 
 def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
@@ -526,3 +526,22 @@ def test_summary_payload_filters_strategy_variant_and_exposes_incubation(tmp_pat
     assert summary["strategy_recent_resolutions"][0]["slug"] == "btc-updown-5m-v1"
     assert len(summary["strategy_setup_performance"]) == 1
     assert summary["strategy_setup_performance"][0]["price_mode"] == "underround"
+
+
+def test_reset_runtime_state_clears_strategy_runtime_keys(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-stale")
+    db.set_bot_state("runtime_guard_state", "active")
+    db.set_bot_state("live_control_state", "paused")
+    db.close()
+
+    result = _reset_runtime_state(db_path)
+
+    assert result["deleted"]["bot_state_runtime"] >= 2
+    db = Database(db_path)
+    assert db.get_bot_state("strategy_market_slug") is None
+    assert db.get_bot_state("runtime_guard_state") is None
+    assert db.get_bot_state("live_control_state") == "paused"
+    db.close()

@@ -127,6 +127,13 @@ class MarketFeed:
         if not self._ws_supported():
             return FeedStatus(mode="rest-fallback", connected=False, tracked_assets=tracked_assets, age_ms=0)
         if not fresh_timestamps:
+            if tracked_assets <= 0:
+                return FeedStatus(
+                    mode="websocket-idle",
+                    connected=self._connected_event.is_set(),
+                    tracked_assets=tracked_assets,
+                    age_ms=0,
+                )
             return FeedStatus(
                 mode="websocket-warming",
                 connected=self._connected_event.is_set(),
