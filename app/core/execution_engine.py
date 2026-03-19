@@ -89,6 +89,23 @@ class ExecutionEngine:
         self._record_trace(result=result, instruction=instruction, started_ns=started_ns)
         return result
 
+    def settle_resolved(self, *, mode: str, instruction: CopyInstruction) -> ExecutionResult:
+        safe_mode = str(mode or "").strip().lower() or "paper"
+        started_ns = time.time_ns()
+        result = apply_fill_to_database(
+            db=self.db,
+            instruction=instruction,
+            mode=safe_mode,
+            filled_size=instruction.size,
+            fill_price=instruction.price,
+            fill_notional=instruction.notional,
+            message="resolved_settlement",
+            status="filled",
+            notes=instruction.reason,
+        )
+        self._record_trace(result=result, instruction=instruction, started_ns=started_ns)
+        return result
+
     def _record_trace(self, *, result: ExecutionResult, instruction: CopyInstruction, started_ns: int) -> None:
         now_ns = time.time_ns()
         signal_to_order_ms = _signal_to_order_ms(self.db, started_ns=started_ns)
@@ -209,6 +226,7 @@ def apply_fill_to_database(
             outcome=instruction.outcome,
             category=instruction.category,
         )
+        db.set_bot_state("position_ledger_mode", mode)
         pnl_delta = 0.0
     else:
         if current_size <= 0:
@@ -241,6 +259,10 @@ def apply_fill_to_database(
                 outcome=instruction.outcome,
                 category=instruction.category,
             )
+        if db.list_copy_positions():
+            db.set_bot_state("position_ledger_mode", mode)
+        else:
+            db.set_bot_state("position_ledger_mode", "")
         db.add_daily_pnl(datetime.now(timezone.utc).date().isoformat(), pnl_delta)
 
     result = ExecutionResult(

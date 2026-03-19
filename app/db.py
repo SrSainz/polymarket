@@ -724,21 +724,24 @@ class Database:
             (limit,),
         ).fetchall()
 
-    def get_recent_executions_since(self, cutoff_ts: int, limit: int = 25) -> list[sqlite3.Row]:
-        return self.conn.execute(
-            """
+    def get_recent_executions_since(
+        self, cutoff_ts: int, limit: int = 25, mode: str | None = None
+    ) -> list[sqlite3.Row]:
+        query = """
             SELECT *
             FROM executions
             WHERE ts >= ?
-            ORDER BY ts DESC
-            LIMIT ?
-            """,
-            (cutoff_ts, limit),
-        ).fetchall()
+        """
+        params: list[object] = [cutoff_ts]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        query += " ORDER BY ts DESC LIMIT ?"
+        params.append(limit)
+        return self.conn.execute(query, tuple(params)).fetchall()
 
-    def get_execution_stats_since(self, cutoff_ts: int) -> dict[str, float | int]:
-        row = self.conn.execute(
-            """
+    def get_execution_stats_since(self, cutoff_ts: int, mode: str | None = None) -> dict[str, float | int]:
+        query = """
             SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN side = 'buy' THEN 1 ELSE 0 END) AS buys,
@@ -746,9 +749,12 @@ class Database:
                 COALESCE(SUM(pnl_delta), 0) AS pnl
             FROM executions
             WHERE ts >= ?
-            """,
-            (cutoff_ts,),
-        ).fetchone()
+        """
+        params: list[object] = [cutoff_ts]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        row = self.conn.execute(query, tuple(params)).fetchone()
         if row is None:
             return {"total": 0, "buys": 0, "sells": 0, "pnl": 0.0}
         return {
@@ -764,44 +770,65 @@ class Database:
             return 0.0
         return float(row["pnl"])
 
-    def get_daily_profit_gross(self, day: str) -> float:
-        row = self.conn.execute(
-            """
+    def get_daily_execution_pnl(self, day: str, mode: str | None = None) -> float:
+        query = """
+            SELECT COALESCE(SUM(pnl_delta), 0) AS pnl
+            FROM executions
+            WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
+        """
+        params: list[object] = [day]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        row = self.conn.execute(query, tuple(params)).fetchone()
+        if row is None:
+            return 0.0
+        return float(row["pnl"])
+
+    def get_daily_profit_gross(self, day: str, mode: str | None = None) -> float:
+        query = """
             SELECT COALESCE(SUM(CASE WHEN pnl_delta > 0 THEN pnl_delta ELSE 0 END), 0) AS profit
             FROM executions
             WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
-            """,
-            (day,),
-        ).fetchone()
+        """
+        params: list[object] = [day]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        row = self.conn.execute(query, tuple(params)).fetchone()
         if row is None:
             return 0.0
         return float(row["profit"])
 
-    def get_daily_loss_gross(self, day: str) -> float:
-        row = self.conn.execute(
-            """
+    def get_daily_loss_gross(self, day: str, mode: str | None = None) -> float:
+        query = """
             SELECT COALESCE(ABS(SUM(CASE WHEN pnl_delta < 0 THEN pnl_delta ELSE 0 END)), 0) AS loss
             FROM executions
             WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
-            """,
-            (day,),
-        ).fetchone()
+        """
+        params: list[object] = [day]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        row = self.conn.execute(query, tuple(params)).fetchone()
         if row is None:
             return 0.0
         return float(row["loss"])
 
-    def get_daily_execution_counts(self, day: str) -> dict[str, int]:
-        row = self.conn.execute(
-            """
+    def get_daily_execution_counts(self, day: str, mode: str | None = None) -> dict[str, int]:
+        query = """
             SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN side = 'buy' THEN 1 ELSE 0 END) AS buys,
                 SUM(CASE WHEN side = 'sell' THEN 1 ELSE 0 END) AS sells
             FROM executions
             WHERE strftime('%Y-%m-%d', ts, 'unixepoch') = ?
-            """,
-            (day,),
-        ).fetchone()
+        """
+        params: list[object] = [day]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        row = self.conn.execute(query, tuple(params)).fetchone()
         if row is None:
             return {"total": 0, "buys": 0, "sells": 0}
         return {
@@ -839,6 +866,32 @@ class Database:
             "SELECT COALESCE(SUM(CASE WHEN pnl > 0 THEN pnl ELSE 0 END), 0) AS total FROM daily_pnl WHERE day < ?",
             (day,),
         ).fetchone()
+        if row is None:
+            return 0.0
+        return float(row["total"])
+
+    def get_cumulative_execution_pnl(self, mode: str | None = None) -> float:
+        query = "SELECT COALESCE(SUM(pnl_delta), 0) AS total FROM executions"
+        params: list[object] = []
+        if mode:
+            query += " WHERE mode = ?"
+            params.append(mode)
+        row = self.conn.execute(query, tuple(params)).fetchone()
+        if row is None:
+            return 0.0
+        return float(row["total"])
+
+    def get_cumulative_execution_profit_gross_before(self, day: str, mode: str | None = None) -> float:
+        query = """
+            SELECT COALESCE(SUM(CASE WHEN pnl_delta > 0 THEN pnl_delta ELSE 0 END), 0) AS total
+            FROM executions
+            WHERE strftime('%Y-%m-%d', ts, 'unixepoch') < ?
+        """
+        params: list[object] = [day]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        row = self.conn.execute(query, tuple(params)).fetchone()
         if row is None:
             return 0.0
         return float(row["total"])

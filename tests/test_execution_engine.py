@@ -124,3 +124,72 @@ def test_execution_engine_shadow_records_bot_state_without_broker_calls(tmp_path
     latency = load_latency_snapshot(tmp_path)
     assert latency["latencies"]["expected_slippage_bps"] == 0.0
     db.close()
+
+
+def test_execution_engine_settle_resolved_updates_ledger_without_hitting_live_broker(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.upsert_copy_position(
+        asset="asset-up",
+        condition_id="cond-1",
+        size=10.0,
+        avg_price=0.42,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down",
+        slug="btc-updown-5m-1773913500",
+        outcome="Up",
+        category="crypto",
+    )
+    db.set_bot_state("position_ledger_mode", "live")
+    paper = _StubBroker(
+        ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="asset-up",
+            size=10.0,
+            price=0.42,
+            notional=4.2,
+            pnl_delta=0.0,
+            message="paper fill",
+        )
+    )
+    live = _StubBroker(
+        ExecutionResult(
+            mode="live",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="asset-up",
+            size=10.0,
+            price=0.42,
+            notional=4.2,
+            pnl_delta=0.0,
+            message="live fill",
+        )
+    )
+    engine = ExecutionEngine(db=db, research_dir=tmp_path, paper_broker=paper, live_broker=live)
+    instruction = CopyInstruction(
+        action=SignalAction.CLOSE,
+        side=TradeSide.SELL,
+        asset="asset-up",
+        condition_id="cond-1",
+        size=10.0,
+        price=1.0,
+        notional=10.0,
+        source_wallet="strategy:settlement",
+        source_signal_id=0,
+        title="Bitcoin Up or Down",
+        slug="btc-updown-5m-1773913500",
+        outcome="Up",
+        category="crypto",
+        reason="strategy_resolution:test",
+    )
+
+    result = engine.settle_resolved(mode="live", instruction=instruction)
+
+    assert result.status == "filled"
+    assert paper.calls == []
+    assert live.calls == []
+    assert db.get_copy_position("asset-up") is None
+    assert db.get_bot_state("position_ledger_mode") == ""
+    db.close()

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+from app.core.execution_engine import apply_fill_to_database
 from app.core.decision_engine import DecisionTrace
 from app.core.paper_broker import PaperBroker
 from app.db import Database
@@ -94,6 +95,26 @@ class _FakeBroker:
             notional=instruction.notional,
             pnl_delta=0.0,
             message="ok",
+        )
+
+
+class _ApplyingLiveBroker:
+    def __init__(self, db: Database) -> None:
+        self.db = db
+        self.instructions = []
+
+    def execute(self, instruction):  # noqa: ANN001
+        self.instructions.append(instruction)
+        return apply_fill_to_database(
+            db=self.db,
+            instruction=instruction,
+            mode="live",
+            filled_size=instruction.size,
+            fill_price=instruction.price,
+            fill_notional=instruction.notional,
+            message="live fill",
+            status="filled",
+            notes="test-live-fill",
         )
 
 
@@ -439,6 +460,7 @@ def test_strategy_autonomous_exit_skips_missing_midpoint(tmp_path: Path) -> None
         outcome="Up",
         category="crypto",
     )
+    db.set_bot_state("position_ledger_mode", "live")
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat().replace("+00:00", "Z")
     market = {
         "question": "Bitcoin Up or Down - Test",
@@ -1540,26 +1562,102 @@ def test_arb_micro_does_not_buy_pair_above_one_without_edge(tmp_path: Path) -> N
     db.close()
 
 
-def test_arb_micro_refuses_live_mode(tmp_path: Path) -> None:
+def test_arb_micro_live_preflight_blocks_paper_ledger(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
+    db.upsert_copy_position(
+        asset="asset-up",
+        condition_id="cond-preflight",
+        size=5.0,
+        avg_price=0.40,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Preflight",
+        slug="btc-updown-5m-preflight",
+        outcome="Up",
+        category="crypto",
+    )
+    db.set_bot_state("position_ledger_mode", "paper")
     service = BTC5mStrategyService(
         db,
         _FakeGammaClient({}),
-        _FakeCLOBClient(books={}, balance=1000.0),
+        _FakeCLOBClient(books={}, balance=100.0),
         paper_broker=PaperBroker(db),
         live_broker=_FakeBroker(),
         autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
         daily_summary=SimpleNamespace(send_if_due=lambda: False),
         trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
-        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            live_small_target_capital=100.0,
+        ),
         logger=logging.getLogger("test-btc5m-arb"),
     )
 
     stats = service.run(mode="live")
 
     assert stats["blocked"] == 1
-    assert "paper-only" in str(db.get_bot_state("strategy_last_note") or "")
+    assert "live preflight" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_live_scales_to_live_small_target_capital(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Live Small",
+        "slug": "btc-updown-5m-live-small",
+        "conditionId": "cond-live-small",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.38"}],
+                "asks": [{"price": "0.40", "size": "200"}, {"price": "0.41", "size": "200"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.55", "size": "200"}, {"price": "0.56", "size": "200"}],
+            },
+        },
+        balance=100.0,
+    )
+    live_broker = _ApplyingLiveBroker(db)
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=live_broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            strategy_trade_allocation_pct=0.03,
+            live_small_target_capital=100.0,
+            profit_keep_ratio=0.0,
+        ),
+        logger=logging.getLogger("test-btc5m-arb-live-small"),
+    )
+
+    stats = service.run(mode="live")
+
+    assert stats["filled"] >= 2
+    assert live_broker.instructions
+    total_notional = sum(float(item.notional) for item in live_broker.instructions)
+    assert total_notional <= 3.05
+    assert total_notional >= 2.0
+    assert db.get_bot_state("strategy_capital_target") == "100.00000000"
+    assert round(float(db.get_bot_state("strategy_capital_scale_ratio") or 0.0), 4) == 0.01
+    assert "paper-only" not in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -2617,6 +2715,73 @@ def test_btc5m_operating_bankroll_keeps_reserved_profit_out_of_reinvestment(tmp_
     db.close()
 
 
+def test_live_operating_bankroll_snapshot_uses_live_small_target_and_live_history_only(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=250.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            live_small_target_capital=100.0,
+            profit_keep_ratio=0.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-bankroll-target"),
+    )
+    db.record_execution(
+        result=ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.CLOSE,
+            asset="asset-paper",
+            size=10.0,
+            price=0.60,
+            notional=6.0,
+            pnl_delta=500.0,
+            message="paper fill",
+        ),
+        side=TradeSide.SELL.value,
+        condition_id="cond-paper",
+        source_wallet="strategy:test",
+        source_signal_id=0,
+        notes="paper profit",
+    )
+    db.record_execution(
+        result=ExecutionResult(
+            mode="live",
+            status="filled",
+            action=SignalAction.CLOSE,
+            asset="asset-live",
+            size=10.0,
+            price=0.39,
+            notional=3.9,
+            pnl_delta=-10.0,
+            message="live fill",
+        ),
+        side=TradeSide.SELL.value,
+        condition_id="cond-live",
+        source_wallet="strategy:test",
+        source_signal_id=0,
+        notes="live loss",
+    )
+
+    operating_bankroll, reserved_profit = service._operating_bankroll_snapshot(  # noqa: SLF001
+        mode="live",
+        live_total_capital=250.0,
+    )
+
+    assert reserved_profit == 0.0
+    assert operating_bankroll == 90.0
+    db.close()
+
+
 def test_arb_micro_skips_tiny_first_level_and_sweeps_deeper_levels(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -3219,6 +3384,49 @@ def test_runtime_guard_can_be_disabled_only_for_paper(tmp_path: Path) -> None:
     assert note == ""
     assert db.get_bot_state("runtime_guard_profile") == "live"
     evaluate_mock.assert_called_once()
+    db.close()
+
+
+def test_runtime_guard_live_ignores_recent_paper_losses(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    for offset, pnl in enumerate((-25.0, -15.0, -10.0), start=1):
+        db.conn.execute(
+            """
+            INSERT INTO executions (
+                ts, mode, status, action, side, asset, condition_id, size, price, notional,
+                source_wallet, source_signal_id, strategy_variant, notes, pnl_delta
+            ) VALUES (?, 'paper', 'filled', 'close', 'sell', ?, 'cond-paper', 1, 0.5, 0.5, 'strategy:test', 0, '', 'paper loss', ?)
+            """,
+            (now_ts - offset, f"asset-paper-{offset}", pnl),
+        )
+    db.conn.commit()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            runtime_guard_enabled=True,
+            paper_runtime_guard_enabled=True,
+        ),
+        logger=logging.getLogger("test-btc5m-live-runtime-guard-isolated"),
+        spot_feed=None,
+    )
+
+    allowed, note = service._runtime_guard_can_open(mode="live")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.get_bot_state("runtime_guard_profile") == "live"
+    assert db.get_bot_state("runtime_guard_recent_close_count") == "0"
+    assert db.get_bot_state("runtime_guard_recent_close_pnl") == "0.000000"
     db.close()
 
 

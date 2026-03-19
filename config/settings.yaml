@@ -13,6 +13,8 @@ liquidation_bybit_symbol: "BTCUSDT"
 shadow_mode_enabled: false
 execution_mode: "paper"
 live_execution_profile: "taker_fak"
+live_small_target_capital: 100.0
+live_preflight_require_clean_ledger: true
 dry_run: true
 
 strategy_mode: "btc5m_orderbook"
@@ -57,6 +59,7 @@ btc5m_reference_max_age_ms: 1200
 btc5m_reference_soft_max_age_ms: 2200
 btc5m_reference_soft_budget_scale: 0.55
 btc5m_allow_rtds_anchor_fallback: true
+live_only_btc5m: true
 
 autonomous_decisions_enabled: false
 manual_confirmation_enabled: false

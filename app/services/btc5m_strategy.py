@@ -375,6 +375,7 @@ class BTC5mStrategyService:
         cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         live_total_capital = cash_balance + total_exposure
         operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
+            mode=mode,
             live_total_capital=live_total_capital
         )
         self._record_balance_snapshot(
@@ -386,6 +387,19 @@ class BTC5mStrategyService:
             operating_bankroll=operating_bankroll,
             reserved_profit=reserved_profit,
         )
+        ledger_allowed, ledger_note = self._position_ledger_can_run(mode=mode)
+        if not ledger_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(note=ledger_note)
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=ledger_note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
         live_allowed, live_control_note = self._live_control_can_execute(mode=mode)
         if not live_allowed:
             stats["blocked"] += 1
@@ -546,43 +560,18 @@ class BTC5mStrategyService:
             "skipped": 0,
             "opportunities": 0,
         }
-        if mode == "live":
-            total_exposure = self.db.get_total_exposure()
-            cash_balance, allowance = self._live_cash_snapshot(mode="paper")
-            live_total_capital = cash_balance + total_exposure
-            note = "arb_micro is paper-only; use `python run.py paper` or `python run.py once`"
-            stats["blocked"] += 1
-            self._record_balance_snapshot(
-                mode="paper",
-                cash_balance=cash_balance,
-                allowance=allowance,
-                total_exposure=total_exposure,
-                live_total_capital=live_total_capital,
-            )
-            self._record_strategy_snapshot(
-                note=note,
-                extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
-            )
-            return self._complete_cycle(
-                mode="paper",
-                stats=stats,
-                note=note,
-                cash_balance=cash_balance,
-                allowance=allowance,
-                total_exposure=total_exposure,
-                live_total_capital=live_total_capital,
-            )
-
+        resolution_mode = self._strategy_resolution_mode_label(mode=mode)
         self._settle_resolved_paper_positions(mode=mode, stats=stats)
         total_exposure = self.db.get_total_exposure()
-        cash_balance, allowance = self._live_cash_snapshot(mode="paper")
+        cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
         live_total_capital = cash_balance + marked_exposure
         operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
+            mode=mode,
             live_total_capital=live_total_capital
         )
         self._record_balance_snapshot(
-            mode="paper",
+            mode=mode,
             cash_balance=cash_balance,
             allowance=allowance,
             total_exposure=total_exposure,
@@ -592,9 +581,43 @@ class BTC5mStrategyService:
             operating_bankroll=operating_bankroll,
             reserved_profit=reserved_profit,
         )
+        ledger_allowed, ledger_note = self._position_ledger_can_run(mode=mode)
+        if not ledger_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                note=ledger_note,
+                extra_state=self._arb_state_defaults(strategy_resolution_mode=resolution_mode),
+            )
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=ledger_note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
+        live_allowed, live_control_note = self._live_control_can_execute(mode=mode)
+        if not live_allowed:
+            stats["blocked"] += 1
+            self._record_strategy_snapshot(
+                note=live_control_note,
+                extra_state=self._arb_state_defaults(strategy_resolution_mode=resolution_mode),
+            )
+            return self._complete_cycle(
+                mode=mode,
+                stats=stats,
+                note=live_control_note,
+                cash_balance=cash_balance,
+                allowance=allowance,
+                total_exposure=total_exposure,
+                live_total_capital=live_total_capital,
+            )
+
         self._maybe_prime_arb_spot_anchor()
 
-        drawdown_floor = self.settings.config.bankroll * (1.0 - _VIDARX_MAX_DRAWDOWN_PCT)
+        drawdown_floor = self._mode_drawdown_floor(mode=mode, live_total_capital=live_total_capital)
         if live_total_capital <= drawdown_floor:
             note = (
                 f"arb_micro drawdown stop: capital {live_total_capital:.2f} <= "
@@ -603,10 +626,10 @@ class BTC5mStrategyService:
             stats["blocked"] += 1
             self._record_strategy_snapshot(
                 note=note,
-                extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+                extra_state=self._arb_state_defaults(strategy_resolution_mode=resolution_mode),
             )
             return self._complete_cycle(
-                mode="paper",
+                mode=mode,
                 stats=stats,
                 note=note,
                 cash_balance=cash_balance,
@@ -621,10 +644,10 @@ class BTC5mStrategyService:
             note = "no active btc5m market"
             self._record_strategy_snapshot(
                 note=note,
-                extra_state=self._arb_state_defaults(strategy_resolution_mode="paper-settle-at-close"),
+                extra_state=self._arb_state_defaults(strategy_resolution_mode=resolution_mode),
             )
             return self._complete_cycle(
-                mode="paper",
+                mode=mode,
                 stats=stats,
                 note=note,
                 cash_balance=cash_balance,
@@ -634,7 +657,7 @@ class BTC5mStrategyService:
             )
 
         seconds_into_window = self._seconds_into_window(market)
-        guard_allowed, guard_note = self._runtime_guard_can_open(mode="paper")
+        guard_allowed, guard_note = self._runtime_guard_can_open(mode=mode)
         if not guard_allowed:
             stats["blocked"] += 1
             self._record_strategy_snapshot(
@@ -643,11 +666,11 @@ class BTC5mStrategyService:
                 extra_state=self._arb_state_defaults(
                     market=market,
                     seconds_into_window=seconds_into_window,
-                    strategy_resolution_mode="paper-settle-at-close",
+                    strategy_resolution_mode=resolution_mode,
                 ),
             )
             return self._complete_cycle(
-                mode="paper",
+                mode=mode,
                 stats=stats,
                 note=guard_note,
                 cash_balance=cash_balance,
@@ -676,10 +699,11 @@ class BTC5mStrategyService:
                     seconds_into_window=self._seconds_into_window(market),
                     strategy_current_market_exposure=f"{carry_state.current_market_exposure:.6f}",
                     strategy_window_seconds=str(self._seconds_into_window(market)),
+                    strategy_resolution_mode=resolution_mode,
                 ),
             )
             return self._complete_cycle(
-                mode="paper",
+                mode=mode,
                 stats=stats,
                 note=note,
                 cash_balance=cash_balance,
@@ -699,7 +723,7 @@ class BTC5mStrategyService:
         if plan is None:
             stats["skipped"] += 1
             return self._complete_cycle(
-                mode="paper",
+                mode=mode,
                 stats=stats,
                 note=self.db.get_bot_state("strategy_last_note") or "no arb plan",
                 cash_balance=cash_balance,
@@ -723,7 +747,7 @@ class BTC5mStrategyService:
                 "strategy_window_seconds": str(plan.window_seconds),
                 "strategy_cycle_budget": f"{plan.cycle_budget:.6f}",
                 "strategy_current_market_exposure": f"{self._get_condition_exposure(str(market.get('conditionId') or '')):.6f}",
-                "strategy_resolution_mode": "paper-settle-at-close",
+                "strategy_resolution_mode": resolution_mode,
                 "strategy_timing_regime": plan.timing_regime,
                 "strategy_price_mode": plan.price_mode,
                 "strategy_primary_ratio": f"{plan.primary_ratio:.6f}",
@@ -776,7 +800,7 @@ class BTC5mStrategyService:
             except Exception as error:  # noqa: BLE001
                 stats["failed"] += 1
                 note = f"arb_micro execution failed: {error}"
-                self.logger.exception("arb_micro paper execution failed: %s", error)
+                self.logger.exception("arb_micro execution failed: %s", error)
                 continue
 
             if result.status == "filled":
@@ -796,14 +820,15 @@ class BTC5mStrategyService:
             )
 
         total_exposure = self.db.get_total_exposure()
-        cash_balance, allowance = self._live_cash_snapshot(mode="paper")
+        cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
         live_total_capital = cash_balance + marked_exposure
         operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
+            mode=mode,
             live_total_capital=live_total_capital
         )
         self._record_balance_snapshot(
-            mode="paper",
+            mode=mode,
             cash_balance=cash_balance,
             allowance=allowance,
             total_exposure=total_exposure,
@@ -826,7 +851,7 @@ class BTC5mStrategyService:
                 "strategy_window_seconds": str(plan.window_seconds),
                 "strategy_cycle_budget": f"{plan.cycle_budget:.6f}",
                 "strategy_current_market_exposure": f"{self._get_condition_exposure(str(market.get('conditionId') or '')):.6f}",
-                "strategy_resolution_mode": "paper-settle-at-close",
+                "strategy_resolution_mode": resolution_mode,
                 "strategy_timing_regime": plan.timing_regime,
                 "strategy_price_mode": plan.price_mode,
                 "strategy_primary_ratio": f"{plan.primary_ratio:.6f}",
@@ -858,7 +883,7 @@ class BTC5mStrategyService:
             },
         )
         return self._complete_cycle(
-            mode="paper",
+            mode=mode,
             stats=stats,
             note=note,
             cash_balance=cash_balance,
@@ -4077,8 +4102,8 @@ class BTC5mStrategyService:
             current_total_exposure=current_total_exposure,
             current_dynamic_exposure=0.0,
             current_btc5m_exposure=current_total_exposure,
-            daily_pnl=self.db.get_daily_pnl(datetime.now(timezone.utc).date().isoformat()),
-            daily_profit_gross=self.db.get_daily_profit_gross(datetime.now(timezone.utc).date().isoformat()),
+            daily_pnl=self._mode_daily_pnl(mode=mode),
+            daily_profit_gross=self._mode_daily_profit_gross(mode=mode),
             effective_bankroll=effective_bankroll,
             reference_price=opportunity.target.best_ask,
         )
@@ -4188,10 +4213,42 @@ class BTC5mStrategyService:
             )
         return True, ""
 
+    def _configured_live_small_target_capital(self) -> float:
+        target = float(self.settings.config.live_small_target_capital or 0.0)
+        return max(target, 0.0)
+
+    def _mode_daily_pnl(self, *, mode: str) -> float:
+        today = datetime.now(timezone.utc).date().isoformat()
+        if mode == "paper":
+            return self.db.get_daily_pnl(today)
+        return self.db.get_daily_execution_pnl(today, mode=mode)
+
+    def _mode_daily_profit_gross(self, *, mode: str) -> float:
+        today = datetime.now(timezone.utc).date().isoformat()
+        return self.db.get_daily_profit_gross(today, mode=None if mode == "paper" else mode)
+
+    def _mode_capital_target(self, *, mode: str, live_total_capital: float) -> float:
+        if mode == "paper":
+            return max(float(self.settings.config.bankroll), 0.0)
+        configured_target = self._configured_live_small_target_capital()
+        actual_capital = max(float(live_total_capital), 0.0)
+        if configured_target <= 0:
+            return actual_capital
+        if actual_capital <= 0:
+            return configured_target
+        return min(configured_target, actual_capital)
+
+    def _mode_drawdown_floor(self, *, mode: str, live_total_capital: float) -> float:
+        capital_base = self._mode_capital_target(mode=mode, live_total_capital=live_total_capital)
+        return capital_base * (1.0 - _VIDARX_MAX_DRAWDOWN_PCT)
+
     def _live_cash_snapshot(self, *, mode: str) -> tuple[float, float]:
-        if mode != "live":
+        if mode == "paper":
             paper_equity = self.settings.config.bankroll + self.db.get_cumulative_pnl()
             return max(paper_equity - self.db.get_total_exposure(), 0.0), 0.0
+        if mode == "shadow":
+            shadow_capital = self._configured_live_small_target_capital()
+            return max(shadow_capital - self.db.get_total_exposure(), 0.0), 0.0
         try:
             balance = self.clob_client.get_collateral_balance()
             return float(balance.get("balance") or 0.0), float(balance.get("allowance") or 0.0)
@@ -4199,16 +4256,27 @@ class BTC5mStrategyService:
             self.logger.warning("live balance snapshot failed: %s", error)
             return 0.0, 0.0
 
-    def _operating_bankroll_snapshot(self, *, live_total_capital: float) -> tuple[float, float]:
+    def _operating_bankroll_snapshot(
+        self, *, mode: str = "paper", live_total_capital: float
+    ) -> tuple[float, float]:
         today = datetime.now(timezone.utc).date().isoformat()
-        realized_pnl = self.db.get_cumulative_pnl()
-        realized_profit_gross = self.db.get_cumulative_profit_gross_before(today) + self.db.get_daily_profit_gross(today)
+        if mode == "paper":
+            base_bankroll = self.settings.config.bankroll
+            realized_pnl = self.db.get_cumulative_pnl()
+            realized_profit_gross = self.db.get_cumulative_profit_gross_before(today) + self.db.get_daily_profit_gross(today)
+        else:
+            base_bankroll = self._mode_capital_target(mode=mode, live_total_capital=live_total_capital)
+            realized_pnl = self.db.get_cumulative_execution_pnl(mode=mode)
+            realized_profit_gross = self.db.get_cumulative_execution_profit_gross_before(
+                today,
+                mode=mode,
+            ) + self.db.get_daily_profit_gross(today, mode=mode)
         reserved_profit = calculate_reserved_profit(
             profit_gross=realized_profit_gross,
             profit_keep_ratio=self.settings.config.profit_keep_ratio,
         )
         effective_bankroll = calculate_effective_bankroll(
-            base_bankroll=self.settings.config.bankroll,
+            base_bankroll=base_bankroll,
             realized_pnl=realized_pnl,
             profit_gross=realized_profit_gross,
             profit_keep_ratio=self.settings.config.profit_keep_ratio,
@@ -4229,9 +4297,15 @@ class BTC5mStrategyService:
         reserved_profit: float | None = None,
     ) -> None:
         now_ts = int(datetime.now(timezone.utc).timestamp())
+        capital_target = self._mode_capital_target(mode=mode, live_total_capital=live_total_capital)
+        capital_scale_ratio = 0.0
+        if self.settings.config.bankroll > 0:
+            capital_scale_ratio = capital_target / self.settings.config.bankroll
         self.db.set_bot_state("live_cash_balance", f"{cash_balance:.8f}")
         self.db.set_bot_state("live_cash_allowance", f"{allowance:.8f}")
         self.db.set_bot_state("live_total_capital", f"{live_total_capital:.8f}")
+        self.db.set_bot_state("strategy_capital_target", f"{capital_target:.8f}")
+        self.db.set_bot_state("strategy_capital_scale_ratio", f"{capital_scale_ratio:.6f}")
         self.db.set_bot_state("live_balance_updated_at", str(now_ts))
         self.db.set_bot_state("strategy_runtime_mode", mode)
         self.db.set_bot_state("strategy_total_exposure", f"{total_exposure:.8f}")
@@ -5037,6 +5111,32 @@ class BTC5mStrategyService:
             return normalized_balance
         return min(normalized_balance, normalized_allowance)
 
+    def _strategy_resolution_mode_label(self, *, mode: str) -> str:
+        safe_mode = str(mode or "").strip().lower() or "paper"
+        return f"{safe_mode}-settle-at-close"
+
+    def _position_ledger_can_run(self, *, mode: str) -> tuple[bool, str]:
+        if mode != "live" or not self.settings.config.live_preflight_require_clean_ledger:
+            self.db.set_bot_state("position_ledger_preflight", "disabled" if mode != "live" else "not-required")
+            return True, ""
+        positions = self.db.list_copy_positions()
+        if not positions:
+            self.db.set_bot_state("position_ledger_mode", "")
+            self.db.set_bot_state("position_ledger_preflight", "ready")
+            return True, ""
+        ledger_mode = str(self.db.get_bot_state("position_ledger_mode") or "").strip().lower() or "paper"
+        if ledger_mode == mode:
+            self.db.set_bot_state("position_ledger_preflight", "ready")
+            return True, ""
+        exposure = self.db.get_total_exposure()
+        message = (
+            f"live preflight: ledger has {len(positions)} open {ledger_mode} position(s) "
+            f"with {exposure:.2f} USDC exposure; flatten or reset before live"
+        )
+        self.db.set_bot_state("position_ledger_preflight", "blocked")
+        self.db.set_bot_state("position_ledger_mode", ledger_mode)
+        return False, message
+
     def _live_control_can_execute(self, *, mode: str) -> tuple[bool, str]:
         if mode != "live":
             return True, ""
@@ -5098,7 +5198,11 @@ class BTC5mStrategyService:
 
         cutoff_ts = now_ts - lookback_minutes * 60
         execution_limit = max(self.settings.config.runtime_diagnostics_execution_limit, 50)
-        recent_executions = self.db.get_recent_executions_since(cutoff_ts, limit=execution_limit)
+        recent_executions = self.db.get_recent_executions_since(
+            cutoff_ts,
+            limit=execution_limit,
+            mode=mode,
+        )
         decision = evaluate_runtime_guard(
             recent_executions,
             now_ts=now_ts,
@@ -5707,7 +5811,7 @@ class BTC5mStrategyService:
                 category=str(row["category"] or "crypto"),
                 reason=f"strategy_resolution:{slug}:{row['outcome'] or ''}",
             )
-            result = self._execute_instruction(mode=mode, instruction=instruction)
+            result = self.execution_engine.settle_resolved(mode=mode, instruction=instruction)
             stats["opportunities"] += 1
             if result.status == "filled":
                 stats["filled"] += 1
