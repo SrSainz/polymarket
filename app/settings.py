@@ -88,6 +88,7 @@ class BotConfig(BaseModel):
     proportional_scale: float = 0.15
     noise_threshold_shares: float = 1.0
     min_trade_amount: float = 5.0
+    arb_min_trade_amount: float = 1.0
     min_price: float = 0.0
     max_price: float = 1.0
     skip_expired_source_positions: bool = True
@@ -237,6 +238,8 @@ class BotConfig(BaseModel):
             raise ValueError("min_price must be between 0 and 1")
         if self.max_price < 0 or self.max_price > 1:
             raise ValueError("max_price must be between 0 and 1")
+        if self.arb_min_trade_amount < 0:
+            raise ValueError("arb_min_trade_amount must be >= 0")
         if self.min_price > self.max_price:
             raise ValueError("min_price cannot be greater than max_price")
         if self.strategy_trigger_price <= 0 or self.strategy_trigger_price > 1:

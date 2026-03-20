@@ -2870,8 +2870,8 @@ def test_arb_stabilize_catchup_still_operates_with_live_small_25_usdc_budget(tmp
     assert plan is not None
     assert plan.price_mode == "stabilize-catchup"
     assert plan.primary_target.label == "Up"
-    assert plan.primary_notional >= 4.99
-    assert plan.primary_notional <= 5.05
+    assert plan.primary_notional >= 2.89
+    assert plan.primary_notional <= 3.05
     db.close()
 
 
@@ -3906,7 +3906,7 @@ def test_arb_micro_strict_realism_allows_soft_stale_official_rtds(tmp_path: Path
     db.close()
 
 
-def test_arb_min_notional_uses_max_of_strategy_and_exchange_minimums(tmp_path: Path) -> None:
+def test_arb_min_notional_uses_max_of_arb_strategy_and_exchange_minimums(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     service = BTC5mStrategyService(
@@ -3927,7 +3927,7 @@ def test_arb_min_notional_uses_max_of_strategy_and_exchange_minimums(tmp_path: P
         autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
         daily_summary=SimpleNamespace(send_if_due=lambda: False),
         trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
-        settings=_settings(strategy_entry_mode="arb_micro", min_trade_amount=5.0),
+        settings=_settings(strategy_entry_mode="arb_micro", min_trade_amount=5.0, arb_min_trade_amount=3.0),
         logger=logging.getLogger("test-btc5m-min-order-size"),
         spot_feed=None,
     )
@@ -3943,12 +3943,101 @@ def test_arb_min_notional_uses_max_of_strategy_and_exchange_minimums(tmp_path: P
 
     effective_min_notional = service._arb_min_notional(target)  # noqa: SLF001
 
-    assert round(effective_min_notional, 2) == 5.00
+    assert round(effective_min_notional, 2) == 3.00
     assert db.get_bot_state("strategy_asset_min_order_size:asset-up") == "2.500000"
     assert db.get_bot_state("strategy_asset_min_notional:asset-up") == "1.300000"
-    assert db.get_bot_state("strategy_strategy_min_notional") == "5.000000"
-    assert db.get_bot_state("strategy_effective_min_notional") == "5.000000"
+    assert db.get_bot_state("strategy_strategy_min_notional") == "3.000000"
+    assert db.get_bot_state("strategy_effective_min_notional") == "3.000000"
     db.close()
+
+
+def test_arb_micro_live_small_scales_underround_ladder_to_micro_tranches_under_25_usdc(tmp_path: Path) -> None:
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=70)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Live Small Underround",
+        "slug": "btc-updown-5m-live-small-underround",
+        "conditionId": "cond-arb-live-small-underround",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    books = {
+        "asset-up": {
+            "min_order_size": "5.0",
+            "bids": [{"price": "0.40"}],
+            "asks": [{"price": "0.41", "size": "500"}, {"price": "0.42", "size": "500"}, {"price": "0.43", "size": "500"}],
+        },
+        "asset-down": {
+            "min_order_size": "5.0",
+            "bids": [{"price": "0.54"}],
+            "asks": [{"price": "0.54", "size": "500"}, {"price": "0.55", "size": "500"}, {"price": "0.56", "size": "500"}],
+        },
+    }
+
+    paper_db = Database(tmp_path / "paper.db")
+    paper_db.init_schema()
+    paper_service = BTC5mStrategyService(
+        paper_db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books=books, balance=10000.0),
+        paper_broker=PaperBroker(paper_db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            min_trade_amount=5.0,
+            arb_min_trade_amount=1.0,
+            strategy_trade_allocation_pct=0.03,
+        ),
+        logger=logging.getLogger("test-btc5m-paper-underround"),
+    )
+
+    live_db = Database(tmp_path / "live.db")
+    live_db.init_schema()
+    live_broker = _FakeBroker()
+    live_service = BTC5mStrategyService(
+        live_db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books=books, balance=111.26),
+        paper_broker=PaperBroker(live_db),
+        live_broker=live_broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            min_trade_amount=5.0,
+            arb_min_trade_amount=1.0,
+            live_small_target_capital=111.26,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-underround"),
+    )
+
+    paper_stats = paper_service.run(mode="paper")
+    live_stats = live_service.run(mode="live")
+    live_notionals = [float(instruction.notional) for instruction in live_broker.instructions]
+    up_count = sum(1 for instruction in live_broker.instructions if instruction.outcome == "Up")
+    down_count = sum(1 for instruction in live_broker.instructions if instruction.outcome == "Down")
+
+    assert paper_stats["filled"] > live_stats["filled"] >= 6
+    assert paper_db.get_bot_state("strategy_price_mode") == "underround"
+    assert live_db.get_bot_state("strategy_price_mode") == "underround"
+    assert round(float(live_db.get_bot_state("strategy_effective_min_notional") or 0.0), 2) == 2.70
+    assert round(float(live_db.get_bot_state("strategy_cycle_budget") or 0.0), 2) >= 24.90
+    assert sum(live_notionals) <= 25.00
+    assert sum(live_notionals) >= 24.90
+    assert up_count >= 3
+    assert down_count >= 3
+    assert max(live_notionals) < 6.25
+    paper_db.close()
+    live_db.close()
 
 
 def test_arb_reference_state_relaxes_soft_stale_rtds_budget_in_live(tmp_path: Path) -> None:

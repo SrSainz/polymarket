@@ -35,6 +35,7 @@ incubation_min_backtest_edge_bps: 0.0
 
 bankroll: 10000.0
 min_trade_amount: 5.0
+arb_min_trade_amount: 1.0
 min_price: 0.02
 max_price: 0.98
 slippage_limit: 0.03

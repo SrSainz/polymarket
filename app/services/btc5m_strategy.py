@@ -2525,7 +2525,8 @@ class BTC5mStrategyService:
         return raw_edge - overround_drag - spread_drag - drift_drag - _ARB_CHEAP_SIDE_FEE_ESTIMATE
 
     def _arb_strategy_min_notional(self) -> float:
-        return max(float(self.settings.config.min_trade_amount or 0.0), _ARB_STRATEGY_MIN_NOTIONAL)
+        configured = float(getattr(self.settings.config, "arb_min_trade_amount", 0.0) or 0.0)
+        return max(configured, _ARB_STRATEGY_MIN_NOTIONAL)
 
     def _arb_exchange_min_order_size(self, asset_id: str) -> float:
         asset_key = str(asset_id or "").strip()
