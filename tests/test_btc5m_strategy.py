@@ -12,7 +12,7 @@ from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.spot_feed import SpotSnapshot
-from app.services.btc5m_strategy import AskLevel, BTC5mStrategyService, MarketOutcome
+from app.services.btc5m_strategy import ArbSpotContext, AskLevel, BTC5mStrategyService, MarketOutcome
 from app.settings import AppPaths, AppSettings, BotConfig, EnvSettings
 
 
@@ -2765,6 +2765,113 @@ def test_arb_micro_catchup_rebalances_extreme_one_sided_inventory_even_if_spot_s
     assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
     assert db.get_bot_state("strategy_price_mode") == "stabilize-catchup"
     assert "catchup Down" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_stabilize_catchup_still_operates_with_live_small_25_usdc_budget(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=145)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Live Small Catch-up",
+        "slug": "btc-updown-5m-live-small-catchup",
+        "conditionId": "cond-arb-live-small-catchup",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {
+                    "min_order_size": "5.0",
+                    "bids": [{"price": "0.57"}],
+                    "asks": [{"price": "0.58", "size": "500"}],
+                },
+                "asset-down": {
+                    "min_order_size": "5.0",
+                    "bids": [{"price": "0.43"}],
+                    "asks": [{"price": "0.44", "size": "500"}],
+                },
+            },
+            balance=111.26,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            min_trade_amount=5.0,
+            live_small_target_capital=111.26,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-small-catchup"),
+    )
+
+    plan = service._build_arb_stabilize_plan(  # noqa: SLF001
+        mode="live",
+        market=market,
+        up_outcome=MarketOutcome(
+            label="Up",
+            asset_id="asset-up",
+            best_ask=0.58,
+            best_bid=0.57,
+            best_ask_size=500.0,
+            ask_levels=(AskLevel(price=0.58, size=500.0),),
+        ),
+        down_outcome=MarketOutcome(
+            label="Down",
+            asset_id="asset-down",
+            best_ask=0.44,
+            best_bid=0.43,
+            best_ask_size=500.0,
+            ask_levels=(AskLevel(price=0.44, size=500.0),),
+        ),
+        pair_sum=1.02,
+        fair_up=0.59,
+        fair_down=0.41,
+        up_net_edge=-0.0225,
+        down_net_edge=0.1327,
+        desired_up_ratio=0.58,
+        current_up_ratio=0.0,
+        timing_regime="mid-late",
+        cycle_budget=5.0,
+        cash_balance=111.26,
+        remaining_instruction_capacity=12,
+        current_up_notional=0.0,
+        current_down_notional=20.0,
+        spot_context=ArbSpotContext(
+            current_price=71075.0,
+            reference_price=71075.0,
+            lead_price=71075.0,
+            anchor_price=71000.0,
+            local_anchor_price=71000.0,
+            official_price_to_beat=0.0,
+            anchor_source="polymarket-rtds-anchor",
+            fair_up=0.59,
+            fair_down=0.41,
+            delta_bps=10.56,
+            price_mode="reference",
+            source="polymarket-rtds+binance",
+            age_ms=15,
+            binance_price=71075.0,
+            chainlink_price=71000.0,
+        ),
+        bracket_phase="redistribuir",
+    )
+
+    assert plan is not None
+    assert plan.price_mode == "stabilize-catchup"
+    assert plan.primary_target.label == "Up"
+    assert plan.primary_notional >= 4.99
+    assert plan.primary_notional <= 5.05
     db.close()
 
 

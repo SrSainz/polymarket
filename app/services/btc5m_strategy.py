@@ -122,9 +122,11 @@ _ARB_STABILIZE_BUDGET_FRACTION = 0.18
 _ARB_STABILIZE_MIN_DELTA_BPS = 1.0
 _ARB_STABILIZE_CATCHUP_RATIO_GAP = 0.18
 _ARB_STABILIZE_CATCHUP_TARGET_MIN_RATIO = 0.22
-_ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE = -0.020
+_ARB_STABILIZE_CATCHUP_MAX_PAIR_SUM = 1.03
+_ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE = -0.030
 _ARB_STABILIZE_CATCHUP_PROGRESS_FRACTION = 0.24
 _ARB_STABILIZE_CATCHUP_BUDGET_FRACTION = 0.14
+_ARB_MIN_OPERABLE_BUDGET_SLACK = 0.05
 _ARB_UNWIND_RATIO_TRIGGER = 0.18
 _ARB_UNWIND_EXTREME_RATIO = 0.88
 _ARB_UNWIND_MAX_FAIR_DISCOUNT = 0.03
@@ -1593,6 +1595,7 @@ class BTC5mStrategyService:
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_timing_regime=timing_regime,
                     strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                    strategy_cycle_budget=f"{cycle_budget:.6f}",
                     strategy_effective_min_notional=f"{effective_min_notional:.6f}",
                 ),
             )
@@ -1654,6 +1657,7 @@ class BTC5mStrategyService:
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_timing_regime=timing_regime,
                     strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                    strategy_cycle_budget=f"{cycle_budget:.6f}",
                     strategy_effective_min_notional=f"{effective_min_notional:.6f}",
                     **self._arb_reference_state_entries(reference_state),
                 ),
@@ -1919,7 +1923,7 @@ class BTC5mStrategyService:
             if existing_market_notional > 0:
                 single_budget_fraction *= 1.0 + min(ratio_gap_abs * 3.0, 0.75)
             single_budget = _round_down(cycle_budget * single_budget_fraction, "0.01")
-            single_budget = min(max(single_budget, self._arb_min_notional(target)), cash_balance)
+            single_budget = min(max(single_budget, self._arb_min_operable_budget(target)), cash_balance)
             single_levels = self._build_arb_single_side_levels(
                 target=target,
                 budget=single_budget,
@@ -2022,6 +2026,7 @@ class BTC5mStrategyService:
         if repair_plan is not None:
             return self._with_arb_reference_state(repair_plan, reference_state)
         stabilize_plan = self._build_arb_stabilize_plan(
+            mode=mode,
             market=market,
             up_outcome=up_outcome,
             down_outcome=down_outcome,
@@ -2081,6 +2086,7 @@ class BTC5mStrategyService:
                 strategy_timing_regime=timing_regime,
                 strategy_trigger_price_seen=f"{pair_sum:.6f}",
                 strategy_pair_sum=f"{pair_sum:.6f}",
+                strategy_cycle_budget=f"{cycle_budget:.6f}",
                 strategy_edge_pct=(
                     f"{max(self._arb_estimated_single_side_net_edge(target=up_outcome, fair_value=fair_up, pair_sum=pair_sum, delta_bps=spot_context.delta_bps if spot_context is not None else 0.0), self._arb_estimated_single_side_net_edge(target=down_outcome, fair_value=fair_down, pair_sum=pair_sum, delta_bps=spot_context.delta_bps if spot_context is not None else 0.0), 0.0):.6f}"
                 ),
@@ -2419,6 +2425,7 @@ class BTC5mStrategyService:
         levels: list[ArbSingleSideLevel] = []
         max_price = fair_value - max(_ARB_FAIR_VALUE_EDGE_MIN / 2, 0.005)
         min_notional = self._arb_min_notional(target)
+        min_budget = self._arb_min_operable_budget(target)
         tranche_targets = self._arb_single_tranche_targets(
             timing_regime=timing_regime,
             edge_pct=relative_edge,
@@ -2428,7 +2435,7 @@ class BTC5mStrategyService:
         )
 
         for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]:
-            if remaining_budget < min_notional:
+            if remaining_budget < min_budget:
                 break
             price = float(level.price)
             size = float(level.size)
@@ -2440,7 +2447,7 @@ class BTC5mStrategyService:
             available_shares = size
             level_used = False
             for tranche_target in tranche_targets:
-                if remaining_budget < min_notional:
+                if remaining_budget < min_budget:
                     break
                 tranche_budget = min(tranche_target, remaining_budget)
                 max_shares_budget = tranche_budget / max(price, 1e-9)
@@ -2475,9 +2482,10 @@ class BTC5mStrategyService:
         levels: list[ArbSingleSideLevel] = []
         max_price = fair_value + _ARB_REPAIR_FAIR_SLACK
         min_notional = self._arb_min_notional(target)
+        min_budget = self._arb_min_operable_budget(target)
 
         for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]:
-            if remaining_budget < min_notional:
+            if remaining_budget < min_budget:
                 break
             price = float(level.price)
             size = float(level.size)
@@ -2556,6 +2564,41 @@ class BTC5mStrategyService:
         self.db.set_bot_state("strategy_strategy_min_notional", f"{strategy_min:.6f}")
         self.db.set_bot_state("strategy_effective_min_notional", f"{effective_min:.6f}")
         return effective_min
+
+    def _arb_min_operable_budget(self, target: MarketOutcome) -> float:
+        min_notional = self._arb_min_notional(target)
+        reference_price = target.best_ask if target.best_ask > 0 else target.best_bid
+        if reference_price <= 0:
+            return min_notional
+        required_budget = _round_down(min_notional, "0.01")
+        for _ in range(25):
+            shares = _round_down(required_budget / max(reference_price, 1e-9), "0.0001")
+            if shares > 0 and _round_down(shares * reference_price, "0.01") >= min_notional:
+                return required_budget
+            required_budget = _round_down(required_budget + 0.01, "0.01")
+        return _round_down(min_notional + 0.25, "0.01")
+
+    def _arb_floor_budget_to_min_notional(
+        self,
+        *,
+        budget: float,
+        target: MarketOutcome,
+        needed_notional: float,
+        cycle_budget: float,
+        cash_balance: float,
+    ) -> float:
+        floored_budget = _round_down(max(budget, 0.0), "0.01")
+        min_budget = self._arb_min_operable_budget(target)
+        if floored_budget >= min_budget:
+            return floored_budget
+        max_operable_budget = min(
+            max(needed_notional, 0.0),
+            max(cycle_budget, 0.0) + _ARB_MIN_OPERABLE_BUDGET_SLACK,
+            max(cash_balance, 0.0),
+        )
+        if max_operable_budget < min_budget:
+            return floored_budget
+        return _round_down(min(min_budget, max_operable_budget), "0.01")
 
     def _arb_market_exposure_cap(self, *, mode: str, effective_bankroll: float) -> float:
         cap = max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
@@ -3206,6 +3249,13 @@ class BTC5mStrategyService:
             ),
             "0.01",
         )
+        repair_budget = self._arb_floor_budget_to_min_notional(
+            budget=repair_budget,
+            target=target,
+            needed_notional=needed_notional,
+            cycle_budget=cycle_budget,
+            cash_balance=cash_balance,
+        )
         if repair_budget < self._arb_min_notional(target):
             return None
 
@@ -3289,6 +3339,7 @@ class BTC5mStrategyService:
     def _build_arb_stabilize_plan(
         self,
         *,
+        mode: str = "paper",
         market: dict,
         up_outcome: MarketOutcome,
         down_outcome: MarketOutcome,
@@ -3315,14 +3366,13 @@ class BTC5mStrategyService:
         ratio_gap_abs = abs(ratio_gap)
         if ratio_gap_abs < _ARB_STABILIZE_RATIO_TRIGGER:
             return None
-        if pair_sum > _ARB_STABILIZE_MAX_PAIR_SUM:
-            return None
         if current_up_ratio < (1.0 - _ARB_STABILIZE_EXTREME_RATIO) or current_up_ratio > _ARB_STABILIZE_EXTREME_RATIO:
             extreme_imbalance = True
         else:
             extreme_imbalance = False
         if not extreme_imbalance:
             return None
+        relaxed_live_catchup = str(mode or "").strip().lower() in {"live", "shadow"}
 
         seconds_remaining = max(300 - self._seconds_into_window(market), 0)
         directional_target = self._arb_directional_target(
@@ -3351,13 +3401,32 @@ class BTC5mStrategyService:
 
         current_total_notional = max(current_up_notional + current_down_notional, 1e-9)
         current_target_ratio = current_target_notional / current_total_notional
-        catchup_rebalance = (
-            not delta_supports_target
-            and ratio_gap_abs >= _ARB_STABILIZE_CATCHUP_RATIO_GAP
+        severe_target_shortfall = (
+            ratio_gap_abs >= _ARB_STABILIZE_CATCHUP_RATIO_GAP
             and desired_target_ratio >= _ARB_STABILIZE_CATCHUP_TARGET_MIN_RATIO
             and current_target_ratio <= max(desired_target_ratio * 0.5, 0.20)
         )
+        if relaxed_live_catchup:
+            normal_stabilize_viable = (
+                delta_supports_target
+                and pair_sum <= _ARB_STABILIZE_MAX_PAIR_SUM
+                and net_edge >= _ARB_STABILIZE_MAX_NEG_NET_EDGE
+            )
+            catchup_rebalance = (
+                severe_target_shortfall
+                and not normal_stabilize_viable
+                and net_edge >= _ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE
+            )
+        else:
+            catchup_rebalance = not delta_supports_target and severe_target_shortfall
         if not delta_supports_target and not catchup_rebalance:
+            return None
+        max_pair_sum = (
+            _ARB_STABILIZE_CATCHUP_MAX_PAIR_SUM
+            if catchup_rebalance and relaxed_live_catchup
+            else _ARB_STABILIZE_MAX_PAIR_SUM
+        )
+        if pair_sum > max_pair_sum:
             return None
 
         if directional_target is not None and target.asset_id != directional_target.asset_id:
@@ -3367,7 +3436,9 @@ class BTC5mStrategyService:
         if target.best_ask > fair_value + _ARB_REPAIR_FAIR_SLACK:
             return None
         allowed_negative_edge = (
-            _ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE if catchup_rebalance else _ARB_STABILIZE_MAX_NEG_NET_EDGE
+            _ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE
+            if catchup_rebalance and relaxed_live_catchup
+            else _ARB_STABILIZE_MAX_NEG_NET_EDGE
         )
         if net_edge < allowed_negative_edge:
             return None
@@ -3390,6 +3461,13 @@ class BTC5mStrategyService:
                 cash_balance,
             ),
             "0.01",
+        )
+        stabilize_budget = self._arb_floor_budget_to_min_notional(
+            budget=stabilize_budget,
+            target=target,
+            needed_notional=needed_notional,
+            cycle_budget=cycle_budget,
+            cash_balance=cash_balance,
         )
         if stabilize_budget < self._arb_min_notional(target):
             return None
