@@ -3799,7 +3799,7 @@ def test_arb_micro_strict_realism_allows_soft_stale_official_rtds(tmp_path: Path
     db.close()
 
 
-def test_arb_min_notional_uses_exchange_min_order_size_per_asset(tmp_path: Path) -> None:
+def test_arb_min_notional_uses_max_of_strategy_and_exchange_minimums(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     service = BTC5mStrategyService(
@@ -3836,11 +3836,11 @@ def test_arb_min_notional_uses_exchange_min_order_size_per_asset(tmp_path: Path)
 
     effective_min_notional = service._arb_min_notional(target)  # noqa: SLF001
 
-    assert round(effective_min_notional, 2) == 1.30
+    assert round(effective_min_notional, 2) == 5.00
     assert db.get_bot_state("strategy_asset_min_order_size:asset-up") == "2.500000"
     assert db.get_bot_state("strategy_asset_min_notional:asset-up") == "1.300000"
-    assert db.get_bot_state("strategy_strategy_min_notional") == "1.000000"
-    assert db.get_bot_state("strategy_effective_min_notional") == "1.300000"
+    assert db.get_bot_state("strategy_strategy_min_notional") == "5.000000"
+    assert db.get_bot_state("strategy_effective_min_notional") == "5.000000"
     db.close()
 
 
