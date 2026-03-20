@@ -56,6 +56,7 @@ class BotConfig(BaseModel):
     execution_mode: Literal["paper", "live"] = "paper"
     live_execution_profile: Literal["taker_fok", "taker_fak", "maker_gtd", "maker_post_only_gtc"] = "taker_fak"
     live_small_target_capital: float = 100.0
+    live_small_max_total_loss: float = 25.0
     live_preflight_require_clean_ledger: bool = True
     dry_run: bool = True
     strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "btc5m_orderbook"
@@ -318,6 +319,8 @@ class BotConfig(BaseModel):
             raise ValueError("live_btc5m_max_open_positions must be >= 1")
         if self.live_small_target_capital < 0:
             raise ValueError("live_small_target_capital must be >= 0")
+        if self.live_small_max_total_loss < 0:
+            raise ValueError("live_small_max_total_loss must be >= 0")
         if self.autonomous_take_profit_pct < 0:
             raise ValueError("autonomous_take_profit_pct must be >= 0")
         if self.autonomous_stop_loss_pct < 0:

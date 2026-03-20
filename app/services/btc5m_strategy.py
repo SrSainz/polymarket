@@ -620,9 +620,11 @@ class BTC5mStrategyService:
 
         drawdown_floor = self._mode_drawdown_floor(mode=mode, live_total_capital=live_total_capital)
         if live_total_capital <= drawdown_floor:
+            capital_target = self._mode_capital_target(mode=mode, live_total_capital=live_total_capital)
+            max_total_loss = max(capital_target - drawdown_floor, 0.0)
             note = (
                 f"arb_micro drawdown stop: capital {live_total_capital:.2f} <= "
-                f"{drawdown_floor:.2f} ({_VIDARX_MAX_DRAWDOWN_PCT:.0%} loss)"
+                f"{drawdown_floor:.2f} (max total loss {max_total_loss:.2f})"
             )
             stats["blocked"] += 1
             self._record_strategy_snapshot(
@@ -1468,8 +1470,8 @@ class BTC5mStrategyService:
         condition_id = str(market.get("conditionId") or "")
         existing_market_notional = self._get_condition_exposure(condition_id)
         window_state = self.db.get_strategy_window(slug)
-        market_cap = self._arb_market_exposure_cap(effective_bankroll)
-        total_cap = self._arb_total_exposure_cap(effective_bankroll)
+        market_cap = self._arb_market_exposure_cap(mode=mode, effective_bankroll=effective_bankroll)
+        total_cap = self._arb_total_exposure_cap(mode=mode, effective_bankroll=effective_bankroll)
 
         if existing_market_notional >= market_cap:
             self._record_strategy_snapshot(
@@ -1555,6 +1557,7 @@ class BTC5mStrategyService:
         self.db.set_bot_state("strategy_exchange_min_notional_down", f"{down_exchange_min_notional:.6f}")
 
         cycle_budget = self._target_arb_cycle_budget(
+            mode=mode,
             cash_balance=cash_balance,
             effective_bankroll=effective_bankroll,
             current_total_exposure=current_total_exposure,
@@ -2115,6 +2118,7 @@ class BTC5mStrategyService:
     def _target_arb_cycle_budget(
         self,
         *,
+        mode: str,
         cash_balance: float,
         effective_bankroll: float,
         current_total_exposure: float,
@@ -2135,6 +2139,12 @@ class BTC5mStrategyService:
         if carry_exposure > 0 and effective_bankroll > 0:
             carry_ratio = min(carry_exposure / effective_bankroll, 0.25)
             desired *= max(0.45, 1.0 - (carry_ratio * 2.2))
+
+        if mode in {"live", "shadow"}:
+            capital_target = self._mode_capital_target(mode=mode, live_total_capital=cash_balance + current_total_exposure)
+            live_cycle_floor = capital_target * float(self.settings.config.live_btc5m_ticket_allocation_pct)
+            if live_cycle_floor > 0:
+                desired = max(desired, live_cycle_floor)
 
         min_pair_budget = self._arb_strategy_min_notional() * 2
         desired = max(desired, min_pair_budget)
@@ -2540,11 +2550,23 @@ class BTC5mStrategyService:
         self.db.set_bot_state("strategy_effective_min_notional", f"{effective_min:.6f}")
         return effective_min
 
-    def _arb_market_exposure_cap(self, effective_bankroll: float) -> float:
-        return max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
+    def _arb_market_exposure_cap(self, *, mode: str, effective_bankroll: float) -> float:
+        cap = max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
+        if mode in {"live", "shadow"}:
+            capital_target = self._mode_capital_target(mode=mode, live_total_capital=effective_bankroll)
+            live_ticket_cap = capital_target * float(self.settings.config.live_btc5m_ticket_allocation_pct)
+            if live_ticket_cap > 0:
+                cap = max(cap, live_ticket_cap)
+        return cap
 
-    def _arb_total_exposure_cap(self, effective_bankroll: float) -> float:
-        return max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
+    def _arb_total_exposure_cap(self, *, mode: str, effective_bankroll: float) -> float:
+        cap = max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
+        if mode in {"live", "shadow"}:
+            capital_target = self._mode_capital_target(mode=mode, live_total_capital=effective_bankroll)
+            live_ticket_cap = capital_target * float(self.settings.config.live_btc5m_ticket_allocation_pct)
+            if live_ticket_cap > 0:
+                cap = max(cap, live_ticket_cap)
+        return cap
 
     def _get_condition_outcome_exposures(
         self,
@@ -4295,6 +4317,10 @@ class BTC5mStrategyService:
 
     def _mode_drawdown_floor(self, *, mode: str, live_total_capital: float) -> float:
         capital_base = self._mode_capital_target(mode=mode, live_total_capital=live_total_capital)
+        if mode in {"live", "shadow"}:
+            max_total_loss = max(float(self.settings.config.live_small_max_total_loss or 0.0), 0.0)
+            if capital_base > 0 and max_total_loss > 0:
+                return max(capital_base - max_total_loss, 0.0)
         return capital_base * (1.0 - _VIDARX_MAX_DRAWDOWN_PCT)
 
     def _live_cash_snapshot(self, *, mode: str) -> tuple[float, float]:

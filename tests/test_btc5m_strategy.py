@@ -1651,6 +1651,7 @@ def test_arb_micro_live_scales_to_live_small_target_capital(tmp_path: Path) -> N
             bankroll=10000.0,
             strategy_trade_allocation_pct=0.03,
             live_small_target_capital=100.0,
+            live_btc5m_ticket_allocation_pct=0.25,
             profit_keep_ratio=0.0,
         ),
         logger=logging.getLogger("test-btc5m-arb-live-small"),
@@ -1661,11 +1662,37 @@ def test_arb_micro_live_scales_to_live_small_target_capital(tmp_path: Path) -> N
     assert stats["filled"] >= 2
     assert live_broker.instructions
     total_notional = sum(float(item.notional) for item in live_broker.instructions)
-    assert total_notional <= 3.05
-    assert total_notional >= 2.0
+    assert total_notional <= 25.05
+    assert total_notional >= 20.0
     assert db.get_bot_state("strategy_capital_target") == "100.00000000"
     assert round(float(db.get_bot_state("strategy_capital_scale_ratio") or 0.0), 4) == 0.01
     assert "paper-only" not in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_live_small_drawdown_floor_uses_absolute_max_total_loss(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=100.0,
+            live_small_max_total_loss=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-drawdown-floor"),
+    )
+
+    floor = service._mode_drawdown_floor(mode="live", live_total_capital=111.54)  # noqa: SLF001
+
+    assert round(floor, 2) == 75.00
     db.close()
 
 
