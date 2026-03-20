@@ -6,7 +6,7 @@ import math
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_CEILING, ROUND_DOWN
 
 from app.core.autonomous_decider import AutonomousDecider
 from app.core.bankroll import calculate_effective_bankroll, calculate_reserved_profit
@@ -2184,54 +2184,63 @@ class BTC5mStrategyService:
         remaining_budget = budget
         up_min_notional = self._arb_min_notional(up_outcome)
         down_min_notional = self._arb_min_notional(down_outcome)
-        min_pair_budget = up_min_notional + down_min_notional
+        min_pair_budget = self._arb_pair_min_operable_budget(up_outcome=up_outcome, down_outcome=down_outcome)
 
-        while (
-            up_idx < len(up_levels)
-            and down_idx < len(down_levels)
-            and remaining_budget >= min_pair_budget
-            and len(pairs) < _ARB_MAX_PAIR_LEVELS
-        ):
-            up_price, up_size = float(up_levels[up_idx][0]), float(up_levels[up_idx][1])
-            down_price, down_size = float(down_levels[down_idx][0]), float(down_levels[down_idx][1])
-            pair_sum = up_price + down_price
-            if pair_sum > pair_sum_cap:
+        tranche_targets = self._arb_pair_tranche_targets(
+            timing_regime=timing_regime,
+            edge_pct=max(1.0 - min(up_outcome.best_ask + down_outcome.best_ask, pair_sum_cap), 0.0),
+            pair_sum=min(up_outcome.best_ask + down_outcome.best_ask, pair_sum_cap),
+            net_edge=net_edge,
+            delta_bps=delta_bps,
+            ratio_gap=ratio_gap,
+            budget=budget,
+            min_pair_budget=min_pair_budget,
+        )
+
+        for tranche_target in tranche_targets:
+            if (
+                up_idx >= len(up_levels)
+                or down_idx >= len(down_levels)
+                or remaining_budget < min_pair_budget
+                or len(pairs) >= _ARB_MAX_PAIR_LEVELS
+            ):
                 break
 
-            available_shares = min(up_size, down_size)
-            if available_shares <= 0:
-                if up_size <= down_size:
-                    up_idx += 1
-                else:
-                    down_idx += 1
-                continue
+            while up_idx < len(up_levels) and down_idx < len(down_levels):
+                up_price, up_size = float(up_levels[up_idx][0]), float(up_levels[up_idx][1])
+                down_price, down_size = float(down_levels[down_idx][0]), float(down_levels[down_idx][1])
+                pair_sum = up_price + down_price
+                if pair_sum > pair_sum_cap:
+                    return pairs
 
-            edge_pct = max(1.0 - pair_sum, 0.0)
-            tranche_targets = self._arb_pair_tranche_targets(
-                timing_regime=timing_regime,
-                edge_pct=edge_pct,
-                pair_sum=pair_sum,
-                net_edge=net_edge,
-                delta_bps=delta_bps,
-                ratio_gap=ratio_gap,
-            )
-            level_consumed = False
-            for tranche_target in tranche_targets:
-                if remaining_budget < min_pair_budget:
-                    break
-                if len(pairs) >= _ARB_MAX_PAIR_LEVELS:
-                    break
+                available_shares = min(up_size, down_size)
+                if available_shares <= 0:
+                    if up_size <= down_size:
+                        up_idx += 1
+                    else:
+                        down_idx += 1
+                    continue
 
                 tranche_budget = min(tranche_target, remaining_budget)
+                if tranche_budget < min_pair_budget and remaining_budget >= min_pair_budget:
+                    tranche_budget = min_pair_budget
                 max_shares_budget = tranche_budget / max(pair_sum, 1e-9)
                 shares = _round_down(min(available_shares, max_shares_budget), "0.0001")
                 if shares <= 0:
-                    continue
+                    break
 
                 up_notional = _round_down(shares * up_price, "0.01")
                 down_notional = _round_down(shares * down_price, "0.01")
                 if up_notional < up_min_notional or down_notional < down_min_notional:
-                    continue
+                    up_level_capacity = _round_down(available_shares * up_price, "0.01")
+                    down_level_capacity = _round_down(available_shares * down_price, "0.01")
+                    if up_level_capacity < up_min_notional or down_level_capacity < down_min_notional:
+                        if up_size <= down_size:
+                            up_idx += 1
+                        if down_size <= up_size:
+                            down_idx += 1
+                        continue
+                    break
 
                 total_notional = up_notional + down_notional
                 pairs.append(
@@ -2244,24 +2253,13 @@ class BTC5mStrategyService:
                     )
                 )
                 remaining_budget -= total_notional
-                available_shares = max(available_shares - shares, 0.0)
                 up_levels[up_idx][1] = max(up_levels[up_idx][1] - shares, 0.0)
                 down_levels[down_idx][1] = max(down_levels[down_idx][1] - shares, 0.0)
-                level_consumed = True
-                if available_shares <= 1e-9:
-                    break
-
-            if not level_consumed:
-                if up_size <= down_size:
+                if up_levels[up_idx][1] <= 1e-9:
                     up_idx += 1
-                else:
+                if down_levels[down_idx][1] <= 1e-9:
                     down_idx += 1
-                continue
-
-            if up_levels[up_idx][1] <= 1e-9:
-                up_idx += 1
-            if down_levels[down_idx][1] <= 1e-9:
-                down_idx += 1
+                break
         return pairs
 
     def _select_cheap_side_target(
@@ -2432,42 +2430,46 @@ class BTC5mStrategyService:
             pair_sum=pair_sum,
             delta_bps=delta_bps,
             ratio_gap=ratio_gap,
+            budget=budget,
+            min_budget=min_budget,
         )
 
-        for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]:
-            if remaining_budget < min_budget:
+        ask_levels = [[float(level.price), float(level.size)] for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]]
+        level_idx = 0
+        for tranche_target in tranche_targets:
+            if remaining_budget < min_budget or level_idx >= len(ask_levels):
                 break
-            price = float(level.price)
-            size = float(level.size)
-            if price > max_price:
-                break
-            if size <= 0:
-                continue
-
-            available_shares = size
-            level_used = False
-            for tranche_target in tranche_targets:
-                if remaining_budget < min_budget:
-                    break
-                tranche_budget = min(tranche_target, remaining_budget)
-                max_shares_budget = tranche_budget / max(price, 1e-9)
-                shares = _round_down(min(available_shares, max_shares_budget), "0.0001")
-                if shares <= 0:
+            while level_idx < len(ask_levels):
+                price = float(ask_levels[level_idx][0])
+                size = float(ask_levels[level_idx][1])
+                if price > max_price:
+                    return levels
+                if size <= 0:
+                    level_idx += 1
                     continue
+
+                tranche_budget = min(tranche_target, remaining_budget)
+                if tranche_budget < min_budget and remaining_budget >= min_budget:
+                    tranche_budget = min_budget
+                max_shares_budget = tranche_budget / max(price, 1e-9)
+                shares = _round_down(min(size, max_shares_budget), "0.0001")
+                if shares <= 0:
+                    break
 
                 notional = _round_down(shares * price, "0.01")
                 if notional < min_notional:
-                    continue
+                    level_capacity = _round_down(size * price, "0.01")
+                    if level_capacity < min_notional:
+                        level_idx += 1
+                        continue
+                    break
 
                 levels.append(ArbSingleSideLevel(price=price, shares=shares, notional=notional))
                 remaining_budget -= notional
-                available_shares = max(available_shares - shares, 0.0)
-                level_used = True
-                if available_shares <= 1e-9:
-                    break
-
-            if not level_used:
-                continue
+                ask_levels[level_idx][1] = max(ask_levels[level_idx][1] - shares, 0.0)
+                if ask_levels[level_idx][1] <= 1e-9:
+                    level_idx += 1
+                break
 
         return levels
 
@@ -2578,6 +2580,40 @@ class BTC5mStrategyService:
                 return required_budget
             required_budget = _round_down(required_budget + 0.01, "0.01")
         return _round_down(min_notional + 0.25, "0.01")
+
+    def _arb_pair_min_operable_budget(
+        self,
+        *,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+    ) -> float:
+        up_price = up_outcome.best_ask if up_outcome.best_ask > 0 else up_outcome.best_bid
+        down_price = down_outcome.best_ask if down_outcome.best_ask > 0 else down_outcome.best_bid
+        if up_price <= 0 or down_price <= 0:
+            return self._arb_min_operable_budget(up_outcome) + self._arb_min_operable_budget(down_outcome)
+
+        up_min_notional = self._arb_min_notional(up_outcome)
+        down_min_notional = self._arb_min_notional(down_outcome)
+        min_shares = max(
+            self._arb_exchange_min_order_size(up_outcome.asset_id),
+            self._arb_exchange_min_order_size(down_outcome.asset_id),
+            up_min_notional / max(up_price, 1e-9),
+            down_min_notional / max(down_price, 1e-9),
+        )
+        if min_shares <= 0:
+            return self._arb_min_operable_budget(up_outcome) + self._arb_min_operable_budget(down_outcome)
+
+        required_shares = _round_up(min_shares, "0.0001")
+        for _ in range(25):
+            up_budget = _round_down(required_shares * up_price, "0.01")
+            down_budget = _round_down(required_shares * down_price, "0.01")
+            if up_budget >= up_min_notional and down_budget >= down_min_notional:
+                return _round_down(up_budget + down_budget, "0.01")
+            required_shares = _round_up(required_shares + 0.0001, "0.0001")
+        return _round_down(
+            self._arb_min_operable_budget(up_outcome) + self._arb_min_operable_budget(down_outcome),
+            "0.01",
+        )
 
     def _arb_floor_budget_to_min_notional(
         self,
@@ -2873,6 +2909,50 @@ class BTC5mStrategyService:
             capacity = int(round(capacity * max(0.45, 1.0 - (carry_ratio * 0.70))))
         return int(min(max(capacity, 8), _ARB_MAX_PLAN_INSTRUCTIONS))
 
+    def _scaled_tranche_budgets(
+        self,
+        *,
+        base_targets: tuple[float, ...],
+        budget: float,
+        min_budget: float,
+        level_cap: int,
+    ) -> tuple[float, ...]:
+        if budget < min_budget or min_budget <= 0 or level_cap <= 0:
+            return ()
+        feasible_count = int(max(math.floor(budget / min_budget), 0))
+        if feasible_count <= 0:
+            return ()
+        target_count = min(feasible_count, level_cap)
+        weights = [float(target) for target in base_targets if float(target) > 0]
+        if not weights:
+            return (_round_down(budget, "0.01"),)
+        if target_count > len(weights):
+            if len(weights) >= 2 and weights[-2] > 0:
+                growth = weights[-1] / weights[-2]
+            else:
+                growth = 1.5
+            growth = min(max(growth, 1.1), 1.8)
+            while len(weights) < target_count:
+                weights.append(weights[-1] * growth)
+        selected = weights[:target_count]
+        total_weight = sum(selected)
+        if total_weight <= 0:
+            return (_round_down(budget, "0.01"),)
+
+        remaining_budget = _round_down(budget, "0.01")
+        tranches: list[float] = []
+        for idx, weight in enumerate(selected):
+            remaining_slots = target_count - idx
+            min_tail_budget = min_budget * (remaining_slots - 1)
+            max_for_this = _round_down(max(remaining_budget - min_tail_budget, min_budget), "0.01")
+            proportional = _round_down(budget * (weight / total_weight), "0.01")
+            tranche = min(max(proportional, min_budget), max_for_this)
+            tranches.append(tranche)
+            remaining_budget = _round_down(max(remaining_budget - tranche, 0.0), "0.01")
+        if tranches:
+            tranches[-1] = _round_down(tranches[-1] + remaining_budget, "0.01")
+        return tuple(tranche for tranche in tranches if tranche >= min_budget)
+
     def _arb_pair_tranche_targets(
         self,
         *,
@@ -2882,6 +2962,8 @@ class BTC5mStrategyService:
         net_edge: float,
         delta_bps: float,
         ratio_gap: float,
+        budget: float,
+        min_pair_budget: float,
     ) -> tuple[float, ...]:
         base = _ARB_PAIR_BURST_MID_LATE if timing_regime == "mid-late" else _ARB_PAIR_BURST_BASE
         scale = 1.0
@@ -2905,7 +2987,13 @@ class BTC5mStrategyService:
             scale *= 1.05
         if ratio_gap >= 0.10:
             scale *= 1.10
-        return tuple(_round_down(target * scale, "0.01") for target in base)
+        scaled_base = tuple(_round_down(target * scale, "0.01") for target in base)
+        return self._scaled_tranche_budgets(
+            base_targets=scaled_base,
+            budget=budget,
+            min_budget=min_pair_budget,
+            level_cap=_ARB_MAX_PAIR_LEVELS,
+        )
 
     def _arb_single_tranche_targets(
         self,
@@ -2915,6 +3003,8 @@ class BTC5mStrategyService:
         pair_sum: float = 1.0,
         delta_bps: float = 0.0,
         ratio_gap: float = 0.0,
+        budget: float,
+        min_budget: float,
     ) -> tuple[float, ...]:
         base = _ARB_SINGLE_BURST_MID_LATE if timing_regime == "mid-late" else _ARB_SINGLE_BURST_BASE
         scale = 1.0
@@ -2932,7 +3022,13 @@ class BTC5mStrategyService:
             scale *= 1.04
         if ratio_gap >= 0.10:
             scale *= 1.08
-        return tuple(_round_down(target * scale, "0.01") for target in base)
+        scaled_base = tuple(_round_down(target * scale, "0.01") for target in base)
+        return self._scaled_tranche_budgets(
+            base_targets=scaled_base,
+            budget=budget,
+            min_budget=min_budget,
+            level_cap=_ARB_MAX_PAIR_LEVELS,
+        )
 
     def _arb_spot_overlay_target(
         self,
@@ -6127,6 +6223,11 @@ def _to_timestamp(raw_value: str) -> int:
 def _round_down(value: float, precision: str) -> float:
     quant = Decimal(precision)
     return float(Decimal(str(value)).quantize(quant, rounding=ROUND_DOWN))
+
+
+def _round_up(value: float, precision: str) -> float:
+    quant = Decimal(precision)
+    return float((Decimal(str(value)) / quant).to_integral_value(rounding=ROUND_CEILING) * quant)
 
 
 def _safe_float(raw_value: object) -> float:

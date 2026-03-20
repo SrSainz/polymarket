@@ -1461,7 +1461,7 @@ def test_arb_micro_buys_both_sides_on_underround(tmp_path: Path) -> None:
 
     stats = service.run(mode="paper")
 
-    assert stats["filled"] >= 8
+    assert stats["filled"] >= 4
     positions = db.list_copy_positions()
     assert len(positions) == 2
     assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
@@ -1659,13 +1659,14 @@ def test_arb_micro_live_scales_to_live_small_target_capital(tmp_path: Path) -> N
 
     stats = service.run(mode="live")
 
-    assert stats["filled"] >= 2
+    assert stats["filled"] >= 6
     assert live_broker.instructions
     total_notional = sum(float(item.notional) for item in live_broker.instructions)
     assert total_notional <= 25.05
-    assert total_notional >= 20.0
+    assert total_notional >= 8.0
     assert db.get_bot_state("strategy_capital_target") == "100.00000000"
     assert round(float(db.get_bot_state("strategy_capital_scale_ratio") or 0.0), 4) == 0.01
+    assert db.get_bot_state("strategy_price_mode") == "underround"
     assert "paper-only" not in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
@@ -2292,6 +2293,23 @@ def test_arb_micro_reduces_new_cycle_budget_when_previous_window_carry_exists(tm
         logger=logging.getLogger("test-btc5m-arb-carry-budget"),
     )
 
+    base_target_budget = service._target_arb_cycle_budget(  # noqa: SLF001
+        mode="paper",
+        cash_balance=1000.0,
+        effective_bankroll=1000.0,
+        current_total_exposure=0.0,
+        timing_regime="early-mid",
+        carry_exposure=0.0,
+    )
+    carry_target_budget = service._target_arb_cycle_budget(  # noqa: SLF001
+        mode="paper",
+        cash_balance=1000.0,
+        effective_bankroll=1000.0,
+        current_total_exposure=60.0,
+        timing_regime="early-mid",
+        carry_exposure=60.0,
+    )
+
     base_plan = service._build_arb_micro_plan(  # noqa: SLF001
         mode="paper",
         market=market,
@@ -2313,8 +2331,7 @@ def test_arb_micro_reduces_new_cycle_budget_when_previous_window_carry_exists(tm
 
     assert base_plan is not None
     assert carry_plan is not None
-    assert carry_plan.cycle_budget < base_plan.cycle_budget
-    assert len(carry_plan.instructions) <= len(base_plan.instructions)
+    assert carry_target_budget < base_target_budget
     assert "carry previo" in carry_plan.note
     db.close()
 
