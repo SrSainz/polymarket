@@ -1,0 +1,20 @@
+[Unit]
+Description=Polymarket Live Dashboard
+After=network-online.target polymarket-live.service
+Wants=network-online.target
+Conflicts=polymarket-dashboard.service polymarket-paper.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/SrSainz/apps/polymarket
+Environment=PYTHONUNBUFFERED=1
+Environment=LIVE_TRADING=true
+Environment=DASHBOARD_PORT=8765
+ExecStartPre=/usr/bin/bash -lc 'fuser -k 8765/tcp || true'
+ExecStart=/home/SrSainz/apps/polymarket/.venv/bin/python run.py dashboard --runtime-mode live
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Polymarket Live Bot
+After=network-online.target
+Wants=network-online.target
+Conflicts=polymarket-paper.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/SrSainz/apps/polymarket
+Environment=PYTHONUNBUFFERED=1
+Environment=LIVE_TRADING=true
+ExecStart=/home/SrSainz/apps/polymarket/.venv/bin/python run.py live
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

@@ -263,6 +263,18 @@ If this research layer evolves into a production service:
 - use CI for pytest, replay smoke tests and packaging checks
 - keep live trading behind explicit feature flags and secret management
 
+## NAS live deployment
+
+To make the public dashboard serve the `live` runtime instead of `paper`, use the user-level `systemd` units in [deploy/systemd/README.md](C:/Users/sergi/Desktop/polymarket/polymarket_copy_bot/deploy/systemd/README.md).
+
+The important detail is that the public port must run:
+
+```bash
+python run.py dashboard --runtime-mode live
+```
+
+and not the default paper dashboard.
+
 ## Limitations
 
 - The live paper runner is still a simulation.
