@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import requests
@@ -28,6 +29,8 @@ class CLOBClient:
         adapter = HTTPAdapter(max_retries=retries)
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
+        self._book_summary_cache_seconds = 30.0
+        self._min_order_size_cache: dict[str, tuple[float, float]] = {}
 
     def track_assets(self, token_ids: list[str] | tuple[str, ...]) -> None:
         if self.market_feed is None:
@@ -70,6 +73,31 @@ class CLOBClient:
             book = self.market_feed.get_book(token_id)
             if book:
                 return book
+        response = self.session.get(
+            f"{self.base_url}/book",
+            params={"token_id": token_id},
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    def get_min_order_size(self, token_id: str) -> float | None:
+        cached = self._min_order_size_cache.get(token_id)
+        now = time.time()
+        if cached is not None and now < cached[1]:
+            return cached[0] if cached[0] > 0 else None
+
+        book = self.market_feed.get_book(token_id) if self.market_feed is not None else None
+        min_order_size = _coerce_positive_float(book.get("min_order_size")) if isinstance(book, dict) else 0.0
+        if min_order_size <= 0:
+            payload = self._fetch_book_payload(token_id)
+            min_order_size = _coerce_positive_float(payload.get("min_order_size")) if isinstance(payload, dict) else 0.0
+
+        self._min_order_size_cache[token_id] = (min_order_size, now + self._book_summary_cache_seconds)
+        return min_order_size if min_order_size > 0 else None
+
+    def _fetch_book_payload(self, token_id: str) -> dict[str, Any]:
         response = self.session.get(
             f"{self.base_url}/book",
             params={"token_id": token_id},
@@ -340,3 +368,8 @@ def _safe_float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _coerce_positive_float(value: object) -> float:
+    parsed = _safe_float(value)
+    return parsed if parsed > 0 else 0.0

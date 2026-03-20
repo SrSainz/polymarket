@@ -12,7 +12,7 @@ from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.spot_feed import SpotSnapshot
-from app.services.btc5m_strategy import BTC5mStrategyService
+from app.services.btc5m_strategy import AskLevel, BTC5mStrategyService, MarketOutcome
 from app.settings import AppPaths, AppSettings, BotConfig, EnvSettings
 
 
@@ -70,6 +70,14 @@ class _FakeCLOBClient:
 
     def get_book(self, token_id: str) -> dict:
         return self.books[token_id]
+
+    def get_min_order_size(self, token_id: str) -> float | None:
+        raw_value = (self.books.get(token_id) or {}).get("min_order_size")
+        try:
+            resolved = float(raw_value)
+        except (TypeError, ValueError):
+            return None
+        return resolved if resolved > 0 else None
 
     def get_midpoint(self, token_id: str) -> float | None:
         book = self.books.get(token_id) or {}
@@ -2200,6 +2208,7 @@ def test_arb_micro_reduces_new_cycle_budget_when_previous_window_carry_exists(tm
     )
 
     base_plan = service._build_arb_micro_plan(  # noqa: SLF001
+        mode="paper",
         market=market,
         cash_balance=1000.0,
         effective_bankroll=1000.0,
@@ -2208,6 +2217,7 @@ def test_arb_micro_reduces_new_cycle_budget_when_previous_window_carry_exists(tm
         carry_window_count=0,
     )
     carry_plan = service._build_arb_micro_plan(  # noqa: SLF001
+        mode="paper",
         market=market,
         cash_balance=1000.0,
         effective_bankroll=1000.0,
@@ -3614,6 +3624,94 @@ def test_arb_micro_strict_realism_allows_soft_stale_official_rtds(tmp_path: Path
     assert db.get_bot_state("strategy_reference_comparable") == "1"
     assert db.get_bot_state("strategy_reference_quality") == "soft-stale-official"
     assert "realism gate" not in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_min_notional_uses_exchange_min_order_size_per_asset(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {
+                    "min_order_size": "2.5",
+                    "bids": [{"price": "0.51", "size": "200"}],
+                    "asks": [{"price": "0.52", "size": "200"}],
+                }
+            },
+            balance=1000.0,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", min_trade_amount=5.0),
+        logger=logging.getLogger("test-btc5m-min-order-size"),
+        spot_feed=None,
+    )
+
+    target = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.52,
+        best_bid=0.51,
+        best_ask_size=200.0,
+        ask_levels=(AskLevel(price=0.52, size=200.0),),
+    )
+
+    effective_min_notional = service._arb_min_notional(target)  # noqa: SLF001
+
+    assert round(effective_min_notional, 2) == 1.30
+    assert db.get_bot_state("strategy_asset_min_order_size:asset-up") == "2.500000"
+    assert db.get_bot_state("strategy_asset_min_notional:asset-up") == "1.300000"
+    assert db.get_bot_state("strategy_strategy_min_notional") == "1.000000"
+    assert db.get_bot_state("strategy_effective_min_notional") == "1.300000"
+    db.close()
+
+
+def test_arb_reference_state_relaxes_soft_stale_rtds_budget_in_live(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", btc5m_reference_soft_budget_scale=0.55),
+        logger=logging.getLogger("test-btc5m-live-soft-stale-rtds"),
+        spot_feed=None,
+    )
+
+    paper_state = service._arb_reference_state(  # noqa: SLF001
+        mode="paper",
+        source="polymarket-rtds+binance",
+        age_ms=1600,
+        chainlink_price=71775.07,
+        official_price_to_beat=0.0,
+        local_anchor_price=71760.0,
+        anchor_source="polymarket-rtds-anchor",
+    )
+    live_state = service._arb_reference_state(  # noqa: SLF001
+        mode="live",
+        source="polymarket-rtds+binance",
+        age_ms=1600,
+        chainlink_price=71775.07,
+        official_price_to_beat=0.0,
+        local_anchor_price=71760.0,
+        anchor_source="polymarket-rtds-anchor",
+    )
+
+    assert paper_state.quality == "soft-stale-rtds"
+    assert round(paper_state.budget_scale, 2) == 0.45
+    assert live_state.quality == "soft-stale-rtds"
+    assert round(live_state.budget_scale, 2) == 0.80
     db.close()
 
 

@@ -78,7 +78,7 @@ _ARB_ENABLE_CHEAP_SIDE = True
 _ARB_ENABLE_PAIR_OVERLAY = False
 _ARB_MIN_SECONDS = 10
 _ARB_MAX_SECONDS = 275
-_ARB_MIN_NOTIONAL = 1.00
+_ARB_STRATEGY_MIN_NOTIONAL = 1.00
 _ARB_CHEAP_SIDE_MIN_DELTA_BPS = 2.5
 _ARB_CHEAP_SIDE_STRONG_EDGE_MIN = 0.11
 _ARB_CHEAP_SIDE_SOFT_DELTA_BPS = 0.75
@@ -343,6 +343,7 @@ class BTC5mStrategyService:
         self._cached_market: dict | None = None
         self._cached_market_expires_at = 0.0
         self._official_price_cache: dict[str, tuple[float, float]] = {}
+        self._arb_exchange_min_order_size_cache: dict[str, float] = {}
         self._last_cycle_log_signature = ""
         self._last_cycle_log_at = 0.0
         self._last_market_lookup_warning_signature = ""
@@ -713,6 +714,7 @@ class BTC5mStrategyService:
             )
 
         plan = self._build_arb_micro_plan(
+            mode=mode,
             market=market,
             cash_balance=cash_balance,
             effective_bankroll=operating_bankroll,
@@ -1387,6 +1389,7 @@ class BTC5mStrategyService:
     def _build_arb_micro_plan(
         self,
         *,
+        mode: str,
         market: dict,
         cash_balance: float,
         effective_bankroll: float,
@@ -1440,6 +1443,7 @@ class BTC5mStrategyService:
 
         spot_context = self._arb_spot_context(market=market, seconds_into_window=seconds_into_window)
         reference_state = self._arb_reference_state(
+            mode=mode,
             source=spot_context.source if spot_context is not None else "",
             age_ms=spot_context.age_ms if spot_context is not None else 0,
             chainlink_price=float(spot_context.chainlink_price or 0.0) if spot_context is not None else 0.0,
@@ -1540,6 +1544,15 @@ class BTC5mStrategyService:
             carry_exposure=carry_exposure,
             carry_window_count=carry_window_count,
         )
+        effective_min_notional = self._arb_min_notional(up_outcome, down_outcome)
+        up_exchange_min_size = self._arb_exchange_min_order_size(up_outcome.asset_id)
+        down_exchange_min_size = self._arb_exchange_min_order_size(down_outcome.asset_id)
+        up_exchange_min_notional = self._arb_exchange_min_notional(up_outcome)
+        down_exchange_min_notional = self._arb_exchange_min_notional(down_outcome)
+        self.db.set_bot_state("strategy_exchange_min_order_size_up", f"{up_exchange_min_size:.6f}")
+        self.db.set_bot_state("strategy_exchange_min_order_size_down", f"{down_exchange_min_size:.6f}")
+        self.db.set_bot_state("strategy_exchange_min_notional_up", f"{up_exchange_min_notional:.6f}")
+        self.db.set_bot_state("strategy_exchange_min_notional_down", f"{down_exchange_min_notional:.6f}")
 
         cycle_budget = self._target_arb_cycle_budget(
             cash_balance=cash_balance,
@@ -1562,7 +1575,7 @@ class BTC5mStrategyService:
             ratio_gap=abs(desired_up_ratio - current_up_ratio),
             carry_exposure=carry_exposure,
         )
-        if cycle_budget < self._arb_min_notional():
+        if cycle_budget < effective_min_notional:
             self._record_strategy_snapshot(
                 market=market,
                 note="arb_micro budget below minimum after caps",
@@ -1572,6 +1585,7 @@ class BTC5mStrategyService:
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_timing_regime=timing_regime,
                     strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                    strategy_effective_min_notional=f"{effective_min_notional:.6f}",
                 ),
             )
             return None
@@ -1622,7 +1636,7 @@ class BTC5mStrategyService:
             ratio_gap=abs(desired_up_ratio - current_up_ratio),
             carry_exposure=carry_exposure,
         )
-        if cycle_budget < self._arb_min_notional():
+        if cycle_budget < effective_min_notional:
             self._record_strategy_snapshot(
                 market=market,
                 note=f"arb_micro budget below minimum after reference gate ({reference_state.quality})",
@@ -1632,6 +1646,7 @@ class BTC5mStrategyService:
                     strategy_window_seconds=str(seconds_into_window),
                     strategy_timing_regime=timing_regime,
                     strategy_current_market_exposure=f"{existing_market_notional:.6f}",
+                    strategy_effective_min_notional=f"{effective_min_notional:.6f}",
                     **self._arb_reference_state_entries(reference_state),
                 ),
             )
@@ -1753,7 +1768,7 @@ class BTC5mStrategyService:
                         ),
                         "0.01",
                     )
-                    if overlay_budget >= self._arb_min_notional():
+                    if overlay_budget >= self._arb_min_notional(overlay_target):
                         overlay_levels = self._build_arb_single_side_levels(
                             target=overlay_target,
                             budget=overlay_budget,
@@ -1896,7 +1911,7 @@ class BTC5mStrategyService:
             if existing_market_notional > 0:
                 single_budget_fraction *= 1.0 + min(ratio_gap_abs * 3.0, 0.75)
             single_budget = _round_down(cycle_budget * single_budget_fraction, "0.01")
-            single_budget = min(max(single_budget, self._arb_min_notional()), cash_balance)
+            single_budget = min(max(single_budget, self._arb_min_notional(target)), cash_balance)
             single_levels = self._build_arb_single_side_levels(
                 target=target,
                 budget=single_budget,
@@ -2121,7 +2136,7 @@ class BTC5mStrategyService:
             carry_ratio = min(carry_exposure / effective_bankroll, 0.25)
             desired *= max(0.45, 1.0 - (carry_ratio * 2.2))
 
-        min_pair_budget = self._arb_min_notional() * 2
+        min_pair_budget = self._arb_strategy_min_notional() * 2
         desired = max(desired, min_pair_budget)
         desired = min(desired, cash_balance)
         return _round_down(desired, "0.01")
@@ -2144,12 +2159,14 @@ class BTC5mStrategyService:
         up_idx = 0
         down_idx = 0
         remaining_budget = budget
-        min_notional = self._arb_min_notional()
+        up_min_notional = self._arb_min_notional(up_outcome)
+        down_min_notional = self._arb_min_notional(down_outcome)
+        min_pair_budget = up_min_notional + down_min_notional
 
         while (
             up_idx < len(up_levels)
             and down_idx < len(down_levels)
-            and remaining_budget >= min_notional * 2
+            and remaining_budget >= min_pair_budget
             and len(pairs) < _ARB_MAX_PAIR_LEVELS
         ):
             up_price, up_size = float(up_levels[up_idx][0]), float(up_levels[up_idx][1])
@@ -2177,7 +2194,7 @@ class BTC5mStrategyService:
             )
             level_consumed = False
             for tranche_target in tranche_targets:
-                if remaining_budget < min_notional * 2:
+                if remaining_budget < min_pair_budget:
                     break
                 if len(pairs) >= _ARB_MAX_PAIR_LEVELS:
                     break
@@ -2190,7 +2207,7 @@ class BTC5mStrategyService:
 
                 up_notional = _round_down(shares * up_price, "0.01")
                 down_notional = _round_down(shares * down_price, "0.01")
-                if up_notional < min_notional or down_notional < min_notional:
+                if up_notional < up_min_notional or down_notional < down_min_notional:
                     continue
 
                 total_notional = up_notional + down_notional
@@ -2384,7 +2401,7 @@ class BTC5mStrategyService:
         remaining_budget = budget
         levels: list[ArbSingleSideLevel] = []
         max_price = fair_value - max(_ARB_FAIR_VALUE_EDGE_MIN / 2, 0.005)
-        min_notional = self._arb_min_notional()
+        min_notional = self._arb_min_notional(target)
         tranche_targets = self._arb_single_tranche_targets(
             timing_regime=timing_regime,
             edge_pct=relative_edge,
@@ -2440,7 +2457,7 @@ class BTC5mStrategyService:
         remaining_budget = budget
         levels: list[ArbSingleSideLevel] = []
         max_price = fair_value + _ARB_REPAIR_FAIR_SLACK
-        min_notional = self._arb_min_notional()
+        min_notional = self._arb_min_notional(target)
 
         for level in target.ask_levels[:_ARB_MAX_PAIR_LEVELS]:
             if remaining_budget < min_notional:
@@ -2482,14 +2499,52 @@ class BTC5mStrategyService:
         drift_drag = min(drift_shortfall / 400.0, 0.006)
         return raw_edge - overround_drag - spread_drag - drift_drag - _ARB_CHEAP_SIDE_FEE_ESTIMATE
 
-    def _arb_min_notional(self) -> float:
-        return min(self.settings.config.min_trade_amount, _ARB_MIN_NOTIONAL)
+    def _arb_strategy_min_notional(self) -> float:
+        return min(self.settings.config.min_trade_amount, _ARB_STRATEGY_MIN_NOTIONAL)
+
+    def _arb_exchange_min_order_size(self, asset_id: str) -> float:
+        asset_key = str(asset_id or "").strip()
+        if not asset_key:
+            return 0.0
+        if asset_key in self._arb_exchange_min_order_size_cache:
+            return self._arb_exchange_min_order_size_cache[asset_key]
+        min_order_size = 0.0
+        try:
+            resolved = self.clob_client.get_min_order_size(asset_key)
+        except Exception:  # noqa: BLE001
+            resolved = None
+        if resolved is not None and resolved > 0:
+            min_order_size = float(resolved)
+        self._arb_exchange_min_order_size_cache[asset_key] = min_order_size
+        self.db.set_bot_state(f"strategy_asset_min_order_size:{asset_key}", f"{min_order_size:.6f}")
+        return min_order_size
+
+    def _arb_exchange_min_notional(self, target: MarketOutcome) -> float:
+        min_order_size = self._arb_exchange_min_order_size(target.asset_id)
+        if min_order_size <= 0:
+            self.db.set_bot_state(f"strategy_asset_min_notional:{target.asset_id}", "0.000000")
+            return 0.0
+        reference_price = target.best_ask if target.best_ask > 0 else target.best_bid
+        if reference_price <= 0:
+            self.db.set_bot_state(f"strategy_asset_min_notional:{target.asset_id}", "0.000000")
+            return 0.0
+        min_notional = min_order_size * reference_price
+        self.db.set_bot_state(f"strategy_asset_min_notional:{target.asset_id}", f"{min_notional:.6f}")
+        return min_notional
+
+    def _arb_min_notional(self, *targets: MarketOutcome) -> float:
+        strategy_min = self._arb_strategy_min_notional()
+        exchange_min = max((self._arb_exchange_min_notional(target) for target in targets), default=0.0)
+        effective_min = max(strategy_min, exchange_min)
+        self.db.set_bot_state("strategy_strategy_min_notional", f"{strategy_min:.6f}")
+        self.db.set_bot_state("strategy_effective_min_notional", f"{effective_min:.6f}")
+        return effective_min
 
     def _arb_market_exposure_cap(self, effective_bankroll: float) -> float:
-        return max(self._arb_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
+        return max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
 
     def _arb_total_exposure_cap(self, effective_bankroll: float) -> float:
-        return max(self._arb_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
+        return max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
 
     def _get_condition_outcome_exposures(
         self,
@@ -2678,7 +2733,7 @@ class BTC5mStrategyService:
             scale *= max(0.40, 1.0 - (carry_ratio * 1.05))
 
         desired = _round_down(min(base_budget * scale, max_budget), "0.01")
-        min_pair_budget = self._arb_min_notional() * 2
+        min_pair_budget = self._arb_strategy_min_notional() * 2
         if max_budget < min_pair_budget:
             return _round_down(max_budget, "0.01")
         return max(desired, min_pair_budget)
@@ -2910,7 +2965,7 @@ class BTC5mStrategyService:
 
         primary_budget = _round_down(cycle_budget * primary_ratio, "0.01")
         hedge_budget = _round_down(min(cycle_budget - primary_budget, cash_balance - primary_budget), "0.01")
-        if primary_budget < self._arb_min_notional() or hedge_budget < self._arb_min_notional():
+        if primary_budget < self._arb_min_notional(primary_target) or hedge_budget < self._arb_min_notional(hedge_target):
             return None
 
         primary_capacity = max(1, min(int(round(remaining_instruction_capacity * primary_ratio)), remaining_instruction_capacity - 1))
@@ -2979,7 +3034,7 @@ class BTC5mStrategyService:
 
         primary_notional = sum(item.notional for item in primary_instructions)
         hedge_notional = sum(item.notional for item in hedge_instructions)
-        if primary_notional < self._arb_min_notional() or hedge_notional < self._arb_min_notional():
+        if primary_notional < self._arb_min_notional(primary_target) or hedge_notional < self._arb_min_notional(hedge_target):
             return None
 
         added_up_notional = primary_notional if primary_target.asset_id == up_outcome.asset_id else hedge_notional
@@ -3124,7 +3179,7 @@ class BTC5mStrategyService:
             ),
             "0.01",
         )
-        if repair_budget < self._arb_min_notional():
+        if repair_budget < self._arb_min_notional(target):
             return None
 
         repair_levels = self._build_arb_repair_levels(
@@ -3291,7 +3346,7 @@ class BTC5mStrategyService:
             ),
             "0.01",
         )
-        if stabilize_budget < self._arb_min_notional():
+        if stabilize_budget < self._arb_min_notional(target):
             return None
 
         stabilize_levels = self._build_arb_repair_levels(
@@ -3451,7 +3506,7 @@ class BTC5mStrategyService:
             ),
             "0.01",
         )
-        if unwind_budget < self._arb_min_notional():
+        if unwind_budget < self._arb_min_notional(target):
             return None
 
         unwind_size = _round_down(min(unwind_budget / target.best_bid, current_position_size), "0.0001")
@@ -3677,7 +3732,7 @@ class BTC5mStrategyService:
             return None
         notional = _round_down(shares * price, "0.01")
         size = _round_down(notional / price, "0.0001")
-        if notional < self._arb_min_notional() or size <= 0:
+        if notional < self._arb_min_notional(target) or size <= 0:
             return None
         return CopyInstruction(
             action=SignalAction.ADD if self.db.get_copy_position(target.asset_id) else SignalAction.OPEN,
@@ -3716,7 +3771,7 @@ class BTC5mStrategyService:
 
         size = _round_down(min(shares, current_size), "0.0001")
         notional = _round_down(size * price, "0.01")
-        if size <= 0 or notional < self._arb_min_notional():
+        if size <= 0 or notional < self._arb_min_notional(target):
             return None
 
         action = SignalAction.CLOSE if size >= (current_size - 1e-9) else SignalAction.REDUCE
@@ -4751,6 +4806,7 @@ class BTC5mStrategyService:
     def _arb_reference_state(
         self,
         *,
+        mode: str = "paper",
         source: str,
         age_ms: int,
         chainlink_price: float,
@@ -4767,6 +4823,7 @@ class BTC5mStrategyService:
         age_limit = max(int(self.settings.config.btc5m_reference_max_age_ms), 100)
         soft_age_limit = max(int(self.settings.config.btc5m_reference_soft_max_age_ms), age_limit)
         soft_budget_scale = float(self.settings.config.btc5m_reference_soft_budget_scale)
+        is_live = str(mode or "").strip().lower() == "live"
 
         if not source_text:
             return ArbReferenceState(comparable=False, quality="missing", note="sin spot de referencia")
@@ -4776,7 +4833,7 @@ class BTC5mStrategyService:
                     comparable=True,
                     quality="soft-stale-official",
                     note=f"RTDS ligeramente vieja: {age_ms}ms > {age_limit}ms; operando reducido",
-                    budget_scale=soft_budget_scale,
+                    budget_scale=max(soft_budget_scale, 0.70) if is_live else soft_budget_scale,
                 )
             if (
                 age_ms <= soft_age_limit
@@ -4790,7 +4847,7 @@ class BTC5mStrategyService:
                     comparable=True,
                     quality="soft-stale-rtds",
                     note=f"RTDS ligeramente vieja: {age_ms}ms > {age_limit}ms; ancla RTDS reducida",
-                    budget_scale=min(soft_budget_scale, 0.45),
+                    budget_scale=max(soft_budget_scale, 0.80) if is_live else min(soft_budget_scale, 0.45),
                 )
             return ArbReferenceState(
                 comparable=False,
@@ -5394,6 +5451,7 @@ class BTC5mStrategyService:
         anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
         anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
         reference_state = self._arb_reference_state(
+            mode=str(self.db.get_bot_state("strategy_runtime_mode") or "paper"),
             source=snapshot.source,
             age_ms=int(snapshot.age_ms),
             chainlink_price=float(snapshot.chainlink_price or 0.0),
@@ -5471,6 +5529,8 @@ class BTC5mStrategyService:
             "strategy_pair_sum": "0.000000",
             "strategy_edge_pct": "0.000000",
             "strategy_fair_value": "0.000000",
+            "strategy_strategy_min_notional": f"{self._arb_strategy_min_notional():.6f}",
+            "strategy_effective_min_notional": f"{self._arb_strategy_min_notional():.6f}",
             "strategy_desired_up_ratio": "0.500000",
             "strategy_desired_down_ratio": "0.500000",
             "strategy_current_up_ratio": "0.500000",
