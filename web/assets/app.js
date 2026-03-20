@@ -123,6 +123,8 @@ function modeLabel() {
 function tradingModeLabel(summary) {
   if (runtimeMode === "backend-unreachable") return "NAS OFF";
   if (isPublicRuntime()) return "PUBLICO";
+  const sessionMode = String(summary.strategy_runtime_mode || "").trim().toLowerCase();
+  if (sessionMode === "shadow") return "SHADOW";
   const isLiveSession = Boolean(summary.live_control_is_live_session);
   const canExecute = Boolean(summary.live_control_can_execute);
   if (isLiveSession) return canExecute ? "LIVE ARMADO" : "LIVE PAUSADO";
@@ -1050,9 +1052,9 @@ function paintSummary(summary, items = lastPositions) {
   const backtestText = variantBacktestMeta(summary);
   const datasetText = datasetMeta(summary);
   document.getElementById("strategyCardMeta").textContent = isPublicRuntime()
-    ? "Esta web esta leyendo solo posiciones y actividad publicas. Para el estado real del bot, conecta el backend del NAS."
+    ? "Solo datos publicos. Conecta el backend del NAS para ver el bot real."
     : isVidarxLab(summary)
-    ? `${windowState.detail} Estado operativo: ${operability.label.toLowerCase()}. Snapshot motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}.${incubationMeta(summary) ? ` ${incubationMeta(summary)}.` : ""}${transitionText ? ` ${transitionText}.` : ""}${backtestText ? ` ${backtestText}.` : ""}`
+    ? `${operability.label} | ${windowState.detail} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}`
     : strategyOutcome
     ? `${strategyOutcome} @ ${fmt(strategyPrice, 3)} | ${strategyTitle}`
     : strategyNote || strategyTitle;
@@ -1091,8 +1093,8 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("heroFeedMeta").textContent = isPublicRuntime()
     ? `${runtimeMode === "public-fallback" ? "fallback publico" : "modo publico"} | backend NAS no conectado | wallet ${shortWallet(watchedWallet)}`
     : edgeInfo.pairSum !== null
-      ? `${feedInfo.meta} | backend ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${operability.label.toLowerCase()} | ${edgeInfo.label} ${fmt(edgeInfo.pairSum, 3)} | edge ${fmt(edgeInfo.edgePct, 2)}%${spotInfo.available ? ` | ${fmt(spotInfo.deltaBps, 1)}bps` : ""}`
-      : `${feedInfo.meta} | backend ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${operability.label.toLowerCase()}${spotInfo.hasCurrent ? ` | BTC ${fmtBtcPrice(spotInfo.current)}` : ""}`;
+      ? `${feedInfo.meta} | ${operability.label.toLowerCase()} | edge ${fmt(edgeInfo.edgePct, 2)}%${spotInfo.available ? ` | ${fmt(spotInfo.deltaBps, 1)}bps` : ""}`
+      : `${feedInfo.meta} | ${operability.label.toLowerCase()}${spotInfo.hasCurrent ? ` | BTC ${fmtBtcPrice(spotInfo.current)}` : ""}`;
   document.getElementById("strategyBadge").textContent = strategyLabel(summary);
   setLiveBadge(summary);
   applyLiveControlUi(summary);
@@ -1103,7 +1105,7 @@ function paintSummary(summary, items = lastPositions) {
       : runtimeMode === "public-fallback"
       ? `public api fallback (${watchedWallet})`
       : `public api mode (${watchedWallet})`;
-  document.getElementById("lastUpdated").textContent = `Última actualización backend ${snapshotInfo.backendText} | snapshot ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | ${modeText}`;
+  document.getElementById("lastUpdated").textContent = `Ultima actualizacion ${snapshotInfo.backendText} | snapshot ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | ${modeText}`;
   document.getElementById("headerTimestamp").textContent = `snapshot backend ${snapshotInfo.backendText} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}`;
   const lastUpdatedHero = document.getElementById("lastUpdatedHero");
   if (lastUpdatedHero) {
@@ -1114,12 +1116,12 @@ function paintSummary(summary, items = lastPositions) {
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   const backendWarning = backendWarningText();
   const strategySummary = isPublicRuntime()
-    ? `Estas viendo solo datos publicos de ${shortWallet(watchedWallet)}: ${summary.open_positions ?? buckets.totalCount ?? 0} posiciones abiertas visibles, ${fmtUsdPlain(totalExposure, 2)} visibles en mercado y P&L realizado visible ${fmtUsd(realized, 2)}. Para la caja, capital y decisiones del bot del NAS necesitas que esta web conecte con su backend real.`
+    ? `Mostrando datos publicos de ${shortWallet(watchedWallet)}. Para ver el bot real necesitas el backend del NAS.`
     : isVidarxLab(summary)
     ? currentMarketExposure > 0
-      ? `${windowState.label}. ${windowState.detail} Operabilidad ${operability.label.toLowerCase()}. Objetivo ${desiredRatio}, reparto real ${actualRatio}, restan ${timingInfo.remaining}s y el snapshot del motor tiene ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}. Dinero metido ${fmtUsdPlain(currentMarketExposure, 2)} con ${fmt(Number(summary.strategy_current_market_total_shares || 0), 2)} acciones. Total del simulador ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)}.`
-      : `${windowState.label}. ${windowState.detail} Operabilidad ${operability.label.toLowerCase()}. Objetivo ${desiredRatio}, restan ${timingInfo.remaining}s y el motor reporta ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} de antigüedad. Total del simulador ${fmtUsd(pnlTotal, 2)} con capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}.`
-    : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}, saldo wallet ${fmtUsdPlain(liveCashBalance, 2)}, equity bot ${fmtUsdPlain(liveEquityEstimate, 2)}. Estrategia ${strategyLabel(summary)}: ${strategyNoteText}. Live hoy ${summary.live_executions_today ?? 0} ops, PnL ${fmtUsd(livePnlToday, 2)}, ultima live ${lastLiveText}.`;
+      ? `${windowState.label}. Objetivo ${desiredRatio}, actual ${actualRatio}, restan ${timingInfo.remaining}s. Exposicion ${fmtUsdPlain(currentMarketExposure, 2)} y capital ${fmtUsdPlain(liveEquityEstimate, 2)}.`
+      : `${windowState.label}. ${operability.label}. Capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}.`
+    : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}. ${strategyNoteText}.`;
   const incubationText = incubationMeta(summary);
   const researchText = [transitionText, backtestText, datasetText].filter(Boolean).join(". ");
   document.getElementById("systemNotice").textContent = backendWarning
@@ -1149,7 +1151,7 @@ function paintLabOverview(summary) {
     document.getElementById("labWindowFill").style.width = "0%";
     document.getElementById("labExposureFill").style.width = `${Math.min((totalExposure / 1000) * 100, 100)}%`;
     document.getElementById("labMeta").textContent =
-      `Mostrando solo posiciones y actividad publicas de ${shortWallet(watchedWallet)}. Para BTC actual, price to beat y decisiones del bot necesitas conectar el backend del NAS.`;
+      `Solo datos publicos de ${shortWallet(watchedWallet)}.`;
     return;
   }
   const timingInfo = windowTiming(summary);
@@ -1263,7 +1265,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `transcurridos ${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | operabilidad ${operability.label.toLowerCase()} | snapshot ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | ${spotInfo.referenceComparable ? `${spotInfo.source} ${spotInfo.ageMs}ms | ref ${spotInfo.referenceQuality} | usado ${visibleComparablePrice > 0 ? fmtBtcPrice(visibleComparablePrice) : "-"}${spotInfo.priceMode ? ` (${spotInfo.priceMode})` : ""}${spotInfo.hasChainlink ? ` | chainlink ${fmtBtcPrice(spotInfo.polymarketCurrent)}` : ""}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}${spotInfo.hasLocalAnchor ? ` | ancla propia ${fmtBtcPrice(spotInfo.localAnchor)}` : ""}${spotInfo.hasLocalAnchor && spotInfo.hasAnchor ? ` | desvio ${fmtUsd(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftUsd : spotInfo.anchorDriftRefUsd, 2)} / ${fmt(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftBps : spotInfo.anchorDriftRefBps, 1)}bps` : ""}` : `degradado | ${spotInfo.referenceNote} | ${spotInfo.source !== "-" ? `${spotInfo.source} ${spotInfo.ageMs}ms` : feedInfo.summaryLabel}${visibleComparablePrice > 0 ? ` | usado ${fmtBtcPrice(visibleComparablePrice)}` : ""}${fastSpotPrice > 0 ? ` | spot rapido ${fmtBtcPrice(fastSpotPrice)}` : ""}${beatMeta ? ` | ${beatMeta}` : ""}`} | dinero metido ${fmtUsdPlain(deployed, 2)}${incubationMeta(summary) ? ` | ${incubationMeta(summary)}` : ""}${variantBacktestMeta(summary) ? ` | ${variantBacktestMeta(summary)}` : ""}${datasetMeta(summary) ? ` | ${datasetMeta(summary)}` : ""}`
+    ? `${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | dinero ${fmtUsdPlain(deployed, 2)}${spotInfo.referenceComparable ? ` | ref ${spotInfo.referenceQuality}` : ` | degradado: ${spotInfo.referenceNote}`}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 

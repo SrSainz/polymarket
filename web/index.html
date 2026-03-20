@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Laboratorio BTC 5m</title>
+    <title>Polysainz BTC5m</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -17,8 +17,8 @@
       <header class="topbar shell-card">
         <div class="brand">
           <div class="brand-heading">
-            <p class="kicker">Polysainz lab</p>
-            <h1>BTC5m Control Deck</h1>
+            <p class="kicker">Polysainz</p>
+            <h1>BTC5m</h1>
           </div>
           <div class="brand-meta">
             <span id="runtimeBadge" class="soft-badge">Local DB</span>
@@ -28,7 +28,7 @@
           <p id="headerTimestamp" class="topbar-note">sincronizando</p>
         </div>
 
-        <details class="control-drawer" open>
+        <details class="control-drawer">
           <summary>
             <span>Conexion y refresco</span>
             <span class="badge">ajustes</span>
@@ -72,13 +72,13 @@
             <p class="card-subvalue" id="liveCashMeta">disponible -</p>
           </article>
 
-          <article class="card metric-card">
+          <article class="card metric-card noise-card">
             <p class="card-label">Diario PnL</p>
             <p class="card-value" id="livePnlToday">-</p>
             <p class="card-subvalue">operaciones hoy <span id="liveExecutionsToday">0</span></p>
           </article>
 
-          <article class="card metric-card">
+          <article class="card metric-card noise-card">
             <p id="pnlLabel" class="card-label">Ganancia / perdida total</p>
             <p class="card-value" id="pnl">-</p>
             <p class="card-subvalue" id="pnlBreakdown">cerrado - / en vivo -</p>
@@ -90,7 +90,7 @@
             <p class="card-subvalue" id="heroFeedMeta">backend -</p>
           </article>
 
-          <article class="card metric-card">
+          <article class="card metric-card noise-card">
             <p class="card-label" id="strategyModeLabel">Estado ahora</p>
             <p class="card-value card-value-compact" id="strategyModeCard">-</p>
             <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
@@ -146,13 +146,6 @@
           </div>
         </section>
 
-        <nav class="section-nav" aria-label="Secciones del dashboard">
-          <a href="#overviewSection" class="section-link">Resumen</a>
-          <a href="#strategySection" class="section-link">Mercado</a>
-          <a href="#positionsSection" class="section-link">Posiciones</a>
-          <a href="#deepDiveSection" class="section-link">Detalle</a>
-        </nav>
-
         <section class="strategy-grid" id="strategySection">
           <article class="panel strategy-card strategy-status-card">
             <div class="panel-head panel-head-tight">
@@ -191,7 +184,7 @@
             <p id="labMeta" class="mini-meta">sin datos del mercado actual</p>
           </article>
 
-          <article class="panel strategy-card activity-card">
+          <article class="panel strategy-card activity-card noise-panel">
             <div class="panel-head panel-head-tight">
               <div>
                 <h2>Trading Activity</h2>
@@ -265,7 +258,7 @@
           </article>
         </section>
 
-        <section class="microstructure-grid" id="microstructureSection">
+        <section class="microstructure-grid noise-section" id="microstructureSection">
           <article class="panel">
             <div class="panel-head panel-head-tight">
               <div>
@@ -315,7 +308,7 @@
           </article>
         </section>
 
-        <section class="bucket-overview">
+        <section class="bucket-overview noise-section">
           <article class="panel bucket-summary bucket-summary-btc">
             <div class="panel-head panel-head-tight">
               <div>
@@ -360,14 +353,14 @@
         <details class="panel panel-details details-drawer" id="deepDiveSection" open>
           <summary class="panel-head">
             <div>
-              <h2>Detalle y trazabilidad</h2>
-              <p class="panel-copy">Setups, hipotesis, posiciones y ejecuciones del simulador.</p>
+              <h2>Posiciones y actividad</h2>
+              <p class="panel-copy">Lo esencial para seguir la ventana y revisar lo que ha hecho el bot.</p>
             </div>
-            <span class="badge">deep dive</span>
+            <span class="badge">historial</span>
           </summary>
 
           <div class="details-stack">
-            <section class="mini-panels">
+            <section class="mini-panels noise-section">
               <article class="panel">
                 <div class="panel-head panel-head-tight">
                   <h2>Detalle y trazabilidad</h2>
@@ -434,7 +427,7 @@
                 </div>
               </article>
 
-              <article class="panel bucket-panel">
+              <article class="panel bucket-panel noise-panel">
                 <div class="panel-head">
                   <div>
                     <h2 id="positionsArchiveTitle">Otras patas / archivo</h2>
@@ -488,7 +481,7 @@
               </div>
             </details>
 
-            <details class="panel panel-details">
+            <details class="panel panel-details noise-section">
               <summary class="panel-head">
                 <div>
                   <h2>Senales</h2>

@@ -254,6 +254,12 @@ button:disabled {
   gap: 16px;
 }
 
+.noise-card,
+.noise-panel,
+.noise-section {
+  display: none !important;
+}
+
 .cards {
   display: grid;
   gap: 12px;
@@ -313,6 +319,9 @@ button:disabled {
   padding: 18px;
   display: grid;
   gap: 16px;
+  background:
+    radial-gradient(circle at top right, rgba(81, 166, 255, 0.09), transparent 28%),
+    linear-gradient(180deg, rgba(22, 29, 38, 0.98), rgba(16, 22, 29, 0.98));
 }
 
 .hero-main {
@@ -330,9 +339,9 @@ button:disabled {
 .hero-text {
   margin: 0;
   color: var(--muted-strong);
-  font-size: 0.95rem;
-  line-height: 1.6;
-  max-width: 72ch;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  max-width: 58ch;
 }
 
 .hero-inline-stats {
@@ -578,6 +587,26 @@ h3 {
   overflow: hidden;
 }
 
+#positionsSection .noise-panel {
+  display: none !important;
+}
+
+#positionsSection {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+#deepDiveSection .panel-head {
+  margin-bottom: 8px;
+}
+
+#deepDiveSection .details-stack {
+  gap: 14px;
+}
+
+#deepDiveSection .table-wrap {
+  background: rgba(0, 0, 0, 0.12);
+}
+
 .panel-details > summary {
   list-style: none;
   cursor: pointer;
@@ -730,7 +759,7 @@ td {
   }
 
   .cards {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .hero {
@@ -743,7 +772,7 @@ td {
   }
 
   .strategy-grid {
-    grid-template-columns: 320px minmax(0, 1.45fr) 360px;
+    grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
     align-items: start;
   }
 
@@ -781,6 +810,15 @@ td {
   .microstructure-grid,
   .bucket-stats,
   .activity-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .hero-inline-stats,
+  .strategy-grid {
     grid-template-columns: 1fr;
   }
 
