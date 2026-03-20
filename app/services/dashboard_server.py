@@ -486,6 +486,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         raw_updated_at=live_control_updated_at,
         default_state=live_control_default_state,
         execution_mode=execution_mode,
+        strategy_runtime_mode=strategy_runtime_mode,
         live_trading_enabled=live_trading_enabled,
     )
     live_mode_active = bool(live_control["can_execute"])
@@ -1223,9 +1224,11 @@ def _resolve_live_control(
     raw_updated_at: int,
     default_state: str,
     execution_mode: str,
+    strategy_runtime_mode: str,
     live_trading_enabled: bool,
 ) -> dict[str, str | int | bool]:
-    is_live_session = execution_mode == "live" and live_trading_enabled
+    effective_mode = str(strategy_runtime_mode or "").strip().lower() or str(execution_mode or "").strip().lower()
+    is_live_session = effective_mode == "live" and live_trading_enabled
     state = str(raw_state or "").strip().lower()
     if state not in {"armed", "paused"}:
         fallback_state = str(default_state or "").strip().lower()
@@ -1237,7 +1240,7 @@ def _resolve_live_control(
             state = "paper"
 
     if not is_live_session:
-        label = "Solo paper" if execution_mode == "paper" else "Live no disponible"
+        label = "Solo paper" if effective_mode == "paper" else "Live no disponible"
         reason = str(raw_reason or "").strip() or "el motor no esta en sesion live"
         return {
             "state": "paper",

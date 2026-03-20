@@ -316,6 +316,30 @@ def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:
     assert summary["telegram_status_summary_last_sent_at"] == 1710753600
 
 
+def test_summary_payload_uses_runtime_mode_for_live_control_session(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("live_control_state", "armed")
+    db.set_bot_state("live_control_reason", "armado para live_small")
+    db.set_bot_state("live_control_updated_at", "1710755400")
+    db.set_bot_state("strategy_runtime_mode", "live")
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=True,
+    )
+
+    assert summary["strategy_runtime_mode"] == "live"
+    assert summary["live_control_state"] == "armed"
+    assert summary["live_control_label"] == "Live armado"
+    assert summary["live_control_can_execute"] is True
+    assert summary["live_control_is_live_session"] is True
+
+
 def test_apply_live_control_action_updates_runtime_state(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.db"
     db = Database(db_path)
