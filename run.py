@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from app.core.strategy_registry import active_variant_metadata
@@ -28,23 +29,45 @@ from app.services.runtime_diagnostics import RuntimeDiagnosticsService
 from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
 from app.services.wallet_pattern_miner import WalletPatternMiner
-from app.settings import AppSettings, load_settings
+from app.settings import AppPaths, AppSettings, load_settings
 from app.core.replay_engine import ReplayEngine
 from app.core.lab_artifacts import load_microstructure_snapshot
 
 _RUNTIME_SESSION_TTL_SECONDS = 20
+_RUNTIME_DB_FILENAMES = {
+    "paper": "bot.db",
+    "live": "bot_live.db",
+    "shadow": "bot_shadow.db",
+}
 
 
-def build_core_context(root_dir: Path) -> tuple[AppSettings, Database]:
+def _settings_for_runtime_mode(settings: AppSettings, *, runtime_mode: str) -> AppSettings:
+    safe_mode = str(runtime_mode or "").strip().lower() or "paper"
+    db_name = _RUNTIME_DB_FILENAMES.get(safe_mode, "bot.db")
+    db_path = settings.paths.root / "data" / db_name
+    if db_path == settings.paths.db_path:
+        return settings
+    paths = AppPaths(
+        root=settings.paths.root,
+        db_path=db_path,
+        logs_dir=settings.paths.logs_dir,
+        reports_dir=settings.paths.reports_dir,
+    )
+    paths.ensure()
+    return replace(settings, paths=paths)
+
+
+def build_core_context(root_dir: Path, *, runtime_mode: str = "paper") -> tuple[AppSettings, Database]:
     settings = load_settings(root_dir)
+    settings = _settings_for_runtime_mode(settings, runtime_mode=runtime_mode)
     db = Database(settings.paths.db_path)
     db.init_schema()
     _record_runtime_metadata(db, settings)
     return settings, db
 
 
-def build_context(root_dir: Path) -> tuple[AppSettings, Database, BTC5mStrategyService, ReportService]:
-    settings, db = build_core_context(root_dir)
+def build_context(root_dir: Path, *, runtime_mode: str = "paper") -> tuple[AppSettings, Database, BTC5mStrategyService, ReportService]:
+    settings, db = build_core_context(root_dir, runtime_mode=runtime_mode)
     logger = setup_logger(settings.paths.logs_dir, settings.env.log_level)
 
     gamma_client = GammaClient(settings.env.gamma_api_host)
@@ -187,7 +210,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--replay-market-slug", default="", help="Slug de mercado a usar para replay")
     parser.add_argument("--replay-output-dir", default="data/research/replay", help="Directorio de salida para replay")
+    parser.add_argument(
+        "--runtime-mode",
+        choices=["paper", "live", "shadow"],
+        default="",
+        help="DB de runtime a usar para dashboard/report/diagnostics/clear-ledger",
+    )
     return parser.parse_args()
+
+
+def _command_runtime_mode(args: argparse.Namespace) -> str:
+    if args.command in {"paper", "live", "shadow"}:
+        return args.command
+    if args.command == "once":
+        return "paper"
+    raw = str(args.runtime_mode or "").strip().lower()
+    if raw in {"paper", "live", "shadow"}:
+        return raw
+    return "paper"
 
 
 def _runtime_session_state(db: Database) -> dict[str, int | str]:
@@ -297,11 +337,12 @@ def _loop_strategy(strategy_service: BTC5mStrategyService, db: Database, *, mode
 def main() -> int:
     args = parse_args()
     root_dir = Path(__file__).resolve().parent
+    runtime_mode = _command_runtime_mode(args)
     strategy_service = None
     if args.command in {"paper", "live", "shadow", "once"}:
-        settings, db, strategy_service, report_service = build_context(root_dir)
+        settings, db, strategy_service, report_service = build_context(root_dir, runtime_mode=runtime_mode)
     else:
-        settings, db = build_core_context(root_dir)
+        settings, db = build_core_context(root_dir, runtime_mode=runtime_mode)
         report_service = ReportService(db, settings.paths.reports_dir)
 
     try:
