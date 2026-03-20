@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -30,6 +31,8 @@ from app.services.wallet_pattern_miner import WalletPatternMiner
 from app.settings import AppSettings, load_settings
 from app.core.replay_engine import ReplayEngine
 from app.core.lab_artifacts import load_microstructure_snapshot
+
+_RUNTIME_SESSION_TTL_SECONDS = 20
 
 
 def build_core_context(root_dir: Path) -> tuple[AppSettings, Database]:
@@ -179,12 +182,83 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BTC 5m microstructure lab for Polymarket")
     parser.add_argument(
         "command",
-        choices=["paper", "live", "shadow", "once", "dashboard", "report", "dataset", "experiments", "hypotheses", "diagnostics", "replay"],
+        choices=["paper", "live", "shadow", "once", "dashboard", "report", "dataset", "experiments", "hypotheses", "diagnostics", "replay", "clear-ledger"],
         help="Command to run",
     )
     parser.add_argument("--replay-market-slug", default="", help="Slug de mercado a usar para replay")
     parser.add_argument("--replay-output-dir", default="data/research/replay", help="Directorio de salida para replay")
     return parser.parse_args()
+
+
+def _runtime_session_state(db: Database) -> dict[str, int | str]:
+    heartbeat = 0
+    try:
+        heartbeat = int(str(db.get_bot_state("runtime_session_heartbeat") or "0"))
+    except ValueError:
+        heartbeat = 0
+    pid = 0
+    try:
+        pid = int(str(db.get_bot_state("runtime_session_pid") or "0"))
+    except ValueError:
+        pid = 0
+    return {
+        "mode": str(db.get_bot_state("runtime_session_mode") or "").strip().lower(),
+        "pid": pid,
+        "heartbeat": heartbeat,
+    }
+
+
+def _acquire_runtime_session(db: Database, *, mode: str) -> None:
+    now_ts = int(time.time())
+    current_pid = os.getpid()
+    state = _runtime_session_state(db)
+    heartbeat_age = now_ts - int(state["heartbeat"])
+    if (
+        str(state["mode"])
+        and heartbeat_age <= _RUNTIME_SESSION_TTL_SECONDS
+        and int(state["pid"]) > 0
+        and int(state["pid"]) != current_pid
+    ):
+        raise RuntimeError(
+            f"runtime session active: mode={state['mode']} pid={state['pid']} heartbeat_age={heartbeat_age}s"
+        )
+    db.set_bot_state("runtime_session_mode", mode)
+    db.set_bot_state("runtime_session_pid", str(current_pid))
+    db.set_bot_state("runtime_session_heartbeat", str(now_ts))
+
+
+def _heartbeat_runtime_session(db: Database, *, mode: str) -> None:
+    state = _runtime_session_state(db)
+    current_pid = os.getpid()
+    if str(state["mode"]) != mode or int(state["pid"]) != current_pid:
+        return
+    db.set_bot_state("runtime_session_heartbeat", str(int(time.time())))
+
+
+def _release_runtime_session(db: Database, *, mode: str) -> None:
+    state = _runtime_session_state(db)
+    current_pid = os.getpid()
+    if str(state["mode"]) != mode or int(state["pid"]) != current_pid:
+        return
+    db.set_bot_state("runtime_session_mode", "")
+    db.set_bot_state("runtime_session_pid", "0")
+    db.set_bot_state("runtime_session_heartbeat", "0")
+
+
+def _clear_runtime_ledger(db: Database) -> None:
+    state = _runtime_session_state(db)
+    now_ts = int(time.time())
+    heartbeat_age = now_ts - int(state["heartbeat"])
+    if str(state["mode"]) and heartbeat_age <= _RUNTIME_SESSION_TTL_SECONDS and int(state["pid"]) > 0:
+        raise RuntimeError(
+            f"runtime session active: mode={state['mode']} pid={state['pid']} heartbeat_age={heartbeat_age}s"
+        )
+    db.clear_copy_positions()
+    db.set_bot_state("position_ledger_mode", "")
+    db.set_bot_state("position_ledger_preflight", "ready")
+    db.set_bot_state("live_control_state", "armed")
+    db.set_bot_state("live_control_reason", "ledger limpiado y live armado")
+    db.set_bot_state("live_control_updated_at", str(now_ts))
 
 
 def _wait_for_next_cycle(strategy_service: BTC5mStrategyService, *, mode: str, sleep_seconds: float) -> None:
@@ -212,9 +286,11 @@ def _wait_for_next_cycle(strategy_service: BTC5mStrategyService, *, mode: str, s
     time.sleep(sleep_seconds)
 
 
-def _loop_strategy(strategy_service: BTC5mStrategyService, *, mode: str, sleep_seconds: float) -> int:
+def _loop_strategy(strategy_service: BTC5mStrategyService, db: Database, *, mode: str, sleep_seconds: float) -> int:
     while True:
+        _heartbeat_runtime_session(db, mode=mode)
         run_strategy_once(strategy_service, mode)
+        _heartbeat_runtime_session(db, mode=mode)
         _wait_for_next_cycle(strategy_service, mode=mode, sleep_seconds=sleep_seconds)
 
 
@@ -232,6 +308,11 @@ def main() -> int:
         if args.command == "report":
             _, report_path = report_service.generate()
             print(f"report => {report_path}")
+            return 0
+
+        if args.command == "clear-ledger":
+            _clear_runtime_ledger(db)
+            print("ledger => cleared and live armed")
             return 0
 
         if args.command == "dashboard":
@@ -327,22 +408,30 @@ def main() -> int:
             if mode == "live" and not settings.env.live_trading:
                 print("execution_mode=live but LIVE_TRADING=false, falling back to paper")
                 mode = "paper"
-            run_strategy_once(strategy_service, mode)
-            return 0
+            _acquire_runtime_session(db, mode=mode)
+            try:
+                run_strategy_once(strategy_service, mode)
+                return 0
+            finally:
+                _release_runtime_session(db, mode=mode)
 
         if args.command == "live":
             if not settings.env.live_trading:
                 print("LIVE_TRADING=false in environment. Refusing to run live mode.")
                 return 1
+            _acquire_runtime_session(db, mode="live")
             return _loop_strategy(
                 strategy_service,
+                db,
                 mode="live",
                 sleep_seconds=settings.config.polling_interval_seconds,
             )
 
         if args.command == "paper":
+            _acquire_runtime_session(db, mode="paper")
             return _loop_strategy(
                 strategy_service,
+                db,
                 mode="paper",
                 sleep_seconds=settings.config.polling_interval_seconds,
             )
@@ -351,16 +440,32 @@ def main() -> int:
             if not settings.config.shadow_mode_enabled:
                 print("shadow_mode_enabled=false in config. Enable it before running shadow mode.")
                 return 1
+            _acquire_runtime_session(db, mode="shadow")
             return _loop_strategy(
                 strategy_service,
+                db,
                 mode="shadow",
                 sleep_seconds=settings.config.polling_interval_seconds,
             )
 
+    except RuntimeError as error:
+        print(error)
+        return 1
     except KeyboardInterrupt:
         print("stopped by user")
         return 0
     finally:
+        if args.command in {"paper", "live", "shadow", "once"}:
+            try:
+                command_mode = "paper" if args.command == "paper" else "live" if args.command == "live" else "shadow" if args.command == "shadow" else ""
+                if args.command == "once":
+                    command_mode = "paper" if settings.config.execution_mode == "paper" else "live"
+                    if command_mode == "live" and not settings.env.live_trading:
+                        command_mode = "paper"
+                if command_mode:
+                    _release_runtime_session(db, mode=command_mode)
+            except Exception:  # noqa: BLE001
+                pass
         try:
             if strategy_service is not None:
                 strategy_service.clob_client.close()

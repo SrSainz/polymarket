@@ -679,6 +679,10 @@ class Database:
         with self.conn:
             self.conn.execute("DELETE FROM copy_positions WHERE asset = ?", (asset,))
 
+    def clear_copy_positions(self) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM copy_positions")
+
     def record_execution(
         self,
         *,
