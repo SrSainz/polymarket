@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
 import time
 from dataclasses import replace
@@ -41,10 +42,15 @@ _RUNTIME_DB_FILENAMES = {
 }
 
 
-def _settings_for_runtime_mode(settings: AppSettings, *, runtime_mode: str) -> AppSettings:
+def _runtime_db_path(root_dir: Path, *, runtime_mode: str) -> Path:
     safe_mode = str(runtime_mode or "").strip().lower() or "paper"
     db_name = _RUNTIME_DB_FILENAMES.get(safe_mode, "bot.db")
-    db_path = settings.paths.root / "data" / db_name
+    return root_dir / "data" / db_name
+
+
+def _settings_for_runtime_mode(settings: AppSettings, *, runtime_mode: str) -> AppSettings:
+    safe_mode = str(runtime_mode or "").strip().lower() or "paper"
+    db_path = _runtime_db_path(settings.paths.root, runtime_mode=safe_mode)
     if db_path == settings.paths.db_path:
         return settings
     paths = AppPaths(
@@ -205,7 +211,21 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="BTC 5m microstructure lab for Polymarket")
     parser.add_argument(
         "command",
-        choices=["paper", "live", "shadow", "once", "dashboard", "report", "dataset", "experiments", "hypotheses", "diagnostics", "replay", "clear-ledger"],
+        choices=[
+            "paper",
+            "live",
+            "shadow",
+            "once",
+            "dashboard",
+            "report",
+            "dataset",
+            "experiments",
+            "hypotheses",
+            "diagnostics",
+            "replay",
+            "clear-ledger",
+            "clone-runtime",
+        ],
         help="Command to run",
     )
     parser.add_argument("--replay-market-slug", default="", help="Slug de mercado a usar para replay")
@@ -215,6 +235,18 @@ def parse_args() -> argparse.Namespace:
         choices=["paper", "live", "shadow"],
         default="",
         help="DB de runtime a usar para dashboard/report/diagnostics/clear-ledger",
+    )
+    parser.add_argument(
+        "--from-runtime-mode",
+        choices=["paper", "live", "shadow"],
+        default="live",
+        help="Runtime origen para clonar estado",
+    )
+    parser.add_argument(
+        "--to-runtime-mode",
+        choices=["paper", "live", "shadow"],
+        default="shadow",
+        help="Runtime destino para clonar estado",
     )
     return parser.parse_args()
 
@@ -301,6 +333,72 @@ def _clear_runtime_ledger(db: Database) -> None:
     db.set_bot_state("live_control_updated_at", str(now_ts))
 
 
+def _clone_runtime_state(root_dir: Path, *, source_mode: str, target_mode: str) -> Path:
+    safe_source_mode = str(source_mode or "").strip().lower() or "live"
+    safe_target_mode = str(target_mode or "").strip().lower() or "shadow"
+    if safe_source_mode not in _RUNTIME_DB_FILENAMES:
+        raise RuntimeError(f"unsupported source runtime mode: {safe_source_mode}")
+    if safe_target_mode not in _RUNTIME_DB_FILENAMES:
+        raise RuntimeError(f"unsupported target runtime mode: {safe_target_mode}")
+    if safe_source_mode == safe_target_mode:
+        raise RuntimeError("source and target runtime modes must be different")
+
+    source_path = _runtime_db_path(root_dir, runtime_mode=safe_source_mode)
+    target_path = _runtime_db_path(root_dir, runtime_mode=safe_target_mode)
+    if not source_path.exists():
+        raise RuntimeError(f"source runtime db not found: {source_path}")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_db = Database(target_path)
+    target_db.init_schema()
+    try:
+        state = _runtime_session_state(target_db)
+        now_ts = int(time.time())
+        heartbeat_age = now_ts - int(state["heartbeat"])
+        if str(state["mode"]) and heartbeat_age <= _RUNTIME_SESSION_TTL_SECONDS and int(state["pid"]) > 0:
+            raise RuntimeError(
+                f"target runtime session active: mode={state['mode']} pid={state['pid']} heartbeat_age={heartbeat_age}s"
+            )
+    finally:
+        target_db.close()
+
+    source_conn = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True, timeout=30.0)
+    target_conn = sqlite3.connect(str(target_path), timeout=30.0)
+    try:
+        source_conn.execute("PRAGMA busy_timeout=30000")
+        target_conn.execute("PRAGMA busy_timeout=30000")
+        source_conn.backup(target_conn)
+        target_conn.commit()
+    finally:
+        target_conn.close()
+        source_conn.close()
+
+    cloned_db = Database(target_path)
+    cloned_db.init_schema()
+    try:
+        now_ts = int(time.time())
+        cloned_db.set_bot_state("runtime_session_mode", "")
+        cloned_db.set_bot_state("runtime_session_pid", "0")
+        cloned_db.set_bot_state("runtime_session_heartbeat", "0")
+        cloned_db.set_bot_state("position_ledger_mode", safe_target_mode)
+        cloned_db.set_bot_state(
+            "position_ledger_preflight",
+            "disabled" if safe_target_mode != "live" else "ready",
+        )
+        cloned_db.set_bot_state("runtime_clone_source_mode", safe_source_mode)
+        cloned_db.set_bot_state("runtime_clone_target_mode", safe_target_mode)
+        cloned_db.set_bot_state("runtime_clone_source_db", source_path.name)
+        cloned_db.set_bot_state("runtime_clone_target_db", target_path.name)
+        cloned_db.set_bot_state("runtime_clone_at", str(now_ts))
+        cloned_db.set_bot_state(
+            "runtime_clone_note",
+            f"clonado desde {safe_source_mode} hacia {safe_target_mode}",
+        )
+    finally:
+        cloned_db.close()
+    return target_path
+
+
 def _wait_for_next_cycle(strategy_service: BTC5mStrategyService, *, mode: str, sleep_seconds: float) -> None:
     feed = getattr(strategy_service.clob_client, "market_feed", None)
     spot_feed = getattr(strategy_service, "spot_feed", None)
@@ -337,6 +435,22 @@ def _loop_strategy(strategy_service: BTC5mStrategyService, db: Database, *, mode
 def main() -> int:
     args = parse_args()
     root_dir = Path(__file__).resolve().parent
+    if args.command == "clone-runtime":
+        try:
+            target_path = _clone_runtime_state(
+                root_dir,
+                source_mode=args.from_runtime_mode,
+                target_mode=args.to_runtime_mode,
+            )
+            print(
+                "runtime clone => "
+                f"{args.from_runtime_mode} -> {args.to_runtime_mode} "
+                f"db={target_path}"
+            )
+            return 0
+        except RuntimeError as error:
+            print(error)
+            return 1
     runtime_mode = _command_runtime_mode(args)
     strategy_service = None
     if args.command in {"paper", "live", "shadow", "once"}:
