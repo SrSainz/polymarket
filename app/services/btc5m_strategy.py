@@ -1524,6 +1524,7 @@ class BTC5mStrategyService:
                 up_outcome.asset_id: self._arb_mark_price(up_outcome),
                 down_outcome.asset_id: self._arb_mark_price(down_outcome),
             },
+            basis="committed",
         )
         current_up_ratio = self._arb_current_up_ratio(
             up_exposure=current_up_notional,
@@ -2658,6 +2659,7 @@ class BTC5mStrategyService:
         condition_id: str,
         *,
         price_marks: dict[str, float] | None = None,
+        basis: str = "committed",
     ) -> tuple[float, float]:
         up_exposure = 0.0
         down_exposure = 0.0
@@ -2669,11 +2671,15 @@ class BTC5mStrategyService:
             avg_price = float(row["avg_price"] or 0.0)
             asset = str(row["asset"] or "")
             mark_price = _safe_float(marks.get(asset))
-            if mark_price <= 0:
-                mark_price = avg_price
-            if size <= 0 or mark_price <= 0:
+            if size <= 0:
                 continue
-            exposure = abs(size * mark_price)
+            if basis == "mark":
+                reference_price = mark_price if mark_price > 0 else avg_price
+            else:
+                reference_price = avg_price if avg_price > 0 else mark_price
+            if reference_price <= 0:
+                continue
+            exposure = abs(size * reference_price)
             outcome = str(row["outcome"] or "").strip().lower()
             if outcome == "up":
                 up_exposure += exposure

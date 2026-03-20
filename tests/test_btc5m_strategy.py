@@ -2420,6 +2420,64 @@ def test_arb_micro_does_not_keep_buying_same_cheap_side_when_bracket_is_far_off_
     db.close()
 
 
+def test_arb_outcome_exposures_use_committed_cost_basis_for_rebalance(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-committed-basis"),
+    )
+    db.upsert_copy_position(
+        asset="asset-up",
+        condition_id="cond-committed-basis",
+        size=4.8571,
+        avg_price=0.35,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Committed Basis",
+        slug="btc-updown-5m-committed-basis",
+        outcome="Up",
+        category="crypto",
+    )
+    db.upsert_copy_position(
+        asset="asset-down",
+        condition_id="cond-committed-basis",
+        size=133.6,
+        avg_price=0.13,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Committed Basis",
+        slug="btc-updown-5m-committed-basis",
+        outcome="Down",
+        category="crypto",
+    )
+
+    committed_up, committed_down = service._get_condition_outcome_exposures(  # noqa: SLF001
+        "cond-committed-basis",
+        price_marks={"asset-up": 0.995, "asset-down": 0.005},
+        basis="committed",
+    )
+    mark_up, mark_down = service._get_condition_outcome_exposures(  # noqa: SLF001
+        "cond-committed-basis",
+        price_marks={"asset-up": 0.995, "asset-down": 0.005},
+        basis="mark",
+    )
+
+    assert round(committed_up, 2) == 1.70
+    assert round(committed_down, 2) == 17.37
+    assert round(mark_up, 2) == 4.83
+    assert round(mark_down, 2) == 0.67
+    assert committed_down > committed_up
+    assert mark_up > mark_down
+    db.close()
+
+
 def test_arb_micro_late_directional_regime_does_not_repair_wrong_side(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
