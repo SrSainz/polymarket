@@ -13,8 +13,9 @@ liquidation_bybit_symbol: "BTCUSDT"
 shadow_mode_enabled: false
 execution_mode: "paper"
 live_execution_profile: "taker_fak"
-live_small_target_capital: 100.0
-live_small_max_total_loss: 25.0
+live_small_target_capital: 111.26
+live_small_max_total_loss: 0.0
+live_small_max_drawdown_pct: 0.25
 live_preflight_require_clean_ledger: true
 dry_run: true
 
@@ -62,6 +63,7 @@ btc5m_reference_soft_budget_scale: 0.55
 btc5m_allow_rtds_anchor_fallback: true
 live_only_btc5m: true
 live_btc5m_ticket_allocation_pct: 0.25
+live_btc5m_cycle_budget_usdc: 25.0
 
 autonomous_decisions_enabled: false
 manual_confirmation_enabled: false

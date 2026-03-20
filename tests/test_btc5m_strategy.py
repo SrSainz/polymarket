@@ -1670,6 +1670,37 @@ def test_arb_micro_live_scales_to_live_small_target_capital(tmp_path: Path) -> N
     db.close()
 
 
+def test_live_cycle_budget_target_uses_absolute_usdc_cap_when_configured(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=111.26),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=111.26,
+            live_btc5m_ticket_allocation_pct=0.25,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-cycle-budget"),
+    )
+
+    budget = service._live_cycle_budget_target(mode="live", live_total_capital=111.26)  # noqa: SLF001
+    market_cap = service._arb_market_exposure_cap(mode="live", effective_bankroll=111.26)  # noqa: SLF001
+    total_cap = service._arb_total_exposure_cap(mode="live", effective_bankroll=111.26)  # noqa: SLF001
+
+    assert round(budget, 2) == 25.00
+    assert round(market_cap, 2) == 25.00
+    assert round(total_cap, 2) == 25.00
+    db.close()
+
+
 def test_live_small_drawdown_floor_uses_absolute_max_total_loss(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -1693,6 +1724,33 @@ def test_live_small_drawdown_floor_uses_absolute_max_total_loss(tmp_path: Path) 
     floor = service._mode_drawdown_floor(mode="live", live_total_capital=111.54)  # noqa: SLF001
 
     assert round(floor, 2) == 75.00
+    db.close()
+
+
+def test_live_small_drawdown_floor_uses_percent_of_capital_when_configured(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=111.26),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=111.26,
+            live_small_max_total_loss=0.0,
+            live_small_max_drawdown_pct=0.25,
+        ),
+        logger=logging.getLogger("test-btc5m-live-drawdown-pct"),
+    )
+
+    floor = service._mode_drawdown_floor(mode="live", live_total_capital=111.54)  # noqa: SLF001
+
+    assert round(floor, 2) == 83.45
     db.close()
 
 
@@ -2620,6 +2678,93 @@ def test_arb_micro_stabilizes_extreme_one_sided_inventory_when_spot_aligns(tmp_p
     assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
     assert db.get_bot_state("strategy_price_mode") == "stabilize-bracket"
     assert "stabilize Down" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_catchup_rebalances_extreme_one_sided_inventory_even_if_spot_still_favors_dominant_leg(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-catchup"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=145)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Catch-up Bracket",
+        "slug": slug,
+        "conditionId": "cond-arb-catchup",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.60"}],
+                "asks": [{"price": "0.61", "size": "500"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "500"}, {"price": "0.41", "size": "500"}],
+            },
+        },
+        balance=1000.0,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=71028.40,
+            lead_price=71028.40,
+            binance_price=71028.40,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=15,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-arb-catchup"),
+        spot_feed=spot_feed,
+    )
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "71000.00000000")
+    seeded = service.paper_broker.execute(
+        CopyInstruction(
+            action=SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset="asset-up",
+            condition_id=market["conditionId"],
+            size=32.7868,
+            price=0.61,
+            notional=19.999948,
+            source_wallet="strategy:test-seed",
+            source_signal_id=0,
+            title=market["question"],
+            slug=slug,
+            outcome="Up",
+            category="crypto",
+            reason="test-seed",
+        )
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert seeded.status == "filled"
+    assert stats["filled"] > 0
+    positions = db.list_copy_positions()
+    assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
+    assert db.get_bot_state("strategy_price_mode") == "stabilize-catchup"
+    assert "catchup Down" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 

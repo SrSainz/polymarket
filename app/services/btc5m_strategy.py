@@ -120,6 +120,11 @@ _ARB_STABILIZE_MAX_NEG_NET_EDGE = -0.015
 _ARB_STABILIZE_PROGRESS_FRACTION = 0.35
 _ARB_STABILIZE_BUDGET_FRACTION = 0.18
 _ARB_STABILIZE_MIN_DELTA_BPS = 1.0
+_ARB_STABILIZE_CATCHUP_RATIO_GAP = 0.18
+_ARB_STABILIZE_CATCHUP_TARGET_MIN_RATIO = 0.22
+_ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE = -0.020
+_ARB_STABILIZE_CATCHUP_PROGRESS_FRACTION = 0.24
+_ARB_STABILIZE_CATCHUP_BUDGET_FRACTION = 0.14
 _ARB_UNWIND_RATIO_TRIGGER = 0.18
 _ARB_UNWIND_EXTREME_RATIO = 0.88
 _ARB_UNWIND_MAX_FAIR_DISCOUNT = 0.03
@@ -2141,10 +2146,12 @@ class BTC5mStrategyService:
             desired *= max(0.45, 1.0 - (carry_ratio * 2.2))
 
         if mode in {"live", "shadow"}:
-            capital_target = self._mode_capital_target(mode=mode, live_total_capital=cash_balance + current_total_exposure)
-            live_cycle_floor = capital_target * float(self.settings.config.live_btc5m_ticket_allocation_pct)
-            if live_cycle_floor > 0:
-                desired = max(desired, live_cycle_floor)
+            live_cycle_budget = self._live_cycle_budget_target(
+                mode=mode,
+                live_total_capital=cash_balance + current_total_exposure,
+            )
+            if live_cycle_budget > 0:
+                desired = min(max(desired, live_cycle_budget), live_cycle_budget)
 
         min_pair_budget = self._arb_strategy_min_notional() * 2
         desired = max(desired, min_pair_budget)
@@ -2553,19 +2560,17 @@ class BTC5mStrategyService:
     def _arb_market_exposure_cap(self, *, mode: str, effective_bankroll: float) -> float:
         cap = max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
         if mode in {"live", "shadow"}:
-            capital_target = self._mode_capital_target(mode=mode, live_total_capital=effective_bankroll)
-            live_ticket_cap = capital_target * float(self.settings.config.live_btc5m_ticket_allocation_pct)
-            if live_ticket_cap > 0:
-                cap = max(cap, live_ticket_cap)
+            live_cycle_budget = self._live_cycle_budget_target(mode=mode, live_total_capital=effective_bankroll)
+            if live_cycle_budget > 0:
+                cap = live_cycle_budget
         return cap
 
     def _arb_total_exposure_cap(self, *, mode: str, effective_bankroll: float) -> float:
         cap = max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
         if mode in {"live", "shadow"}:
-            capital_target = self._mode_capital_target(mode=mode, live_total_capital=effective_bankroll)
-            live_ticket_cap = capital_target * float(self.settings.config.live_btc5m_ticket_allocation_pct)
-            if live_ticket_cap > 0:
-                cap = max(cap, live_ticket_cap)
+            live_cycle_budget = self._live_cycle_budget_target(mode=mode, live_total_capital=effective_bankroll)
+            if live_cycle_budget > 0:
+                cap = live_cycle_budget
         return cap
 
     def _get_condition_outcome_exposures(
@@ -3334,8 +3339,7 @@ class BTC5mStrategyService:
             desired_target_ratio = desired_up_ratio
             current_target_notional = current_up_notional
             other_notional = current_down_notional
-            if spot_context.delta_bps < _ARB_STABILIZE_MIN_DELTA_BPS:
-                return None
+            delta_supports_target = spot_context.delta_bps >= _ARB_STABILIZE_MIN_DELTA_BPS
         else:
             target = down_outcome
             fair_value = fair_down
@@ -3343,8 +3347,18 @@ class BTC5mStrategyService:
             desired_target_ratio = desired_down_ratio
             current_target_notional = current_down_notional
             other_notional = current_up_notional
-            if spot_context.delta_bps > -_ARB_STABILIZE_MIN_DELTA_BPS:
-                return None
+            delta_supports_target = spot_context.delta_bps <= -_ARB_STABILIZE_MIN_DELTA_BPS
+
+        current_total_notional = max(current_up_notional + current_down_notional, 1e-9)
+        current_target_ratio = current_target_notional / current_total_notional
+        catchup_rebalance = (
+            not delta_supports_target
+            and ratio_gap_abs >= _ARB_STABILIZE_CATCHUP_RATIO_GAP
+            and desired_target_ratio >= _ARB_STABILIZE_CATCHUP_TARGET_MIN_RATIO
+            and current_target_ratio <= max(desired_target_ratio * 0.5, 0.20)
+        )
+        if not delta_supports_target and not catchup_rebalance:
+            return None
 
         if directional_target is not None and target.asset_id != directional_target.asset_id:
             return None
@@ -3352,7 +3366,10 @@ class BTC5mStrategyService:
             return None
         if target.best_ask > fair_value + _ARB_REPAIR_FAIR_SLACK:
             return None
-        if net_edge < _ARB_STABILIZE_MAX_NEG_NET_EDGE:
+        allowed_negative_edge = (
+            _ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE if catchup_rebalance else _ARB_STABILIZE_MAX_NEG_NET_EDGE
+        )
+        if net_edge < allowed_negative_edge:
             return None
 
         numerator = (desired_target_ratio * (current_target_notional + other_notional)) - current_target_notional
@@ -3360,10 +3377,16 @@ class BTC5mStrategyService:
         if needed_notional <= 0:
             return None
 
+        progress_fraction = (
+            _ARB_STABILIZE_CATCHUP_PROGRESS_FRACTION if catchup_rebalance else _ARB_STABILIZE_PROGRESS_FRACTION
+        )
+        budget_fraction = (
+            _ARB_STABILIZE_CATCHUP_BUDGET_FRACTION if catchup_rebalance else _ARB_STABILIZE_BUDGET_FRACTION
+        )
         stabilize_budget = _round_down(
             min(
-                needed_notional * _ARB_STABILIZE_PROGRESS_FRACTION,
-                cycle_budget * _ARB_STABILIZE_BUDGET_FRACTION,
+                needed_notional * progress_fraction,
+                cycle_budget * budget_fraction,
                 cash_balance,
             ),
             "0.01",
@@ -3404,8 +3427,9 @@ class BTC5mStrategyService:
             up_exposure=projected_up_notional,
             down_exposure=projected_down_notional,
         )
+        mode_label = "catchup" if catchup_rebalance else "stabilize"
         note = (
-            f"stabilize {target.label} ask {target.best_ask:.3f} ~ fair {fair_value:.3f} | "
+            f"{mode_label} {target.label} ask {target.best_ask:.3f} ~ fair {fair_value:.3f} | "
             f"net {net_edge * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
             f"{timing_regime} | compras {len(instructions)} | "
             f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
@@ -3420,9 +3444,9 @@ class BTC5mStrategyService:
             trigger=target,
             window_seconds=self._seconds_into_window(market),
             cycle_budget=round(primary_notional, 6),
-            market_bias=f"Stabilize {target.label}",
+            market_bias=f"{'Catch-up' if catchup_rebalance else 'Stabilize'} {target.label}",
             timing_regime=timing_regime,
-            price_mode="stabilize-bracket",
+            price_mode="stabilize-catchup" if catchup_rebalance else "stabilize-bracket",
             primary_ratio=1.0,
             primary_notional=primary_notional,
             secondary_notional=0.0,
@@ -4315,9 +4339,21 @@ class BTC5mStrategyService:
             return configured_target
         return min(configured_target, actual_capital)
 
+    def _live_cycle_budget_target(self, *, mode: str, live_total_capital: float) -> float:
+        if mode not in {"live", "shadow"}:
+            return 0.0
+        configured_budget = max(float(self.settings.config.live_btc5m_cycle_budget_usdc or 0.0), 0.0)
+        if configured_budget > 0:
+            return configured_budget
+        capital_target = self._mode_capital_target(mode=mode, live_total_capital=live_total_capital)
+        return capital_target * float(self.settings.config.live_btc5m_ticket_allocation_pct)
+
     def _mode_drawdown_floor(self, *, mode: str, live_total_capital: float) -> float:
         capital_base = self._mode_capital_target(mode=mode, live_total_capital=live_total_capital)
         if mode in {"live", "shadow"}:
+            max_drawdown_pct = max(float(self.settings.config.live_small_max_drawdown_pct or 0.0), 0.0)
+            if capital_base > 0 and max_drawdown_pct > 0:
+                return max(capital_base * (1.0 - max_drawdown_pct), 0.0)
             max_total_loss = max(float(self.settings.config.live_small_max_total_loss or 0.0), 0.0)
             if capital_base > 0 and max_total_loss > 0:
                 return max(capital_base - max_total_loss, 0.0)

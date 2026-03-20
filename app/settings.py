@@ -57,6 +57,7 @@ class BotConfig(BaseModel):
     live_execution_profile: Literal["taker_fok", "taker_fak", "maker_gtd", "maker_post_only_gtc"] = "taker_fak"
     live_small_target_capital: float = 100.0
     live_small_max_total_loss: float = 25.0
+    live_small_max_drawdown_pct: float = 0.0
     live_preflight_require_clean_ledger: bool = True
     dry_run: bool = True
     strategy_mode: Literal["copy_wallets", "btc5m_orderbook"] = "btc5m_orderbook"
@@ -123,6 +124,7 @@ class BotConfig(BaseModel):
     btc5m_allow_rtds_anchor_fallback: bool = True
     live_only_btc5m: bool = False
     live_btc5m_ticket_allocation_pct: float = 0.10
+    live_btc5m_cycle_budget_usdc: float = 0.0
     live_btc5m_max_open_positions: int = 3
     btc5m_reserve_keywords: list[str] = Field(
         default_factory=lambda: [
@@ -321,6 +323,10 @@ class BotConfig(BaseModel):
             raise ValueError("live_small_target_capital must be >= 0")
         if self.live_small_max_total_loss < 0:
             raise ValueError("live_small_max_total_loss must be >= 0")
+        if not (0 <= self.live_small_max_drawdown_pct < 1):
+            raise ValueError("live_small_max_drawdown_pct must be >= 0 and < 1")
+        if self.live_btc5m_cycle_budget_usdc < 0:
+            raise ValueError("live_btc5m_cycle_budget_usdc must be >= 0")
         if self.autonomous_take_profit_pct < 0:
             raise ValueError("autonomous_take_profit_pct must be >= 0")
         if self.autonomous_stop_loss_pct < 0:
