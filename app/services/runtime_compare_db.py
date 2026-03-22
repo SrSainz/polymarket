@@ -64,12 +64,49 @@ CREATE TABLE IF NOT EXISTS runtime_compare_recent_executions (
     notes TEXT NOT NULL,
     PRIMARY KEY (runtime_mode, execution_id)
 );
+
+CREATE TABLE IF NOT EXISTS runtime_compare_history (
+    runtime_mode TEXT NOT NULL,
+    market_slug TEXT NOT NULL,
+    market_title TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    window_status TEXT NOT NULL,
+    realized_pnl REAL NOT NULL,
+    deployed_notional REAL NOT NULL,
+    filled_orders INTEGER NOT NULL,
+    replenishment_count INTEGER NOT NULL,
+    primary_ratio REAL NOT NULL,
+    price_mode TEXT NOT NULL,
+    cumulative_realized_pnl REAL NOT NULL,
+    PRIMARY KEY (runtime_mode, market_slug)
+);
+
+CREATE TABLE IF NOT EXISTS runtime_compare_window_pairs (
+    market_slug TEXT PRIMARY KEY,
+    market_title TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    paper_status TEXT NOT NULL,
+    shadow_status TEXT NOT NULL,
+    paper_realized_pnl REAL NOT NULL,
+    shadow_realized_pnl REAL NOT NULL,
+    pnl_gap REAL NOT NULL,
+    paper_deployed_notional REAL NOT NULL,
+    shadow_deployed_notional REAL NOT NULL,
+    deployed_gap REAL NOT NULL,
+    paper_filled_orders INTEGER NOT NULL,
+    shadow_filled_orders INTEGER NOT NULL,
+    filled_orders_gap INTEGER NOT NULL,
+    paper_cumulative_realized_pnl REAL NOT NULL,
+    shadow_cumulative_realized_pnl REAL NOT NULL,
+    cumulative_pnl_gap REAL NOT NULL
+);
 """
 
 _COMPARE_RUNTIME_FILES = {
     "paper": "bot.db",
     "shadow": "bot_shadow.db",
 }
+_COMPARE_HISTORY_LIMIT = 24
 
 
 def build_runtime_compare_payload(*, data_dir: Path, target_slug: str = "", target_title: str = "") -> dict:
@@ -83,9 +120,10 @@ def build_runtime_compare_payload(*, data_dir: Path, target_slug: str = "", targ
         )
         for runtime_mode, db_name in _COMPARE_RUNTIME_FILES.items()
     }
+    history = _build_compare_history(data_dir=data_dir, limit=_COMPARE_HISTORY_LIMIT)
 
     now_ts = int(time.time())
-    _write_compare_db(compare_db_path=compare_db_path, generated_at=now_ts, snapshots=snapshots)
+    _write_compare_db(compare_db_path=compare_db_path, generated_at=now_ts, snapshots=snapshots, history=history)
 
     paper = snapshots["paper"]
     shadow = snapshots["shadow"]
@@ -102,6 +140,7 @@ def build_runtime_compare_payload(*, data_dir: Path, target_slug: str = "", targ
         "status": status,
         "same_window": same_window,
         "shared_slug": shared_slug,
+        "history": history,
         "paper": paper,
         "shadow": shadow,
     }
@@ -150,7 +189,7 @@ def _read_runtime_snapshot(*, db_path: Path, runtime_mode: str, target_slug: str
 
         rows = conn.execute(
             """
-            SELECT slug, title, outcome, size, avg_price
+            SELECT slug, title, outcome, size, avg_price, condition_id
             FROM copy_positions
             WHERE (? <> '' AND slug = ?)
                OR (? = '' AND ? <> '' AND title = ?)
@@ -168,6 +207,7 @@ def _read_runtime_snapshot(*, db_path: Path, runtime_mode: str, target_slug: str
         breakdown: list[dict] = []
         total_exposure = 0.0
         total_shares = 0.0
+        condition_ids = sorted({str(row["condition_id"] or "").strip() for row in rows if str(row["condition_id"] or "").strip()})
         for row in rows:
             shares = abs(float(row["size"] or 0.0))
             exposure = abs(float(row["size"] or 0.0) * float(row["avg_price"] or 0.0))
@@ -183,18 +223,25 @@ def _read_runtime_snapshot(*, db_path: Path, runtime_mode: str, target_slug: str
         for item in breakdown:
             item["share_pct"] = round((float(item["shares"]) / total_shares) * 100, 2) if total_shares > 0 else 0.0
 
+        execution_filter_sql = "WHERE action = 'open' AND mode = ?"
+        execution_params: list[str] = [strategy_runtime_mode]
+        if condition_ids:
+            placeholders = ", ".join("?" for _ in condition_ids)
+            execution_filter_sql += f" AND condition_id IN ({placeholders})"
+            execution_params.extend(condition_ids)
+
         execution_rows = conn.execute(
-            """
+            f"""
             SELECT id, ts, status, action, side, asset, price, notional, notes
             FROM executions
-            WHERE action = 'open' AND mode = ?
+            {execution_filter_sql}
             ORDER BY ts DESC
             LIMIT 50
             """,
-            (strategy_runtime_mode,),
+            tuple(execution_params),
         ).fetchall()
         execution_agg = conn.execute(
-            """
+            f"""
             SELECT
                 COUNT(*) AS total,
                 COALESCE(SUM(notional), 0) AS total_notional,
@@ -203,9 +250,9 @@ def _read_runtime_snapshot(*, db_path: Path, runtime_mode: str, target_slug: str
                 COALESCE(MAX(notional), 0) AS max_notional,
                 COALESCE(MAX(ts), 0) AS last_ts
             FROM executions
-            WHERE action = 'open' AND mode = ?
+            {execution_filter_sql}
             """,
-            (strategy_runtime_mode,),
+            tuple(execution_params),
         ).fetchone()
 
         recent_executions = [
@@ -295,7 +342,239 @@ def _empty_runtime_snapshot(*, runtime_mode: str, db_path: Path) -> dict:
     }
 
 
-def _write_compare_db(*, compare_db_path: Path, generated_at: int, snapshots: dict[str, dict]) -> None:
+def _read_runtime_history(*, db_path: Path, runtime_mode: str, limit: int) -> list[dict]:
+    if not db_path.exists():
+        return []
+
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                slug,
+                title,
+                COALESCE(closed_at, last_trade_at, opened_at, 0) AS ts,
+                status,
+                realized_pnl,
+                deployed_notional,
+                filled_orders,
+                replenishment_count,
+                primary_ratio,
+                price_mode
+            FROM strategy_windows
+            WHERE slug <> ''
+            ORDER BY COALESCE(closed_at, last_trade_at, opened_at, 0) DESC, slug DESC
+            LIMIT ?
+            """,
+            (max(int(limit), 1),),
+        ).fetchall()
+
+    ordered_rows = list(reversed(rows))
+    cumulative_realized_pnl = 0.0
+    history: list[dict] = []
+    for row in ordered_rows:
+        cumulative_realized_pnl += float(row["realized_pnl"] or 0.0)
+        history.append(
+            {
+                "runtime_mode": runtime_mode,
+                "slug": str(row["slug"] or ""),
+                "title": str(row["title"] or ""),
+                "ts": int(row["ts"] or 0),
+                "status": str(row["status"] or ""),
+                "realized_pnl": round(float(row["realized_pnl"] or 0.0), 4),
+                "deployed_notional": round(float(row["deployed_notional"] or 0.0), 4),
+                "filled_orders": int(row["filled_orders"] or 0),
+                "replenishment_count": int(row["replenishment_count"] or 0),
+                "primary_ratio": round(float(row["primary_ratio"] or 0.0), 4),
+                "price_mode": str(row["price_mode"] or ""),
+                "cumulative_realized_pnl": round(cumulative_realized_pnl, 4),
+            }
+        )
+    return history
+
+
+def _empty_compare_history(*, limit: int) -> dict:
+    return {
+        "available": False,
+        "window_limit": int(limit),
+        "series": {"paper": [], "shadow": []},
+        "points": [],
+        "summary": {
+            "paper_window_count": 0,
+            "shadow_window_count": 0,
+            "shared_window_count": 0,
+            "paper_participation_pct": 0.0,
+            "shadow_participation_pct": 0.0,
+            "paper_total_realized_pnl": 0.0,
+            "shadow_total_realized_pnl": 0.0,
+            "cumulative_pnl_gap": 0.0,
+            "paper_total_deployed_notional": 0.0,
+            "shadow_total_deployed_notional": 0.0,
+            "avg_deployed_gap": 0.0,
+            "paper_avg_deployed_notional": 0.0,
+            "shadow_avg_deployed_notional": 0.0,
+            "paper_total_filled_orders": 0,
+            "shadow_total_filled_orders": 0,
+            "filled_orders_gap": 0,
+            "paper_avg_filled_orders": 0.0,
+            "shadow_avg_filled_orders": 0.0,
+        },
+    }
+
+
+def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
+    safe_limit = max(int(limit), 1)
+    series = {
+        runtime_mode: _read_runtime_history(
+            db_path=data_dir / db_name,
+            runtime_mode=runtime_mode,
+            limit=safe_limit,
+        )
+        for runtime_mode, db_name in _COMPARE_RUNTIME_FILES.items()
+    }
+    paper_series = series["paper"]
+    shadow_series = series["shadow"]
+    if not paper_series and not shadow_series:
+        return _empty_compare_history(limit=safe_limit)
+
+    paper_by_slug = {str(item["slug"]): item for item in paper_series if str(item["slug"])}
+    shadow_by_slug = {str(item["slug"]): item for item in shadow_series if str(item["slug"])}
+
+    recent_points: list[dict] = []
+    for slug in set(paper_by_slug) | set(shadow_by_slug):
+        paper_item = paper_by_slug.get(slug)
+        shadow_item = shadow_by_slug.get(slug)
+        recent_points.append(
+            {
+                "slug": str(slug),
+                "title": str((paper_item or {}).get("title") or (shadow_item or {}).get("title") or ""),
+                "ts": max(int((paper_item or {}).get("ts") or 0), int((shadow_item or {}).get("ts") or 0)),
+                "paper_present": bool(paper_item),
+                "shadow_present": bool(shadow_item),
+                "paper_status": str((paper_item or {}).get("status") or "missing"),
+                "shadow_status": str((shadow_item or {}).get("status") or "missing"),
+                "paper_realized_pnl": round(float((paper_item or {}).get("realized_pnl") or 0.0), 4),
+                "shadow_realized_pnl": round(float((shadow_item or {}).get("realized_pnl") or 0.0), 4),
+                "paper_deployed_notional": round(float((paper_item or {}).get("deployed_notional") or 0.0), 4),
+                "shadow_deployed_notional": round(float((shadow_item or {}).get("deployed_notional") or 0.0), 4),
+                "paper_filled_orders": int((paper_item or {}).get("filled_orders") or 0),
+                "shadow_filled_orders": int((shadow_item or {}).get("filled_orders") or 0),
+            }
+        )
+
+    recent_points.sort(key=lambda item: (int(item["ts"]), str(item["slug"])))
+    if len(recent_points) > safe_limit:
+        recent_points = recent_points[-safe_limit:]
+
+    paper_cumulative_realized_pnl = 0.0
+    shadow_cumulative_realized_pnl = 0.0
+    paper_window_count = 0
+    shadow_window_count = 0
+    shared_window_count = 0
+    paper_total_realized_pnl = 0.0
+    shadow_total_realized_pnl = 0.0
+    paper_total_deployed_notional = 0.0
+    shadow_total_deployed_notional = 0.0
+    paper_total_filled_orders = 0
+    shadow_total_filled_orders = 0
+    points: list[dict] = []
+
+    for item in recent_points:
+        paper_present = bool(item["paper_present"])
+        shadow_present = bool(item["shadow_present"])
+        if paper_present:
+            paper_window_count += 1
+        if shadow_present:
+            shadow_window_count += 1
+        if paper_present and shadow_present:
+            shared_window_count += 1
+
+        paper_realized_pnl = float(item["paper_realized_pnl"] or 0.0)
+        shadow_realized_pnl = float(item["shadow_realized_pnl"] or 0.0)
+        paper_deployed_notional = float(item["paper_deployed_notional"] or 0.0)
+        shadow_deployed_notional = float(item["shadow_deployed_notional"] or 0.0)
+        paper_filled_orders = int(item["paper_filled_orders"] or 0)
+        shadow_filled_orders = int(item["shadow_filled_orders"] or 0)
+
+        paper_total_realized_pnl += paper_realized_pnl
+        shadow_total_realized_pnl += shadow_realized_pnl
+        paper_total_deployed_notional += paper_deployed_notional
+        shadow_total_deployed_notional += shadow_deployed_notional
+        paper_total_filled_orders += paper_filled_orders
+        shadow_total_filled_orders += shadow_filled_orders
+
+        paper_cumulative_realized_pnl += paper_realized_pnl
+        shadow_cumulative_realized_pnl += shadow_realized_pnl
+        points.append(
+            {
+                "slug": str(item["slug"]),
+                "title": str(item["title"]),
+                "ts": int(item["ts"] or 0),
+                "paper_status": str(item["paper_status"]),
+                "shadow_status": str(item["shadow_status"]),
+                "paper_realized_pnl": round(paper_realized_pnl, 4),
+                "shadow_realized_pnl": round(shadow_realized_pnl, 4),
+                "pnl_gap": round(paper_realized_pnl - shadow_realized_pnl, 4),
+                "paper_deployed_notional": round(paper_deployed_notional, 4),
+                "shadow_deployed_notional": round(shadow_deployed_notional, 4),
+                "deployed_gap": round(paper_deployed_notional - shadow_deployed_notional, 4),
+                "paper_filled_orders": paper_filled_orders,
+                "shadow_filled_orders": shadow_filled_orders,
+                "filled_orders_gap": int(paper_filled_orders - shadow_filled_orders),
+                "paper_cumulative_realized_pnl": round(paper_cumulative_realized_pnl, 4),
+                "shadow_cumulative_realized_pnl": round(shadow_cumulative_realized_pnl, 4),
+                "cumulative_pnl_gap": round(paper_cumulative_realized_pnl - shadow_cumulative_realized_pnl, 4),
+            }
+        )
+
+    point_count = len(points)
+    paper_participation_pct = (paper_window_count / point_count) * 100 if point_count > 0 else 0.0
+    shadow_participation_pct = (shadow_window_count / point_count) * 100 if point_count > 0 else 0.0
+
+    return {
+        "available": bool(points),
+        "window_limit": safe_limit,
+        "series": series,
+        "points": points,
+        "summary": {
+            "paper_window_count": int(paper_window_count),
+            "shadow_window_count": int(shadow_window_count),
+            "shared_window_count": int(shared_window_count),
+            "paper_participation_pct": round(paper_participation_pct, 2),
+            "shadow_participation_pct": round(shadow_participation_pct, 2),
+            "paper_total_realized_pnl": round(paper_total_realized_pnl, 4),
+            "shadow_total_realized_pnl": round(shadow_total_realized_pnl, 4),
+            "cumulative_pnl_gap": round(paper_total_realized_pnl - shadow_total_realized_pnl, 4),
+            "paper_total_deployed_notional": round(paper_total_deployed_notional, 4),
+            "shadow_total_deployed_notional": round(shadow_total_deployed_notional, 4),
+            "avg_deployed_gap": round(
+                (paper_total_deployed_notional / paper_window_count if paper_window_count > 0 else 0.0)
+                - (shadow_total_deployed_notional / shadow_window_count if shadow_window_count > 0 else 0.0),
+                4,
+            ),
+            "paper_avg_deployed_notional": round(
+                paper_total_deployed_notional / paper_window_count if paper_window_count > 0 else 0.0,
+                4,
+            ),
+            "shadow_avg_deployed_notional": round(
+                shadow_total_deployed_notional / shadow_window_count if shadow_window_count > 0 else 0.0,
+                4,
+            ),
+            "paper_total_filled_orders": int(paper_total_filled_orders),
+            "shadow_total_filled_orders": int(shadow_total_filled_orders),
+            "filled_orders_gap": int(paper_total_filled_orders - shadow_total_filled_orders),
+            "paper_avg_filled_orders": round(
+                paper_total_filled_orders / paper_window_count if paper_window_count > 0 else 0.0,
+                4,
+            ),
+            "shadow_avg_filled_orders": round(
+                shadow_total_filled_orders / shadow_window_count if shadow_window_count > 0 else 0.0,
+                4,
+            ),
+        },
+    }
+
+
+def _write_compare_db(*, compare_db_path: Path, generated_at: int, snapshots: dict[str, dict], history: dict) -> None:
     compare_db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect(compare_db_path) as conn:
         with conn:
@@ -304,9 +583,15 @@ def _write_compare_db(*, compare_db_path: Path, generated_at: int, snapshots: di
             conn.execute("DELETE FROM runtime_compare_snapshots")
             conn.execute("DELETE FROM runtime_compare_breakdown")
             conn.execute("DELETE FROM runtime_compare_recent_executions")
+            conn.execute("DELETE FROM runtime_compare_history")
+            conn.execute("DELETE FROM runtime_compare_window_pairs")
             conn.execute(
                 "INSERT INTO runtime_compare_meta(key, value) VALUES (?, ?)",
                 ("generated_at", str(generated_at)),
+            )
+            conn.execute(
+                "INSERT INTO runtime_compare_meta(key, value) VALUES (?, ?)",
+                ("history_limit", str(int(history.get("window_limit") or 0))),
             )
 
             for runtime_mode, snapshot in snapshots.items():
@@ -386,3 +671,59 @@ def _write_compare_db(*, compare_db_path: Path, generated_at: int, snapshots: di
                             str(item.get("notes") or ""),
                         ),
                     )
+            for runtime_mode, items in (history.get("series") or {}).items():
+                for item in items or []:
+                    conn.execute(
+                        """
+                        INSERT INTO runtime_compare_history(
+                            runtime_mode, market_slug, market_title, ts, window_status, realized_pnl,
+                            deployed_notional, filled_orders, replenishment_count, primary_ratio,
+                            price_mode, cumulative_realized_pnl
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            str(runtime_mode or ""),
+                            str(item.get("slug") or ""),
+                            str(item.get("title") or ""),
+                            int(item.get("ts") or 0),
+                            str(item.get("status") or ""),
+                            float(item.get("realized_pnl") or 0.0),
+                            float(item.get("deployed_notional") or 0.0),
+                            int(item.get("filled_orders") or 0),
+                            int(item.get("replenishment_count") or 0),
+                            float(item.get("primary_ratio") or 0.0),
+                            str(item.get("price_mode") or ""),
+                            float(item.get("cumulative_realized_pnl") or 0.0),
+                        ),
+                    )
+            for item in history.get("points") or []:
+                conn.execute(
+                    """
+                    INSERT INTO runtime_compare_window_pairs(
+                        market_slug, market_title, ts, paper_status, shadow_status,
+                        paper_realized_pnl, shadow_realized_pnl, pnl_gap,
+                        paper_deployed_notional, shadow_deployed_notional, deployed_gap,
+                        paper_filled_orders, shadow_filled_orders, filled_orders_gap,
+                        paper_cumulative_realized_pnl, shadow_cumulative_realized_pnl, cumulative_pnl_gap
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(item.get("slug") or ""),
+                        str(item.get("title") or ""),
+                        int(item.get("ts") or 0),
+                        str(item.get("paper_status") or ""),
+                        str(item.get("shadow_status") or ""),
+                        float(item.get("paper_realized_pnl") or 0.0),
+                        float(item.get("shadow_realized_pnl") or 0.0),
+                        float(item.get("pnl_gap") or 0.0),
+                        float(item.get("paper_deployed_notional") or 0.0),
+                        float(item.get("shadow_deployed_notional") or 0.0),
+                        float(item.get("deployed_gap") or 0.0),
+                        int(item.get("paper_filled_orders") or 0),
+                        int(item.get("shadow_filled_orders") or 0),
+                        int(item.get("filled_orders_gap") or 0),
+                        float(item.get("paper_cumulative_realized_pnl") or 0.0),
+                        float(item.get("shadow_cumulative_realized_pnl") or 0.0),
+                        float(item.get("cumulative_pnl_gap") or 0.0),
+                    ),
+                )

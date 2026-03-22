@@ -157,30 +157,86 @@
             </div>
             <p id="runtimeCompareMeta" class="mini-meta">Esperando una ventana comparable.</p>
             <p id="runtimeCompareDbMeta" class="mini-meta">db runtime_compare.db pendiente.</p>
-            <div class="compare-grid">
-              <article class="compare-card">
-                <div class="subpanel-head">
-                  <h3>Paper</h3>
-                  <span id="comparePaperMode" class="badge">-</span>
-                </div>
-                <ul id="comparePaperList" class="mini-list"></ul>
-                <div class="compare-subsection">
-                  <h4>Tickets y aperturas</h4>
-                  <ul id="comparePaperStats" class="mini-list"></ul>
-                </div>
+            <div class="compare-kpi-grid">
+              <article class="compare-kpi">
+                <span class="compare-kpi-label">PnL paper</span>
+                <strong id="comparePaperPnl" class="compare-kpi-value">-</strong>
+                <small id="comparePaperMeta" class="compare-kpi-note">-</small>
               </article>
-              <article class="compare-card">
-                <div class="subpanel-head">
-                  <h3>Shadow</h3>
-                  <span id="compareShadowMode" class="badge">-</span>
-                </div>
-                <ul id="compareShadowList" class="mini-list"></ul>
-                <div class="compare-subsection">
-                  <h4>Tickets y aperturas</h4>
-                  <ul id="compareShadowStats" class="mini-list"></ul>
-                </div>
+              <article class="compare-kpi">
+                <span class="compare-kpi-label">PnL shadow</span>
+                <strong id="compareShadowPnl" class="compare-kpi-value">-</strong>
+                <small id="compareShadowMeta" class="compare-kpi-note">-</small>
+              </article>
+              <article class="compare-kpi">
+                <span class="compare-kpi-label">Brecha pnl</span>
+                <strong id="compareGapPnl" class="compare-kpi-value">-</strong>
+                <small id="compareGapPnlMeta" class="compare-kpi-note">-</small>
+              </article>
+              <article class="compare-kpi">
+                <span class="compare-kpi-label">Brecha entradas</span>
+                <strong id="compareGapActivity" class="compare-kpi-value">-</strong>
+                <small id="compareGapActivityMeta" class="compare-kpi-note">-</small>
               </article>
             </div>
+            <div class="compare-charts-grid">
+              <article class="compare-chart-card">
+                <div class="subpanel-head">
+                  <h3>Paper a lo largo del tiempo</h3>
+                  <span class="badge">paper</span>
+                </div>
+                <p id="comparePaperChartMeta" class="mini-meta">sin historial todavia</p>
+                <div id="comparePaperChart" class="compare-chart-shell"></div>
+              </article>
+              <article class="compare-chart-card">
+                <div class="subpanel-head">
+                  <h3>Shadow a lo largo del tiempo</h3>
+                  <span class="badge">shadow</span>
+                </div>
+                <p id="compareShadowChartMeta" class="mini-meta">sin historial todavia</p>
+                <div id="compareShadowChart" class="compare-chart-shell"></div>
+              </article>
+            </div>
+            <div class="compare-subsection compare-subsection-compact">
+              <div class="subpanel-head">
+                <h3>Diferencias recientes</h3>
+                <span id="compareWindowCount" class="badge">0 ventanas</span>
+              </div>
+              <ul id="compareDeltaList" class="mini-list compare-delta-list"></ul>
+            </div>
+            <details class="panel panel-details compare-details">
+              <summary class="panel-head">
+                <div>
+                  <h3>Detalle de la ventana actual</h3>
+                  <p class="panel-copy">Budget, fair, reparto y tickets de esta ventana en paper y shadow.</p>
+                </div>
+                <span class="badge">abrir</span>
+              </summary>
+              <div class="compare-grid">
+                <article class="compare-card">
+                  <div class="subpanel-head">
+                    <h3>Paper</h3>
+                    <span id="comparePaperMode" class="badge">-</span>
+                  </div>
+                  <ul id="comparePaperList" class="mini-list"></ul>
+                  <div class="compare-subsection">
+                    <h4>Tickets y aperturas</h4>
+                    <ul id="comparePaperStats" class="mini-list"></ul>
+                  </div>
+                </article>
+                <article class="compare-card">
+                  <div class="subpanel-head">
+                    <h3>Shadow</h3>
+                    <span id="compareShadowMode" class="badge">-</span>
+                  </div>
+                  <ul id="compareShadowList" class="mini-list"></ul>
+                  <div class="compare-subsection">
+                    <h4>Tickets y aperturas</h4>
+                    <ul id="compareShadowStats" class="mini-list"></ul>
+                  </div>
+                </article>
+              </div>
+            </details>
           </article>
         </section>
 

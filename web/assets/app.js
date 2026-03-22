@@ -359,18 +359,177 @@ function renderCompareStats(snapshot) {
     .join("");
 }
 
+function compareHistory(summary) {
+  const history = summary?.strategy_runtime_window_compare?.history;
+  if (!history || typeof history !== "object") {
+    return {
+      available: false,
+      series: { paper: [], shadow: [] },
+      points: [],
+      summary: {},
+      window_limit: 0,
+    };
+  }
+  return history;
+}
+
+function compareGapLeaderLabel(value, positiveLabel, negativeLabel, unit = "") {
+  const safe = Number(value || 0);
+  if (Number.isNaN(safe) || safe === 0) return `sin brecha${unit ? ` ${unit}` : ""}`;
+  if (safe > 0) return `paper ${positiveLabel}${unit ? ` ${unit}` : ""}`;
+  return `shadow ${negativeLabel}${unit ? ` ${unit}` : ""}`;
+}
+
+function shortCompareWindow(point) {
+  const slug = String(point?.slug || "").trim();
+  const title = String(point?.title || "").trim();
+  if (slug) return shortSlug(slug);
+  if (title) return title;
+  return "-";
+}
+
+function comparePresenceLabel(point) {
+  const paperStatus = String(point?.paper_status || "");
+  const shadowStatus = String(point?.shadow_status || "");
+  if (paperStatus === "missing") return "shadow entro y paper no";
+  if (shadowStatus === "missing") return "paper entro y shadow no";
+  return "ambos participaron";
+}
+
+function renderCompareTrendChart(points, valueKey, tone) {
+  const items = Array.isArray(points) ? points : [];
+  if (!items.length) {
+    return `<div class="compare-chart-empty">Todavia no hay historial suficiente para dibujar esta curva.</div>`;
+  }
+
+  const values = items.map((item) => Number(item?.[valueKey] || 0));
+  const width = 360;
+  const height = 180;
+  const padX = 14;
+  const padTop = 16;
+  const padBottom = 24;
+  const minValue = Math.min(...values, 0);
+  const maxValue = Math.max(...values, 0);
+  const range = maxValue - minValue || 1;
+  const plotWidth = width - padX * 2;
+  const plotHeight = height - padTop - padBottom;
+  const step = items.length > 1 ? plotWidth / (items.length - 1) : 0;
+  const coords = values.map((value, index) => {
+    const x = items.length > 1 ? padX + step * index : padX + plotWidth / 2;
+    const y = padTop + ((maxValue - value) / range) * plotHeight;
+    return { x, y, value };
+  });
+  const linePoints = coords.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
+  const lastPoint = coords[coords.length - 1];
+  const areaPoints = [
+    `${coords[0].x.toFixed(2)},${(height - padBottom).toFixed(2)}`,
+    ...coords.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`),
+    `${lastPoint.x.toFixed(2)},${(height - padBottom).toFixed(2)}`,
+  ].join(" ");
+  const zeroVisible = minValue <= 0 && maxValue >= 0;
+  const zeroY = zeroVisible ? padTop + ((maxValue - 0) / range) * plotHeight : 0;
+  const topLabel = fmtUsdPlain(maxValue, Math.abs(maxValue) >= 100 ? 0 : 2);
+  const bottomLabel = fmtUsdPlain(minValue, Math.abs(minValue) >= 100 ? 0 : 2);
+  const lastLabelY = Math.max(lastPoint.y - 8, padTop + 10);
+
+  return `
+    <svg class="compare-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Evolucion temporal">
+      <line class="compare-grid-line" x1="${padX}" y1="${padTop}" x2="${width - padX}" y2="${padTop}"></line>
+      <line class="compare-grid-line" x1="${padX}" y1="${padTop + plotHeight / 2}" x2="${width - padX}" y2="${padTop + plotHeight / 2}"></line>
+      <line class="compare-grid-line" x1="${padX}" y1="${height - padBottom}" x2="${width - padX}" y2="${height - padBottom}"></line>
+      ${zeroVisible ? `<line class="compare-zero-line" x1="${padX}" y1="${zeroY}" x2="${width - padX}" y2="${zeroY}"></line>` : ""}
+      <polygon class="compare-line-fill-${tone}" points="${areaPoints}"></polygon>
+      <polyline class="compare-line-stroke compare-line-${tone}" points="${linePoints}"></polyline>
+      <circle class="compare-last-dot-${tone}" cx="${lastPoint.x}" cy="${lastPoint.y}" r="4.5"></circle>
+      <text class="compare-axis-label" x="${padX}" y="${padTop - 4}">${escapeHtml(topLabel)}</text>
+      <text class="compare-axis-label" x="${padX}" y="${height - 6}">${escapeHtml(bottomLabel)}</text>
+      <text class="compare-axis-label" x="${lastPoint.x}" y="${lastLabelY}" text-anchor="end">${escapeHtml(fmtUsdPlain(lastPoint.value, 2))}</text>
+    </svg>
+  `;
+}
+
+function renderCompareDeltaItems(history) {
+  const points = Array.isArray(history?.points) ? history.points.slice(-6).reverse() : [];
+  if (!points.length) {
+    return `
+      <li class="mini-item">
+        <strong>Sin historial comparable</strong>
+        <span>Necesitamos varias ventanas con datos de paper y shadow para ver la brecha en el tiempo.</span>
+      </li>
+    `;
+  }
+  return points
+    .map(
+      (point) => `
+      <li class="mini-item compare-delta-item">
+        <div class="compare-delta-top">
+          <strong>${escapeHtml(shortCompareWindow(point))}</strong>
+          <span>${escapeHtml(tsToIso(Number(point?.ts || 0)))}</span>
+        </div>
+        <div class="compare-delta-bottom">
+          <span>${escapeHtml(comparePresenceLabel(point))}</span>
+          <span>${escapeHtml(`PnL ${fmtUsd(Number(point?.paper_realized_pnl || 0), 2)} paper / ${fmtUsd(Number(point?.shadow_realized_pnl || 0), 2)} shadow / gap ${fmtUsd(Number(point?.pnl_gap || 0), 2)}`)}</span>
+          <span>${escapeHtml(`Despliegue ${fmtUsdPlain(Number(point?.paper_deployed_notional || 0), 2)} vs ${fmtUsdPlain(Number(point?.shadow_deployed_notional || 0), 2)} | fills ${Number(point?.paper_filled_orders || 0)} vs ${Number(point?.shadow_filled_orders || 0)}`)}</span>
+        </div>
+      </li>
+    `
+    )
+    .join("");
+}
+
 function paintRuntimeCompare(summary) {
   const section = document.getElementById("runtimeCompareSection");
   const badge = document.getElementById("runtimeCompareBadge");
   const meta = document.getElementById("runtimeCompareMeta");
   const dbMeta = document.getElementById("runtimeCompareDbMeta");
+  const paperPnl = document.getElementById("comparePaperPnl");
+  const paperMeta = document.getElementById("comparePaperMeta");
+  const shadowPnl = document.getElementById("compareShadowPnl");
+  const shadowMeta = document.getElementById("compareShadowMeta");
+  const gapPnl = document.getElementById("compareGapPnl");
+  const gapPnlMeta = document.getElementById("compareGapPnlMeta");
+  const gapActivity = document.getElementById("compareGapActivity");
+  const gapActivityMeta = document.getElementById("compareGapActivityMeta");
+  const paperChartMeta = document.getElementById("comparePaperChartMeta");
+  const shadowChartMeta = document.getElementById("compareShadowChartMeta");
+  const paperChart = document.getElementById("comparePaperChart");
+  const shadowChart = document.getElementById("compareShadowChart");
+  const deltaList = document.getElementById("compareDeltaList");
+  const windowCount = document.getElementById("compareWindowCount");
   const paperMode = document.getElementById("comparePaperMode");
   const shadowMode = document.getElementById("compareShadowMode");
   const paperList = document.getElementById("comparePaperList");
   const shadowList = document.getElementById("compareShadowList");
   const paperStats = document.getElementById("comparePaperStats");
   const shadowStats = document.getElementById("compareShadowStats");
-  if (!section || !badge || !meta || !dbMeta || !paperMode || !shadowMode || !paperList || !shadowList || !paperStats || !shadowStats) return;
+  if (
+    !section ||
+    !badge ||
+    !meta ||
+    !dbMeta ||
+    !paperPnl ||
+    !paperMeta ||
+    !shadowPnl ||
+    !shadowMeta ||
+    !gapPnl ||
+    !gapPnlMeta ||
+    !gapActivity ||
+    !gapActivityMeta ||
+    !paperChartMeta ||
+    !shadowChartMeta ||
+    !paperChart ||
+    !shadowChart ||
+    !deltaList ||
+    !windowCount ||
+    !paperMode ||
+    !shadowMode ||
+    !paperList ||
+    !shadowList ||
+    !paperStats ||
+    !shadowStats
+  ) {
+    return;
+  }
 
   const compare = summary?.strategy_runtime_window_compare;
   if (isBackendDisconnectedRuntime() || !compare?.available) {
@@ -391,6 +550,31 @@ function paintRuntimeCompare(summary) {
   dbMeta.textContent = compare?.db_path
     ? `db comparativa ${String(compare.db_path)} | generado ${Number(compare.generated_at || 0) > 0 ? tsToIso(Number(compare.generated_at)) : "ahora"}`
     : "db comparativa no disponible";
+
+  const history = compareHistory(summary);
+  const historySummary = history.summary || {};
+  const paperSeries = Array.isArray(history?.series?.paper) ? history.series.paper : [];
+  const shadowSeries = Array.isArray(history?.series?.shadow) ? history.series.shadow : [];
+  paperPnl.textContent = fmtUsd(Number(historySummary.paper_total_realized_pnl || 0), 2);
+  shadowPnl.textContent = fmtUsd(Number(historySummary.shadow_total_realized_pnl || 0), 2);
+  gapPnl.textContent = fmtUsd(Number(historySummary.cumulative_pnl_gap || 0), 2);
+  gapActivity.textContent = compareGapLeaderLabel(
+    Number(historySummary.filled_orders_gap || 0),
+    `+${Math.abs(Number(historySummary.filled_orders_gap || 0))} fills`,
+    `+${Math.abs(Number(historySummary.filled_orders_gap || 0))} fills`,
+  );
+  paperMeta.textContent = `${Number(historySummary.paper_window_count || 0)} ventanas | media ${fmtUsdPlain(Number(historySummary.paper_avg_deployed_notional || 0), 2)} por ventana`;
+  shadowMeta.textContent = `${Number(historySummary.shadow_window_count || 0)} ventanas | media ${fmtUsdPlain(Number(historySummary.shadow_avg_deployed_notional || 0), 2)} por ventana`;
+  gapPnlMeta.textContent = `${Number(historySummary.shared_window_count || 0)} comparables | ${compareGapLeaderLabel(Number(historySummary.cumulative_pnl_gap || 0), "por delante", "por delante")}`;
+  gapActivityMeta.textContent =
+    `despliegue medio ${fmtUsdPlain(Number(historySummary.paper_avg_deployed_notional || 0), 2)} paper / ${fmtUsdPlain(Number(historySummary.shadow_avg_deployed_notional || 0), 2)} shadow`;
+  paperChartMeta.textContent = `${paperSeries.length} ventanas recientes | ${fmtUsd(Number(historySummary.paper_total_deployed_notional || 0), 2)} desplegados`;
+  shadowChartMeta.textContent = `${shadowSeries.length} ventanas recientes | ${fmtUsd(Number(historySummary.shadow_total_deployed_notional || 0), 2)} desplegados`;
+  paperChart.innerHTML = renderCompareTrendChart(paperSeries, "cumulative_realized_pnl", "paper");
+  shadowChart.innerHTML = renderCompareTrendChart(shadowSeries, "cumulative_realized_pnl", "shadow");
+  deltaList.innerHTML = renderCompareDeltaItems(history);
+  windowCount.textContent = `${Number(historySummary.shared_window_count || 0)} comparables`;
+
   paperMode.textContent = String(paper.runtime_mode || "paper").toUpperCase();
   shadowMode.textContent = String(shadow.runtime_mode || "shadow").toUpperCase();
   paperList.innerHTML = renderCompareList(paper);

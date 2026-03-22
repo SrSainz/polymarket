@@ -401,6 +401,76 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
         source_signal_id=0,
         notes="shadow-open-2",
     )
+    shadow_db.record_execution(
+        result=ExecutionResult(
+            mode="shadow",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="shadow-other",
+            size=9.0,
+            price=0.44,
+            notional=3.96,
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-other",
+        source_wallet="strategy:shadow",
+        source_signal_id=0,
+        notes="shadow-open-other-window",
+    )
+    shadow_db.upsert_strategy_window(
+        slug="btc-updown-5m-history-1",
+        condition_id="cond-history-1",
+        title="Bitcoin Up or Down - History 1",
+        price_mode="underround",
+        timing_regime="mid-late",
+        primary_outcome="Up",
+        hedge_outcome="Down",
+        primary_ratio=0.52,
+        planned_budget=26.0,
+        current_exposure=0.0,
+        notes="shadow history 1",
+    )
+    shadow_db.record_strategy_window_fills(
+        slug="btc-updown-5m-history-1",
+        fill_count=2,
+        added_notional=3.15,
+        replenishment_count=1,
+        notes="shadow history fills 1",
+    )
+    shadow_db.close_strategy_window(
+        slug="btc-updown-5m-history-1",
+        realized_pnl=1.10,
+        winning_outcome="Up",
+        current_exposure=0.0,
+        notes="shadow history close 1",
+    )
+    shadow_db.upsert_strategy_window(
+        slug="btc-updown-5m-shadow-only",
+        condition_id="cond-shadow-only",
+        title="Bitcoin Up or Down - Shadow Only",
+        price_mode="underround",
+        timing_regime="mid-late",
+        primary_outcome="Down",
+        hedge_outcome="Up",
+        primary_ratio=0.48,
+        planned_budget=18.0,
+        current_exposure=0.0,
+        notes="shadow history only",
+    )
+    shadow_db.record_strategy_window_fills(
+        slug="btc-updown-5m-shadow-only",
+        fill_count=1,
+        added_notional=1.65,
+        replenishment_count=0,
+        notes="shadow history fills only",
+    )
+    shadow_db.close_strategy_window(
+        slug="btc-updown-5m-shadow-only",
+        realized_pnl=-0.25,
+        winning_outcome="Up",
+        current_exposure=0.0,
+        notes="shadow history close only",
+    )
     shadow_db.close()
 
     paper_db = Database(paper_db_path)
@@ -419,6 +489,76 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
         source_wallet="strategy:paper",
         source_signal_id=0,
         notes="paper-open-1",
+    )
+    paper_db.record_execution(
+        result=ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="paper-other",
+            size=4.0,
+            price=0.62,
+            notional=2.48,
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-other",
+        source_wallet="strategy:paper",
+        source_signal_id=0,
+        notes="paper-open-other-window",
+    )
+    paper_db.upsert_strategy_window(
+        slug="btc-updown-5m-history-1",
+        condition_id="cond-history-1",
+        title="Bitcoin Up or Down - History 1",
+        price_mode="underround",
+        timing_regime="mid-late",
+        primary_outcome="Up",
+        hedge_outcome="Down",
+        primary_ratio=0.52,
+        planned_budget=84.0,
+        current_exposure=0.0,
+        notes="paper history 1",
+    )
+    paper_db.record_strategy_window_fills(
+        slug="btc-updown-5m-history-1",
+        fill_count=6,
+        added_notional=14.25,
+        replenishment_count=2,
+        notes="paper history fills 1",
+    )
+    paper_db.close_strategy_window(
+        slug="btc-updown-5m-history-1",
+        realized_pnl=4.20,
+        winning_outcome="Up",
+        current_exposure=0.0,
+        notes="paper history close 1",
+    )
+    paper_db.upsert_strategy_window(
+        slug="btc-updown-5m-paper-only",
+        condition_id="cond-paper-only",
+        title="Bitcoin Up or Down - Paper Only",
+        price_mode="underround",
+        timing_regime="mid-late",
+        primary_outcome="Down",
+        hedge_outcome="Up",
+        primary_ratio=0.49,
+        planned_budget=72.0,
+        current_exposure=0.0,
+        notes="paper history only",
+    )
+    paper_db.record_strategy_window_fills(
+        slug="btc-updown-5m-paper-only",
+        fill_count=4,
+        added_notional=9.6,
+        replenishment_count=1,
+        notes="paper history fills only",
+    )
+    paper_db.close_strategy_window(
+        slug="btc-updown-5m-paper-only",
+        realized_pnl=2.50,
+        winning_outcome="Down",
+        current_exposure=0.0,
+        notes="paper history close only",
     )
     paper_db.close()
 
@@ -448,6 +588,26 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert compare["shadow"]["open_execution_count"] == 2
     assert compare["shadow"]["open_avg_notional"] == 1.575
     assert compare["shadow"]["recent_executions"][0]["notes"].startswith("shadow-open")
+    history = compare["history"]
+    assert history["available"] is True
+    assert history["summary"]["paper_window_count"] == 2
+    assert history["summary"]["shadow_window_count"] == 2
+    assert history["summary"]["shared_window_count"] == 1
+    assert history["summary"]["paper_total_realized_pnl"] == 6.7
+    assert history["summary"]["shadow_total_realized_pnl"] == 0.85
+    assert history["summary"]["cumulative_pnl_gap"] == 5.85
+    assert history["summary"]["paper_total_filled_orders"] == 10
+    assert history["summary"]["shadow_total_filled_orders"] == 3
+    assert any(
+        item["slug"] == "btc-updown-5m-paper-only" and item["shadow_status"] == "missing"
+        for item in history["points"]
+    )
+    assert any(
+        item["slug"] == "btc-updown-5m-shadow-only" and item["paper_status"] == "missing"
+        for item in history["points"]
+    )
+    assert history["series"]["paper"][-1]["cumulative_realized_pnl"] == 6.7
+    assert history["series"]["shadow"][-1]["cumulative_realized_pnl"] == 0.85
     assert Path(compare["db_path"]).exists()
     assert summary["strategy_runtime_compare_db_path"].endswith("runtime_compare.db")
     assert summary["strategy_cycle_budget_remaining"] == 17.81
