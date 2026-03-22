@@ -1402,6 +1402,7 @@ def _reset_runtime_state(db_path: Path) -> dict:
         "copy_positions",
         "executions",
         "daily_pnl",
+        "strategy_windows",
         "selected_wallets",
         "position_mark_history",
         "trade_approvals",

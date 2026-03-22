@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from app.core.paper_broker import PaperBroker
@@ -1026,15 +1027,32 @@ def test_reset_runtime_state_clears_strategy_runtime_keys(tmp_path: Path) -> Non
     db.set_bot_state("strategy_market_slug", "btc-updown-5m-stale")
     db.set_bot_state("runtime_guard_state", "active")
     db.set_bot_state("live_control_state", "paused")
+    now_ts = int(time.time())
+    with db.conn:
+        db.conn.execute(
+            """
+            INSERT INTO strategy_windows(
+                slug, condition_id, title, status, opened_at, price_mode, realized_pnl
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("btc-updown-5m-test", "cond-1", "Bitcoin Up or Down - Test", "closed", now_ts, "underround", 4.25),
+        )
+        db.conn.execute("INSERT INTO daily_pnl(day, pnl) VALUES (?, ?)", ("2026-03-22", 7.5))
     db.close()
 
     result = _reset_runtime_state(db_path)
 
     assert result["deleted"]["bot_state_runtime"] >= 2
+    assert result["deleted"]["strategy_windows"] == 1
+    assert result["deleted"]["daily_pnl"] == 1
     db = Database(db_path)
     assert db.get_bot_state("strategy_market_slug") is None
     assert db.get_bot_state("runtime_guard_state") is None
     assert db.get_bot_state("live_control_state") == "paused"
+    strategy_window_count = db.conn.execute("SELECT COUNT(*) AS value FROM strategy_windows").fetchone()["value"]
+    daily_pnl_count = db.conn.execute("SELECT COUNT(*) AS value FROM daily_pnl").fetchone()["value"]
+    assert strategy_window_count == 0
+    assert daily_pnl_count == 0
     db.close()
 
 

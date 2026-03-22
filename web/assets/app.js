@@ -2518,8 +2518,9 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
     return;
   }
 
+  const runtimeLabel = String(lastSummary?.strategy_runtime_mode || "runtime actual").trim() || "runtime actual";
   const accepted = window.confirm(
-    "Esto limpiara posiciones, senales, ejecuciones y seleccion actual. Se reiniciara desde cero. Continuar?"
+    `Esto limpiara el runtime actual (${runtimeLabel}): posiciones, senales, ejecuciones, pnl diario y ventanas de estrategia. No reinicia procesos ni toca otros runtimes. Continuar?`
   );
   if (!accepted) return;
 
@@ -2532,14 +2533,16 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
     const positions = Number(deleted.copy_positions || 0);
     const executions = Number(deleted.executions || 0);
     const signals = Number(deleted.signals || 0);
+    const windows = Number(deleted.strategy_windows || 0);
+    const dailyPnl = Number(deleted.daily_pnl || 0);
     document.getElementById("lastUpdated").textContent =
-      `Reset completo: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}.`;
+      `Limpieza de ${runtimeLabel}: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}, ventanas ${windows}, pnl diario ${dailyPnl}.`;
     await refreshAll();
   } catch (error) {
     document.getElementById("lastUpdated").textContent = `Error al limpiar: ${error.message}`;
   } finally {
     button.disabled = false;
-    button.textContent = originalLabel || "Limpiar y reiniciar";
+    button.textContent = originalLabel || "Limpiar runtime";
   }
 });
 
