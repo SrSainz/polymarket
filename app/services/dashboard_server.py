@@ -31,6 +31,7 @@ from app.services.runtime_compare_db import build_runtime_compare_payload
 
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
+_DASHBOARD_BUILD = "2026-03-22-d48ec3e-audit1"
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
@@ -723,6 +724,19 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_current_market_breakdown": current_market_breakdown,
         "strategy_runtime_window_compare": runtime_window_compare,
         "strategy_runtime_compare_db_path": str(runtime_window_compare.get("db_path") or ""),
+        "dashboard_build": _DASHBOARD_BUILD,
+        "dashboard_metric_sources": {
+            "live_total_capital": "bot_state.live_total_capital",
+            "live_available_to_trade": "bot_state.live_cash_allowance",
+            "realized_pnl": "SUM(daily_pnl.pnl)",
+            "unrealized_pnl": "mark-to-market de copy_positions usando midpoint del libro; si no hay midpoint usa avg_price",
+            "pnl_total": "realized_pnl + unrealized_pnl",
+            "strategy_current_market_total_exposure": "exposicion del slug actual agregada desde copy_positions",
+            "strategy_current_market_live_pnl": "unrealized_pnl del slug actual",
+            "compare_realized_pnl": "SUM(strategy_windows.realized_pnl) por runtime",
+            "compare_history": "strategy_windows cerradas de paper y shadow",
+            "compare_samples": "snapshots recientes guardados en runtime_compare_samples",
+        },
         "strategy_recent_resolutions": recent_resolution_windows,
         "strategy_setup_performance": setup_performance,
         "strategy_variant_backtest_generated_at": str(experiment_payload.get("generated_at") or ""),

@@ -7,6 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
+const UI_BUILD = "2026-03-22-audit1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -34,6 +35,10 @@ function fmtUsd(value, digits = 2) {
   if (Number.isNaN(asNumber)) return "-";
   const sign = asNumber > 0 ? "+" : "";
   return `${sign}$${asNumber.toFixed(digits)}`;
+}
+
+function fmtUsdMaybe(value, available = true, digits = 2) {
+  return available ? fmtUsd(value, digits) : "sin cierres";
 }
 
 function fmtUsdPlain(value, digits = 2) {
@@ -620,7 +625,7 @@ function paintRuntimeCompare(summary) {
   badge.textContent =
     status === "shared" ? "misma ventana" : status === "paper-missing" ? "paper sin ventana" : "ventanas distintas";
   dbMeta.textContent = compare?.db_path
-    ? `db comparativa ${String(compare.db_path)} | generado ${Number(compare.generated_at || 0) > 0 ? tsToIso(Number(compare.generated_at)) : "ahora"}`
+    ? `db comparativa ${String(compare.db_path)} | generado ${Number(compare.generated_at || 0) > 0 ? tsToIso(Number(compare.generated_at)) : "ahora"} | api ${String(summary?.dashboard_build || "-")}`
     : "db comparativa no disponible";
 
   const history = compareHistory(summary);
@@ -677,9 +682,12 @@ function paintRuntimeCompare(summary) {
     const paperRealized = Number(paper?.total_realized_pnl || 0);
     const shadowRealized = Number(shadow?.total_realized_pnl || 0);
     const activityGap = Number(paper?.open_execution_count || 0) - Number(shadow?.open_execution_count || 0);
-    paperPnl.textContent = fmtUsd(paperRealized, 2);
-    shadowPnl.textContent = fmtUsd(shadowRealized, 2);
-    gapPnl.textContent = fmtUsd(paperRealized - shadowRealized, 2);
+    const paperHasClosed = Number(paper?.closed_window_count || 0) > 0;
+    const shadowHasClosed = Number(shadow?.closed_window_count || 0) > 0;
+    const hasComparableClosed = paperHasClosed || shadowHasClosed;
+    paperPnl.textContent = fmtUsdMaybe(paperRealized, paperHasClosed, 2);
+    shadowPnl.textContent = fmtUsdMaybe(shadowRealized, shadowHasClosed, 2);
+    gapPnl.textContent = hasComparableClosed ? fmtUsd(paperRealized - shadowRealized, 2) : "sin cierres";
     gapActivity.textContent = compareGapLeaderLabel(
       activityGap,
       `+${Math.abs(activityGap)} aperturas`,
@@ -1391,6 +1399,7 @@ function saveApiBase(value) {
 
 function paintSummary(summary, items = lastPositions) {
   lastSummary = summary;
+  const headerBuildMeta = document.getElementById("headerBuildMeta");
   if (isBackendDisconnectedRuntime()) {
     applyBackendDisconnectedLabels();
   } else if (isPublicRuntime()) {
@@ -1438,7 +1447,7 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("pnl").textContent = fmtUsd(pnlTotal, 2);
   document.getElementById("pnlBreakdown").textContent = isPublicRuntime()
     ? "sin mark-to-market fiable en fallback publico"
-    : `cerrado ${fmtUsd(realized, 2)} / en vivo ${fmtUsd(unrealized, 2)}`;
+    : `cerrado ${fmtUsd(realized, 2)} / en vivo ${fmtUsd(unrealized, 2)} | fuente daily_pnl + MTM copy_positions`;
   setCardTone("pnl", pnlTotal);
 
   document.getElementById("pendingSignals").textContent = isPublicRuntime()
@@ -1563,6 +1572,9 @@ function paintSummary(summary, items = lastPositions) {
       : `public api mode (${watchedWallet})`;
   document.getElementById("lastUpdated").textContent = `Ultima actualizacion ${snapshotInfo.backendText} | snapshot ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | ${modeText}`;
   document.getElementById("headerTimestamp").textContent = `snapshot backend ${snapshotInfo.backendText} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}`;
+  if (headerBuildMeta) {
+    headerBuildMeta.textContent = `ui ${UI_BUILD} | api ${String(summary?.dashboard_build || "-")}`;
+  }
   const lastUpdatedHero = document.getElementById("lastUpdatedHero");
   if (lastUpdatedHero) {
     lastUpdatedHero.textContent = `backend ${snapshotInfo.backendText} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}`;

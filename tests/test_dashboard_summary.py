@@ -573,6 +573,9 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert compare["available"] is True
     assert compare["same_window"] is True
     assert compare["status"] == "shared"
+    assert summary["dashboard_build"].startswith("2026-03-22-")
+    assert "pnl_total" in summary["dashboard_metric_sources"]
+    assert "compare_samples" in summary["dashboard_metric_sources"]
     assert compare["paper"]["runtime_mode"] == "paper"
     assert compare["paper"]["cycle_budget"] == 342.68
     assert compare["paper"]["effective_min_notional"] == 5.0
