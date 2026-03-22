@@ -399,6 +399,7 @@ button:disabled {
 }
 
 .strategy-grid,
+.compare-section,
 .microstructure-grid,
 .bucket-overview,
 .mini-panels,
@@ -411,6 +412,22 @@ button:disabled {
 .panel,
 .strategy-card {
   padding: 16px;
+}
+
+.compare-panel {
+  padding: 16px;
+}
+
+.compare-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.compare-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(31, 39, 51, 0.92), rgba(22, 28, 37, 0.92));
+  padding: 12px;
 }
 
 .panel-head {
@@ -790,6 +807,10 @@ td {
   .strategy-grid {
     grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.1fr);
     align-items: start;
+  }
+
+  .compare-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .microstructure-grid {

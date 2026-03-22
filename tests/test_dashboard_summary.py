@@ -285,6 +285,99 @@ def test_summary_payload_exposes_setup_performance(tmp_path: Path) -> None:
     assert summary["strategy_setup_performance"][0]["pnl_total"] == 32.5
 
 
+def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) -> None:
+    paper_db_path = tmp_path / "bot.db"
+    shadow_db_path = tmp_path / "bot_shadow.db"
+
+    paper_db = Database(paper_db_path)
+    paper_db.init_schema()
+    paper_db.set_bot_state("strategy_runtime_mode", "paper")
+    paper_db.set_bot_state("strategy_market_slug", "btc-updown-5m-shared")
+    paper_db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Shared")
+    paper_db.set_bot_state("strategy_price_mode", "underround")
+    paper_db.set_bot_state("strategy_operability_state", "ready")
+    paper_db.set_bot_state("strategy_last_note", "paper comparativa")
+    paper_db.set_bot_state("strategy_cycle_budget", "342.68")
+    paper_db.set_bot_state("strategy_desired_up_ratio", "0.42")
+    paper_db.set_bot_state("strategy_current_up_ratio", "0.39")
+    paper_db.upsert_copy_position(
+        asset="paper-up",
+        condition_id="cond-shared",
+        size=20.0,
+        avg_price=0.41,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Shared",
+        slug="btc-updown-5m-shared",
+        outcome="Up",
+        category="crypto",
+    )
+    paper_db.upsert_copy_position(
+        asset="paper-down",
+        condition_id="cond-shared",
+        size=25.0,
+        avg_price=0.54,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Shared",
+        slug="btc-updown-5m-shared",
+        outcome="Down",
+        category="crypto",
+    )
+    paper_db.close()
+
+    shadow_db = Database(shadow_db_path)
+    shadow_db.init_schema()
+    shadow_db.set_bot_state("strategy_runtime_mode", "shadow")
+    shadow_db.set_bot_state("strategy_market_slug", "btc-updown-5m-shared")
+    shadow_db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Shared")
+    shadow_db.set_bot_state("strategy_price_mode", "underround")
+    shadow_db.set_bot_state("strategy_operability_state", "ready")
+    shadow_db.set_bot_state("strategy_last_note", "shadow comparativa")
+    shadow_db.set_bot_state("strategy_cycle_budget", "25.00")
+    shadow_db.set_bot_state("strategy_desired_up_ratio", "0.42")
+    shadow_db.set_bot_state("strategy_current_up_ratio", "0.43")
+    shadow_db.upsert_copy_position(
+        asset="shadow-up",
+        condition_id="cond-shared",
+        size=7.0,
+        avg_price=0.41,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Shared",
+        slug="btc-updown-5m-shared",
+        outcome="Up",
+        category="crypto",
+    )
+    shadow_db.upsert_copy_position(
+        asset="shadow-down",
+        condition_id="cond-shared",
+        size=8.0,
+        avg_price=0.54,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Shared",
+        slug="btc-updown-5m-shared",
+        outcome="Down",
+        category="crypto",
+    )
+    shadow_db.close()
+
+    summary = _summary_payload(
+        shadow_db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    compare = summary["strategy_runtime_window_compare"]
+    assert compare["available"] is True
+    assert compare["same_window"] is True
+    assert compare["status"] == "shared"
+    assert compare["paper"]["runtime_mode"] == "paper"
+    assert compare["paper"]["cycle_budget"] == 342.68
+    assert compare["paper"]["open_legs"] == 2
+    assert compare["shadow"]["runtime_mode"] == "shadow"
+    assert compare["shadow"]["cycle_budget"] == 25.0
+    assert compare["shadow"]["open_legs"] == 2
+
+
 def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.db"
     db = Database(db_path)

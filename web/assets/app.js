@@ -263,6 +263,76 @@ function actualRatioLabel(summary) {
   return `${friendlyOutcomeName("up")} ${fmtPct(upRatio * 100, 0)} / ${friendlyOutcomeName("down")} ${fmtPct(Math.max((1 - upRatio) * 100, 0), 0)}`;
 }
 
+function compareRatioLabel(ratio) {
+  const upRatio = Number(ratio ?? 0.5);
+  if (Number.isNaN(upRatio)) return "-";
+  return `${friendlyOutcomeName("up")} ${fmtPct(upRatio * 100, 0)} / ${friendlyOutcomeName("down")} ${fmtPct(Math.max((1 - upRatio) * 100, 0), 0)}`;
+}
+
+function compareBreakdownLabel(snapshot) {
+  const items = Array.isArray(snapshot?.breakdown) ? snapshot.breakdown : [];
+  if (!items.length) return "sin patas abiertas";
+  return items
+    .map((item) => `${friendlyOutcomeName(item.outcome)} ${fmtPct(Number(item.share_pct || 0), 0)}`)
+    .join(" / ");
+}
+
+function renderCompareList(snapshot) {
+  const rows = [
+    ["Ventana", snapshot?.slug || snapshot?.title || "-"],
+    ["Estado", snapshot?.operability_state || "-"],
+    ["Modo precio", snapshot?.price_mode || "-"],
+    ["Budget", fmtUsdPlain(Number(snapshot?.cycle_budget || 0), 2)],
+    ["Objetivo", compareRatioLabel(snapshot?.desired_up_ratio)],
+    ["Actual", compareRatioLabel(snapshot?.current_up_ratio)],
+    ["Patas", `${Number(snapshot?.open_legs || 0)} | ${compareBreakdownLabel(snapshot)}`],
+    ["Exposición", fmtUsdPlain(Number(snapshot?.exposure || 0), 2)],
+    ["Nota", snapshot?.last_note || "-"],
+  ];
+  return rows
+    .map(
+      ([label, value]) => `
+      <li class="mini-item">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(String(value || "-"))}</span>
+      </li>
+    `
+    )
+    .join("");
+}
+
+function paintRuntimeCompare(summary) {
+  const section = document.getElementById("runtimeCompareSection");
+  const badge = document.getElementById("runtimeCompareBadge");
+  const meta = document.getElementById("runtimeCompareMeta");
+  const paperMode = document.getElementById("comparePaperMode");
+  const shadowMode = document.getElementById("compareShadowMode");
+  const paperList = document.getElementById("comparePaperList");
+  const shadowList = document.getElementById("compareShadowList");
+  if (!section || !badge || !meta || !paperMode || !shadowMode || !paperList || !shadowList) return;
+
+  const compare = summary?.strategy_runtime_window_compare;
+  if (isPublicRuntime() || isBackendDisconnectedRuntime() || !compare?.available) {
+    section.hidden = true;
+    return;
+  }
+
+  section.hidden = false;
+  const paper = compare.paper || {};
+  const shadow = compare.shadow || {};
+  const status = String(compare.status || "");
+  badge.textContent =
+    status === "shared" ? "misma ventana" : status === "paper-missing" ? "paper sin ventana" : "ventanas distintas";
+  meta.textContent =
+    status === "shared"
+      ? `Comparando ${String(compare.shared_slug || shadow.slug || "-")} con el mismo setup en papel y shadow.`
+      : "La ventana activa de shadow no coincide con la que tiene paper abierta ahora mismo.";
+  paperMode.textContent = String(paper.runtime_mode || "paper").toUpperCase();
+  shadowMode.textContent = String(shadow.runtime_mode || "shadow").toUpperCase();
+  paperList.innerHTML = renderCompareList(paper);
+  shadowList.innerHTML = renderCompareList(shadow);
+}
+
 function bracketPhaseLabel(summary) {
   const raw = String(summary?.strategy_bracket_phase || "").trim().toLowerCase();
   if (raw === "abrir") return "Abriendo bracket";
@@ -943,6 +1013,7 @@ function paintSummary(summary, items = lastPositions) {
   } else {
     applyLocalModeLabels();
   }
+  paintRuntimeCompare(summary);
   const buckets = splitPositionBuckets(summary, items);
   const windowState = friendlyWindowState(summary);
   const timingInfo = windowTiming(summary);
