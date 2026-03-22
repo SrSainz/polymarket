@@ -103,3 +103,25 @@ def test_runtime_guard_blocks_after_loss_streak() -> None:
     assert decision["consecutive_losses"] == 3
     assert decision["recent_close_pnl"] == -31.0
     assert decision["cooldown_until"] == 1_002_700
+
+
+def test_runtime_guard_can_disable_loss_streak_and_only_use_pnl_limit() -> None:
+    executions = [
+        {"ts": 1_000_000, "action": "close", "pnl_delta": -8.0},
+        {"ts": 999_940, "action": "reduce", "pnl_delta": -7.0},
+        {"ts": 999_880, "action": "close", "pnl_delta": -6.0},
+    ]
+
+    decision = evaluate_runtime_guard(
+        executions,
+        now_ts=1_000_000,
+        lookback_minutes=10,
+        loss_streak_limit=0,
+        max_recent_close_pnl=-25.0,
+        cooldown_minutes=45,
+    )
+
+    assert decision["blocked"] is False
+    assert decision["consecutive_losses"] == 3
+    assert decision["recent_close_pnl"] == -21.0
+    assert decision["reason"] == ""

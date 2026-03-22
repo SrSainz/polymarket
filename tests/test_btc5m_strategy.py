@@ -3794,6 +3794,47 @@ def test_runtime_guard_live_ignores_recent_paper_losses(tmp_path: Path) -> None:
     db.close()
 
 
+def test_runtime_guard_live_can_disable_loss_streak_and_keep_pnl_guard(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            runtime_guard_enabled=True,
+            runtime_guard_loss_streak=0,
+            runtime_guard_max_recent_pnl=-25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-runtime-guard-no-streak"),
+        spot_feed=None,
+    )
+
+    with patch("app.services.btc5m_strategy.evaluate_runtime_guard") as evaluate_mock:
+        evaluate_mock.return_value = {
+            "blocked": False,
+            "recent_close_count": 3,
+            "recent_close_pnl": -21.0,
+            "consecutive_losses": 3,
+            "cooldown_until": 0,
+            "reason": "",
+        }
+        allowed, note = service._runtime_guard_can_open(mode="live")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    _, kwargs = evaluate_mock.call_args
+    assert kwargs["loss_streak_limit"] == 0
+    assert kwargs["max_recent_close_pnl"] == -25.0
+    db.close()
+
+
 def test_market_official_price_to_beat_reads_refreshed_event_payload_top_level(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

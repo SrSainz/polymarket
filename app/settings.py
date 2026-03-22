@@ -164,7 +164,7 @@ class BotConfig(BaseModel):
     runtime_guard_enabled: bool = True
     paper_runtime_guard_enabled: bool = False
     runtime_guard_lookback_minutes: int = 180
-    runtime_guard_loss_streak: int = 3
+    runtime_guard_loss_streak: int = 0
     runtime_guard_max_recent_pnl: float = -35.0
     runtime_guard_cooldown_minutes: int = 45
     paper_runtime_guard_lookback_minutes: int = 180
@@ -296,14 +296,14 @@ class BotConfig(BaseModel):
             raise ValueError("runtime_diagnostics_decision_limit must be >= 1")
         if self.runtime_guard_lookback_minutes < 1:
             raise ValueError("runtime_guard_lookback_minutes must be >= 1")
-        if self.runtime_guard_loss_streak < 1:
-            raise ValueError("runtime_guard_loss_streak must be >= 1")
+        if self.runtime_guard_loss_streak < 0:
+            raise ValueError("runtime_guard_loss_streak must be >= 0")
         if self.runtime_guard_cooldown_minutes < 1:
             raise ValueError("runtime_guard_cooldown_minutes must be >= 1")
         if self.paper_runtime_guard_lookback_minutes < 1:
             raise ValueError("paper_runtime_guard_lookback_minutes must be >= 1")
-        if self.paper_runtime_guard_loss_streak < 1:
-            raise ValueError("paper_runtime_guard_loss_streak must be >= 1")
+        if self.paper_runtime_guard_loss_streak < 0:
+            raise ValueError("paper_runtime_guard_loss_streak must be >= 0")
         if self.paper_runtime_guard_cooldown_minutes < 1:
             raise ValueError("paper_runtime_guard_cooldown_minutes must be >= 1")
         if self.btc5m_reserved_notional < 0:

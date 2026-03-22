@@ -5498,13 +5498,13 @@ class BTC5mStrategyService:
             return True, ""
         if mode == "paper":
             lookback_minutes = max(self.settings.config.paper_runtime_guard_lookback_minutes, 1)
-            loss_streak_limit = max(self.settings.config.paper_runtime_guard_loss_streak, 1)
+            loss_streak_limit = max(self.settings.config.paper_runtime_guard_loss_streak, 0)
             max_recent_close_pnl = float(self.settings.config.paper_runtime_guard_max_recent_pnl)
             cooldown_minutes = max(self.settings.config.paper_runtime_guard_cooldown_minutes, 1)
             guard_profile = "paper"
         else:
             lookback_minutes = max(self.settings.config.runtime_guard_lookback_minutes, 1)
-            loss_streak_limit = max(self.settings.config.runtime_guard_loss_streak, 1)
+            loss_streak_limit = max(self.settings.config.runtime_guard_loss_streak, 0)
             max_recent_close_pnl = float(self.settings.config.runtime_guard_max_recent_pnl)
             cooldown_minutes = max(self.settings.config.runtime_guard_cooldown_minutes, 1)
             guard_profile = "live"

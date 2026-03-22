@@ -22,7 +22,7 @@ def evaluate_runtime_guard(
     *,
     now_ts: int | None = None,
     lookback_minutes: int = 180,
-    loss_streak_limit: int = 3,
+    loss_streak_limit: int = 0,
     max_recent_close_pnl: float = -35.0,
     cooldown_minutes: int = 45,
 ) -> dict[str, Any]:
@@ -42,17 +42,19 @@ def evaluate_runtime_guard(
             consecutive_losses += 1
             continue
         break
+    streak_enabled = int(loss_streak_limit) > 0
+    pnl_enabled = float(max_recent_close_pnl) < 0
     blocked = bool(
         closing_rows
         and (
-            consecutive_losses >= max(int(loss_streak_limit), 1)
-            or recent_close_pnl <= float(max_recent_close_pnl)
+            (streak_enabled and consecutive_losses >= int(loss_streak_limit))
+            or (pnl_enabled and recent_close_pnl <= float(max_recent_close_pnl))
         )
     )
     reason_parts: list[str] = []
-    if consecutive_losses >= max(int(loss_streak_limit), 1):
+    if streak_enabled and consecutive_losses >= int(loss_streak_limit):
         reason_parts.append(f"{consecutive_losses} cierres perdedores seguidos")
-    if recent_close_pnl <= float(max_recent_close_pnl):
+    if pnl_enabled and recent_close_pnl <= float(max_recent_close_pnl):
         reason_parts.append(f"PnL reciente {recent_close_pnl:.2f}")
     reason = ", ".join(reason_parts)
     return {

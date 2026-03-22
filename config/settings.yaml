@@ -14,8 +14,8 @@ shadow_mode_enabled: false
 execution_mode: "paper"
 live_execution_profile: "taker_fak"
 live_small_target_capital: 111.26
-live_small_max_total_loss: 0.0
-live_small_max_drawdown_pct: 0.25
+live_small_max_total_loss: 25.0
+live_small_max_drawdown_pct: 0.0
 live_preflight_require_clean_ledger: true
 dry_run: true
 
@@ -82,8 +82,8 @@ runtime_diagnostics_decision_limit: 1200
 runtime_guard_enabled: true
 paper_runtime_guard_enabled: false
 runtime_guard_lookback_minutes: 180
-runtime_guard_loss_streak: 3
-runtime_guard_max_recent_pnl: -35.0
+runtime_guard_loss_streak: 0
+runtime_guard_max_recent_pnl: -25.0
 runtime_guard_cooldown_minutes: 45
 paper_runtime_guard_lookback_minutes: 180
 paper_runtime_guard_loss_streak: 4
