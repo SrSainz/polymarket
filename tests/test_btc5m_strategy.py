@@ -3907,6 +3907,90 @@ def test_arb_micro_strict_realism_skips_degraded_reference(tmp_path: Path) -> No
     db.close()
 
 
+def test_arb_micro_shadow_allows_degraded_reference_with_reduced_budget(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-shadow-fallback"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=80)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Shadow Fallback",
+        "slug": slug,
+        "conditionId": "cond-arb-shadow-fallback",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [
+            {
+                "startTime": start_time,
+                "eventMetadata": {"priceToBeat": 71775.07326019551},
+            }
+        ],
+    }
+    shadow_broker = _FakeBroker()
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "min_order_size": "5.0",
+                "bids": [{"price": "0.40"}],
+                "asks": [{"price": "0.41", "size": "250"}, {"price": "0.42", "size": "250"}],
+            },
+            "asset-down": {
+                "min_order_size": "5.0",
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.54", "size": "250"}, {"price": "0.55", "size": "250"}],
+            },
+        },
+        balance=111.26,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=71750.0,
+            lead_price=71750.0,
+            binance_price=71750.0,
+            chainlink_price=None,
+            basis=0.0,
+            source="rest-coinbase",
+            age_ms=12,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=shadow_broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            min_trade_amount=5.0,
+            arb_min_trade_amount=1.0,
+            btc5m_strict_realism_mode=True,
+            live_small_target_capital=111.26,
+            live_btc5m_cycle_budget_usdc=25.0,
+            btc5m_reference_soft_budget_scale=0.55,
+        ),
+        logger=logging.getLogger("test-btc5m-shadow-fallback"),
+        spot_feed=spot_feed,
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="shadow")
+
+    assert stats["filled"] >= 2
+    assert not shadow_broker.instructions
+    assert db.get_bot_state("strategy_reference_comparable") == "1"
+    assert db.get_bot_state("strategy_reference_quality") == "shadow-fallback"
+    assert round(float(db.get_bot_state("strategy_cycle_budget") or 0.0), 2) >= 12.40
+    assert "realism gate" not in str(db.get_bot_state("strategy_last_note") or "")
+    assert db.list_copy_positions()
+    db.close()
+
+
 def test_arb_micro_strict_realism_allows_soft_stale_official_rtds(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -4150,11 +4234,55 @@ def test_arb_reference_state_relaxes_soft_stale_rtds_budget_in_live(tmp_path: Pa
         local_anchor_price=71760.0,
         anchor_source="polymarket-rtds-anchor",
     )
+    shadow_state = service._arb_reference_state(  # noqa: SLF001
+        mode="shadow",
+        source="polymarket-rtds+binance",
+        age_ms=1600,
+        chainlink_price=71775.07,
+        official_price_to_beat=0.0,
+        local_anchor_price=71760.0,
+        anchor_source="polymarket-rtds-anchor",
+    )
 
     assert paper_state.quality == "soft-stale-rtds"
     assert round(paper_state.budget_scale, 2) == 0.45
     assert live_state.quality == "soft-stale-rtds"
     assert round(live_state.budget_scale, 2) == 0.80
+    assert shadow_state.quality == "soft-stale-rtds"
+    assert round(shadow_state.budget_scale, 2) == 0.80
+    db.close()
+
+
+def test_arb_reference_state_allows_shadow_fallback_without_labeled_source(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", btc5m_reference_soft_budget_scale=0.55),
+        logger=logging.getLogger("test-btc5m-shadow-missing-source"),
+        spot_feed=None,
+    )
+
+    shadow_state = service._arb_reference_state(  # noqa: SLF001
+        mode="shadow",
+        source="",
+        age_ms=25,
+        chainlink_price=0.0,
+        official_price_to_beat=0.0,
+        local_anchor_price=71760.0,
+        anchor_source="local-anchor",
+    )
+
+    assert shadow_state.comparable is True
+    assert shadow_state.quality == "shadow-fallback"
+    assert round(shadow_state.budget_scale, 2) == 0.45
     db.close()
 
 

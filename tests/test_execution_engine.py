@@ -83,7 +83,7 @@ def test_execution_engine_records_paper_trace(tmp_path: Path) -> None:
     db.close()
 
 
-def test_execution_engine_shadow_records_bot_state_without_broker_calls(tmp_path: Path) -> None:
+def test_execution_engine_shadow_simulates_fill_without_broker_calls(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     paper = _StubBroker(
@@ -116,11 +116,16 @@ def test_execution_engine_shadow_records_bot_state_without_broker_calls(tmp_path
 
     result = engine.execute(mode="shadow", instruction=_instruction())
 
-    assert result.status == "shadow"
+    assert result.status == "filled"
+    assert result.mode == "shadow"
     assert paper.calls == []
     assert live.calls == []
     assert db.get_bot_state("shadow_last_instruction") is not None
     assert db.get_bot_state("shadow_last_instruction_at") is not None
+    assert db.get_bot_state("position_ledger_mode") == "shadow"
+    position = db.get_copy_position("asset-up")
+    assert position is not None
+    assert float(position["size"]) == 10.0
     latency = load_latency_snapshot(tmp_path)
     assert latency["latencies"]["expected_slippage_bps"] == 0.0
     db.close()

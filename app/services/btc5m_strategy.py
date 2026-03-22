@@ -5063,12 +5063,24 @@ class BTC5mStrategyService:
         has_chainlink = chainlink_price > 0
         has_official = official_price_to_beat > 0
         has_local_anchor = local_anchor_price > 0
+        has_any_anchor = has_official or has_local_anchor
         age_limit = max(int(self.settings.config.btc5m_reference_max_age_ms), 100)
         soft_age_limit = max(int(self.settings.config.btc5m_reference_soft_max_age_ms), age_limit)
         soft_budget_scale = float(self.settings.config.btc5m_reference_soft_budget_scale)
-        is_live = str(mode or "").strip().lower() == "live"
+        mode_text = str(mode or "").strip().lower()
+        is_live_like = mode_text in {"live", "shadow"}
+        is_shadow = mode_text == "shadow"
+        shadow_fallback_budget_scale = min(max(soft_budget_scale, 0.50), 0.60)
+        shadow_missing_budget_scale = min(max(soft_budget_scale, 0.35), 0.45)
 
         if not source_text:
+            if is_shadow and has_any_anchor:
+                return ArbReferenceState(
+                    comparable=True,
+                    quality="shadow-fallback",
+                    note="shadow fallback: sin spot etiquetado; usando ancla reducida",
+                    budget_scale=shadow_missing_budget_scale,
+                )
             return ArbReferenceState(comparable=False, quality="missing", note="sin spot de referencia")
         if age_ms > age_limit:
             if age_ms <= soft_age_limit and has_rtds and has_chainlink and has_official:
@@ -5076,7 +5088,7 @@ class BTC5mStrategyService:
                     comparable=True,
                     quality="soft-stale-official",
                     note=f"RTDS ligeramente vieja: {age_ms}ms > {age_limit}ms; operando reducido",
-                    budget_scale=max(soft_budget_scale, 0.70) if is_live else soft_budget_scale,
+                    budget_scale=max(soft_budget_scale, 0.70) if is_live_like else soft_budget_scale,
                 )
             if (
                 age_ms <= soft_age_limit
@@ -5090,7 +5102,7 @@ class BTC5mStrategyService:
                     comparable=True,
                     quality="soft-stale-rtds",
                     note=f"RTDS ligeramente vieja: {age_ms}ms > {age_limit}ms; ancla RTDS reducida",
-                    budget_scale=max(soft_budget_scale, 0.80) if is_live else min(soft_budget_scale, 0.45),
+                    budget_scale=max(soft_budget_scale, 0.80) if is_live_like else min(soft_budget_scale, 0.45),
                 )
             return ArbReferenceState(
                 comparable=False,
@@ -5098,12 +5110,26 @@ class BTC5mStrategyService:
                 note=f"referencia vieja: {age_ms}ms > {age_limit}ms",
             )
         if not has_rtds:
+            if is_shadow and has_any_anchor:
+                return ArbReferenceState(
+                    comparable=True,
+                    quality="shadow-fallback",
+                    note=f"shadow fallback: fuente degradada: {source_text}; operando reducido",
+                    budget_scale=shadow_fallback_budget_scale,
+                )
             return ArbReferenceState(
                 comparable=False,
                 quality="degraded",
                 note=f"fuente degradada: {source_text}",
             )
         if not has_chainlink:
+            if is_shadow and has_any_anchor:
+                return ArbReferenceState(
+                    comparable=True,
+                    quality="shadow-fallback",
+                    note="shadow fallback: sin precio Chainlink RTDS; usando ancla reducida",
+                    budget_scale=shadow_fallback_budget_scale,
+                )
             return ArbReferenceState(
                 comparable=False,
                 quality="degraded",

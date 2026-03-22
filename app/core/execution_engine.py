@@ -67,16 +67,16 @@ class ExecutionEngine:
             self._record_trace(result=result, instruction=instruction, started_ns=started_ns)
             return result
         if safe_mode == "shadow":
-            result = ExecutionResult(
+            result = apply_fill_to_database(
+                db=self.db,
+                instruction=instruction,
                 mode="shadow",
-                status="shadow",
-                action=instruction.action,
-                asset=instruction.asset,
-                size=instruction.size,
-                price=instruction.price,
-                notional=instruction.notional,
-                pnl_delta=0.0,
-                message="shadow_plan",
+                filled_size=instruction.size,
+                fill_price=instruction.price,
+                fill_notional=instruction.notional,
+                message="shadow fill",
+                status="filled",
+                notes=instruction.reason,
             )
             self._record_trace(result=result, instruction=instruction, started_ns=started_ns)
             self.db.set_bot_state("shadow_last_instruction_at", str(int(time.time())))
