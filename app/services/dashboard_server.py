@@ -350,6 +350,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_plan_legs = _bot_state_int(conn, "strategy_plan_legs")
         strategy_window_seconds = _bot_state_int(conn, "strategy_window_seconds")
         strategy_cycle_budget = _bot_state_float(conn, "strategy_cycle_budget")
+        strategy_effective_min_notional = _bot_state_float(conn, "strategy_effective_min_notional")
         strategy_current_market_exposure = _bot_state_float(conn, "strategy_current_market_exposure")
         strategy_resolution_mode = _bot_state_text(conn, "strategy_resolution_mode")
         strategy_timing_regime = _bot_state_text(conn, "strategy_timing_regime")
@@ -553,6 +554,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_market_slug=strategy_market_slug,
         strategy_market_title=strategy_market_title,
     )
+    strategy_cycle_budget_remaining = max(strategy_cycle_budget - current_market_total_exposure, 0.0)
+    strategy_cycle_budget_shortfall = max(strategy_effective_min_notional - strategy_cycle_budget_remaining, 0.0)
 
     return {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
@@ -666,6 +669,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_plan_legs": int(strategy_plan_legs),
         "strategy_window_seconds": int(strategy_window_seconds),
         "strategy_cycle_budget": round(strategy_cycle_budget, 4),
+        "strategy_cycle_budget_remaining": round(strategy_cycle_budget_remaining, 4),
+        "strategy_cycle_budget_shortfall": round(strategy_cycle_budget_shortfall, 4),
+        "strategy_effective_min_notional": round(strategy_effective_min_notional, 4),
         "strategy_current_market_exposure": round(strategy_current_market_exposure, 4),
         "strategy_resolution_mode": strategy_resolution_mode,
         "strategy_timing_regime": strategy_timing_regime,
@@ -762,13 +768,14 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
 def _runtime_compare_payload(
     db_path: Path,
     *,
-    strategy_runtime_mode: str,
-    strategy_market_slug: str,
-    strategy_market_title: str,
+    strategy_runtime_mode: str = "",
+    strategy_market_slug: str = "",
+    strategy_market_title: str = "",
 ) -> dict:
     runtime_mode = str(strategy_runtime_mode or "").strip().lower()
     if runtime_mode != "shadow":
-        return {"available": False}
+        if runtime_mode:
+            return {"available": False}
     return build_runtime_compare_payload(
         data_dir=db_path.parent,
         target_slug=str(strategy_market_slug or "").strip(),

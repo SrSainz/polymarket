@@ -277,12 +277,35 @@ function compareBreakdownLabel(snapshot) {
     .join(" / ");
 }
 
+function comparePriceLabel(snapshot) {
+  const beat = Number(snapshot?.official_price_to_beat || 0);
+  const spot = Number(snapshot?.spot_price || 0);
+  const fairUp = Number(snapshot?.fair_up || 0);
+  const fairDown = Number(snapshot?.fair_down || 0);
+  const referenceQuality = String(snapshot?.reference_quality || "").trim();
+  const spotText = spot > 0 ? fmtBtcPrice(spot) : "-";
+  const beatText = beat > 0 ? fmtBtcPrice(beat) : "-";
+  const fairText =
+    fairUp > 0 || fairDown > 0
+      ? `Sube ${fmtPct(fairUp * 100, 1)} / Baja ${fmtPct(fairDown * 100, 1)}`
+      : "-";
+  return `${spotText} | beat ${beatText} | ${fairText}${referenceQuality ? ` | ${referenceQuality}` : ""}`;
+}
+
+function compareBudgetLabel(snapshot) {
+  const remaining = Number(snapshot?.remaining_cycle_budget || 0);
+  const effectiveMin = Number(snapshot?.effective_min_notional || 0);
+  return `${fmtUsdPlain(remaining, 2)} | min ${fmtUsdPlain(effectiveMin, 2)}`;
+}
+
 function renderCompareList(snapshot) {
   const rows = [
     ["Ventana", snapshot?.slug || snapshot?.title || "-"],
     ["Estado", snapshot?.operability_state || "-"],
     ["Modo precio", snapshot?.price_mode || "-"],
     ["Budget", fmtUsdPlain(Number(snapshot?.cycle_budget || 0), 2)],
+    ["Restante / min", compareBudgetLabel(snapshot)],
+    ["Precio / fair", comparePriceLabel(snapshot)],
     ["Objetivo", compareRatioLabel(snapshot?.desired_up_ratio)],
     ["Actual", compareRatioLabel(snapshot?.current_up_ratio)],
     ["Patas", `${Number(snapshot?.open_legs || 0)} | ${compareBreakdownLabel(snapshot)}`],
@@ -1250,6 +1273,9 @@ function paintLabOverview(summary) {
   if (isPublicRuntime()) {
     const totalExposure = Number(summary.exposure ?? 0);
     document.getElementById("labModeValue").textContent = "Perfil publico";
+    document.getElementById("labBudgetRemaining").textContent = "-";
+    document.getElementById("labEffectiveMin").textContent = "-";
+    document.getElementById("labBlockGate").textContent = "requiere backend";
     document.getElementById("labWindowValue").textContent = String(latestObservedExecution()?.title || lastPositions[0]?.title || "-");
     document.getElementById("labFeedValue").textContent = "Data API publica";
     document.getElementById("labOperabilityValue").textContent = "Sin backend";
@@ -1274,6 +1300,9 @@ function paintLabOverview(summary) {
   const windowPct = timingInfo.pct;
   const deployed = Math.max(Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0), 0);
   const cycleBudget = Math.max(Number(summary.strategy_cycle_budget || 0), 0);
+  const remainingBudget = Math.max(Number(summary.strategy_cycle_budget_remaining ?? cycleBudget - deployed), 0);
+  const effectiveMinNotional = Math.max(Number(summary.strategy_effective_min_notional || 0), 0);
+  const budgetShortfall = Math.max(Number(summary.strategy_cycle_budget_shortfall || 0), 0);
   const exposurePct = cycleBudget > 0 ? Math.min((deployed / cycleBudget) * 100, 100) : 0;
   const feedInfo = feedModeInfo(summary);
   const edgeInfo = currentEdgeInfo(summary);
@@ -1321,6 +1350,14 @@ function paintLabOverview(summary) {
   document.getElementById("labModeValue").textContent = isVidarxLab(summary)
     ? `${timingLabel(summary)} / ${String(summary.strategy_price_mode || "sin banda").replaceAll("-", " ")}`
     : strategyLabel(summary);
+  document.getElementById("labBudgetRemaining").textContent =
+    `${fmtUsdPlain(remainingBudget, 2)} de ${fmtUsdPlain(cycleBudget, 2)}`;
+  document.getElementById("labEffectiveMin").textContent =
+    `${fmtUsdPlain(effectiveMinNotional, 2)}${budgetShortfall > 0 ? ` | faltan ${fmtUsdPlain(budgetShortfall, 2)}` : ""}`;
+  document.getElementById("labBlockGate").textContent =
+    Boolean(summary.strategy_operability_blocking)
+      ? operability.label
+      : String(summary.strategy_last_note || "").trim() || "sin bloqueo";
   document.getElementById("labWindowValue").textContent =
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labFeedValue").textContent = spotInfo.referenceComparable ? feedInfo.label : `${feedInfo.label} | degradado`;
@@ -1379,7 +1416,7 @@ function paintLabOverview(summary) {
   document.getElementById("labWindowFill").style.width = `${windowPct}%`;
   document.getElementById("labExposureFill").style.width = `${exposurePct}%`;
   document.getElementById("labMeta").textContent = isVidarxLab(summary)
-    ? `${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | dinero ${fmtUsdPlain(deployed, 2)}${spotInfo.referenceComparable ? ` | ref ${spotInfo.referenceQuality}` : ` | degradado: ${spotInfo.referenceNote}`}`
+    ? `${windowSeconds}s | restan ${timingInfo.remaining}s | objetivo ${desiredRatioLabel(summary)} | actual ${actualRatioLabel(summary)} | ${bracketPhaseLabel(summary).toLowerCase()} | dinero ${fmtUsdPlain(deployed, 2)} | restante ${fmtUsdPlain(remainingBudget, 2)} | min ${fmtUsdPlain(effectiveMinNotional, 2)}${spotInfo.referenceComparable ? ` | ref ${spotInfo.referenceQuality}` : ` | degradado: ${spotInfo.referenceNote}`}`
     : `modo ${strategyLabel(summary)} | trigger ${summary.strategy_trigger_outcome || "-"} @ ${fmt(Number(summary.strategy_trigger_price_seen || 0), 3)}`;
 }
 

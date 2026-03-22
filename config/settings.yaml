@@ -64,7 +64,7 @@ btc5m_reference_soft_budget_scale: 0.55
 btc5m_allow_rtds_anchor_fallback: true
 live_only_btc5m: true
 live_btc5m_ticket_allocation_pct: 0.25
-live_btc5m_cycle_budget_usdc: 25.0
+live_btc5m_cycle_budget_usdc: 50.0
 
 autonomous_decisions_enabled: false
 manual_confirmation_enabled: false

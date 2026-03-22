@@ -298,6 +298,12 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     paper_db.set_bot_state("strategy_operability_state", "ready")
     paper_db.set_bot_state("strategy_last_note", "paper comparativa")
     paper_db.set_bot_state("strategy_cycle_budget", "342.68")
+    paper_db.set_bot_state("strategy_effective_min_notional", "5.00")
+    paper_db.set_bot_state("strategy_spot_price", "68837.73")
+    paper_db.set_bot_state("strategy_official_price_to_beat", "68856.67")
+    paper_db.set_bot_state("strategy_spot_fair_up", "0.215")
+    paper_db.set_bot_state("strategy_spot_fair_down", "0.785")
+    paper_db.set_bot_state("strategy_reference_quality", "official")
     paper_db.set_bot_state("strategy_desired_up_ratio", "0.42")
     paper_db.set_bot_state("strategy_current_up_ratio", "0.39")
     paper_db.upsert_copy_position(
@@ -333,6 +339,12 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     shadow_db.set_bot_state("strategy_operability_state", "ready")
     shadow_db.set_bot_state("strategy_last_note", "shadow comparativa")
     shadow_db.set_bot_state("strategy_cycle_budget", "25.00")
+    shadow_db.set_bot_state("strategy_effective_min_notional", "3.45")
+    shadow_db.set_bot_state("strategy_spot_price", "68837.73")
+    shadow_db.set_bot_state("strategy_official_price_to_beat", "68856.67")
+    shadow_db.set_bot_state("strategy_spot_fair_up", "0.215")
+    shadow_db.set_bot_state("strategy_spot_fair_down", "0.785")
+    shadow_db.set_bot_state("strategy_reference_quality", "soft-stale-rtds")
     shadow_db.set_bot_state("strategy_desired_up_ratio", "0.42")
     shadow_db.set_bot_state("strategy_current_up_ratio", "0.43")
     shadow_db.upsert_copy_position(
@@ -423,16 +435,23 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert compare["status"] == "shared"
     assert compare["paper"]["runtime_mode"] == "paper"
     assert compare["paper"]["cycle_budget"] == 342.68
+    assert compare["paper"]["effective_min_notional"] == 5.0
     assert compare["paper"]["open_legs"] == 2
     assert compare["paper"]["open_execution_count"] == 1
     assert compare["shadow"]["runtime_mode"] == "shadow"
     assert compare["shadow"]["cycle_budget"] == 25.0
+    assert compare["shadow"]["remaining_cycle_budget"] == 17.81
+    assert compare["shadow"]["effective_min_notional"] == 3.45
+    assert compare["shadow"]["spot_price"] == 68837.73
+    assert compare["shadow"]["official_price_to_beat"] == 68856.67
     assert compare["shadow"]["open_legs"] == 2
     assert compare["shadow"]["open_execution_count"] == 2
     assert compare["shadow"]["open_avg_notional"] == 1.575
     assert compare["shadow"]["recent_executions"][0]["notes"].startswith("shadow-open")
     assert Path(compare["db_path"]).exists()
     assert summary["strategy_runtime_compare_db_path"].endswith("runtime_compare.db")
+    assert summary["strategy_cycle_budget_remaining"] == 17.81
+    assert summary["strategy_effective_min_notional"] == 3.45
 
 
 def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:
