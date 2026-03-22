@@ -578,6 +578,8 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert compare["paper"]["effective_min_notional"] == 5.0
     assert compare["paper"]["open_legs"] == 2
     assert compare["paper"]["open_execution_count"] == 1
+    assert compare["paper"]["closed_window_count"] == 2
+    assert compare["paper"]["total_realized_pnl"] == 6.7
     assert compare["shadow"]["runtime_mode"] == "shadow"
     assert compare["shadow"]["cycle_budget"] == 25.0
     assert compare["shadow"]["remaining_cycle_budget"] == 17.81
@@ -587,9 +589,16 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert compare["shadow"]["open_legs"] == 2
     assert compare["shadow"]["open_execution_count"] == 2
     assert compare["shadow"]["open_avg_notional"] == 1.575
+    assert compare["shadow"]["closed_window_count"] == 2
+    assert compare["shadow"]["total_realized_pnl"] == 0.85
     assert compare["shadow"]["recent_executions"][0]["notes"].startswith("shadow-open")
     history = compare["history"]
     assert history["available"] is True
+    assert history["sample_available"] is True
+    assert history["sample_summary"]["paper_latest_notional"] == 4.1
+    assert history["sample_summary"]["shadow_latest_notional"] == 3.15
+    assert len(history["sample_series"]["paper"]) == 1
+    assert len(history["sample_series"]["shadow"]) == 1
     assert history["summary"]["paper_window_count"] == 2
     assert history["summary"]["shadow_window_count"] == 2
     assert history["summary"]["shared_window_count"] == 1
@@ -612,6 +621,124 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert summary["strategy_runtime_compare_db_path"].endswith("runtime_compare.db")
     assert summary["strategy_cycle_budget_remaining"] == 17.81
     assert summary["strategy_effective_min_notional"] == 3.45
+
+
+def test_summary_payload_exposes_compare_snapshot_series_without_closed_history(tmp_path: Path) -> None:
+    paper_db_path = tmp_path / "bot.db"
+    shadow_db_path = tmp_path / "bot_shadow.db"
+
+    paper_db = Database(paper_db_path)
+    paper_db.init_schema()
+    paper_db.set_bot_state("strategy_runtime_mode", "paper")
+    paper_db.set_bot_state("strategy_market_slug", "btc-updown-5m-live")
+    paper_db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Live")
+    paper_db.set_bot_state("strategy_price_mode", "underround")
+    paper_db.set_bot_state("strategy_operability_state", "waiting_edge")
+    paper_db.set_bot_state("strategy_last_note", "paper open")
+    paper_db.set_bot_state("strategy_cycle_budget", "68.00")
+    paper_db.set_bot_state("strategy_effective_min_notional", "1.00")
+    paper_db.set_bot_state("strategy_spot_price", "68177.62")
+    paper_db.set_bot_state("strategy_official_price_to_beat", "68180.00")
+    paper_db.set_bot_state("strategy_spot_fair_up", "0.577")
+    paper_db.set_bot_state("strategy_spot_fair_down", "0.423")
+    paper_db.set_bot_state("strategy_reference_quality", "soft-stale-rtds")
+    paper_db.set_bot_state("strategy_desired_up_ratio", "0.51")
+    paper_db.set_bot_state("strategy_current_up_ratio", "0.51")
+    paper_db.upsert_copy_position(
+        asset="paper-live-up",
+        condition_id="cond-live",
+        size=10.0,
+        avg_price=0.41,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Live",
+        slug="btc-updown-5m-live",
+        outcome="Up",
+        category="crypto",
+    )
+    paper_db.record_execution(
+        result=ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="paper-live-up",
+            size=10.0,
+            price=0.41,
+            notional=4.1,
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-live",
+        source_wallet="strategy:paper",
+        source_signal_id=0,
+        notes="paper-live-open",
+    )
+    paper_db.close()
+
+    shadow_db = Database(shadow_db_path)
+    shadow_db.init_schema()
+    shadow_db.set_bot_state("strategy_runtime_mode", "shadow")
+    shadow_db.set_bot_state("strategy_market_slug", "btc-updown-5m-live")
+    shadow_db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Live")
+    shadow_db.set_bot_state("strategy_price_mode", "underround")
+    shadow_db.set_bot_state("strategy_operability_state", "waiting_book")
+    shadow_db.set_bot_state("strategy_last_note", "shadow open")
+    shadow_db.set_bot_state("strategy_cycle_budget", "31.55")
+    shadow_db.set_bot_state("strategy_effective_min_notional", "1.00")
+    shadow_db.set_bot_state("strategy_spot_price", "68237.25")
+    shadow_db.set_bot_state("strategy_official_price_to_beat", "68230.00")
+    shadow_db.set_bot_state("strategy_spot_fair_up", "0.974")
+    shadow_db.set_bot_state("strategy_spot_fair_down", "0.026")
+    shadow_db.set_bot_state("strategy_reference_quality", "rtds-derived")
+    shadow_db.set_bot_state("strategy_desired_up_ratio", "0.70")
+    shadow_db.set_bot_state("strategy_current_up_ratio", "0.0")
+    shadow_db.upsert_copy_position(
+        asset="shadow-live-down",
+        condition_id="cond-live",
+        size=5.0,
+        avg_price=0.29,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Live",
+        slug="btc-updown-5m-live",
+        outcome="Down",
+        category="crypto",
+    )
+    shadow_db.record_execution(
+        result=ExecutionResult(
+            mode="shadow",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="shadow-live-down",
+            size=5.0,
+            price=0.29,
+            notional=1.45,
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-live",
+        source_wallet="strategy:shadow",
+        source_signal_id=0,
+        notes="shadow-live-open",
+    )
+    shadow_db.close()
+
+    summary = _summary_payload(
+        shadow_db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    compare = summary["strategy_runtime_window_compare"]
+    history = compare["history"]
+    assert compare["same_window"] is True
+    assert history["available"] is False
+    assert history["sample_available"] is True
+    assert history["sample_summary"]["paper_latest_notional"] == 4.1
+    assert history["sample_summary"]["shadow_latest_notional"] == 1.45
+    assert len(history["sample_series"]["paper"]) == 1
+    assert len(history["sample_series"]["shadow"]) == 1
+    assert compare["paper"]["closed_window_count"] == 0
+    assert compare["shadow"]["closed_window_count"] == 0
+    assert compare["paper"]["total_realized_pnl"] == 0.0
+    assert compare["shadow"]["total_realized_pnl"] == 0.0
 
 
 def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:

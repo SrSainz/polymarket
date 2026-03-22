@@ -157,6 +157,28 @@
             </div>
             <p id="runtimeCompareMeta" class="mini-meta">Esperando una ventana comparable.</p>
             <p id="runtimeCompareDbMeta" class="mini-meta">db runtime_compare.db pendiente.</p>
+            <div class="compare-now-grid">
+              <article class="compare-kpi compare-kpi-inline">
+                <span class="compare-kpi-label">Paper precio / fair</span>
+                <strong id="comparePaperCurrentPrice" class="compare-kpi-value compare-kpi-value-compact">-</strong>
+                <small id="comparePaperCurrentMeta" class="compare-kpi-note">-</small>
+              </article>
+              <article class="compare-kpi compare-kpi-inline">
+                <span class="compare-kpi-label">Shadow precio / fair</span>
+                <strong id="compareShadowCurrentPrice" class="compare-kpi-value compare-kpi-value-compact">-</strong>
+                <small id="compareShadowCurrentMeta" class="compare-kpi-note">-</small>
+              </article>
+              <article class="compare-kpi compare-kpi-inline">
+                <span class="compare-kpi-label">Budget actual</span>
+                <strong id="compareBudgetNow" class="compare-kpi-value compare-kpi-value-compact">-</strong>
+                <small id="compareBudgetNowMeta" class="compare-kpi-note">-</small>
+              </article>
+              <article class="compare-kpi compare-kpi-inline">
+                <span class="compare-kpi-label">Reparto actual</span>
+                <strong id="compareRatioNow" class="compare-kpi-value compare-kpi-value-compact">-</strong>
+                <small id="compareRatioNowMeta" class="compare-kpi-note">-</small>
+              </article>
+            </div>
             <div class="compare-kpi-grid">
               <article class="compare-kpi">
                 <span class="compare-kpi-label">PnL paper</span>
@@ -204,7 +226,7 @@
               </div>
               <ul id="compareDeltaList" class="mini-list compare-delta-list"></ul>
             </div>
-            <details class="panel panel-details compare-details">
+            <details id="compareCurrentWindowDetails" class="panel panel-details compare-details">
               <summary class="panel-head">
                 <div>
                   <h3>Detalle de la ventana actual</h3>

@@ -298,6 +298,26 @@ function compareBudgetLabel(snapshot) {
   return `${fmtUsdPlain(remaining, 2)} | min ${fmtUsdPlain(effectiveMin, 2)}`;
 }
 
+function comparePriceHeadline(snapshot) {
+  const spot = Number(snapshot?.spot_price || 0);
+  const fairUp = Number(snapshot?.fair_up || 0);
+  const fairDown = Number(snapshot?.fair_down || 0);
+  const spotText = spot > 0 ? fmtBtcPrice(spot) : "-";
+  const fairText =
+    fairUp > 0 || fairDown > 0
+      ? `Sube ${fmtPct(fairUp * 100, 1)} / Baja ${fmtPct(fairDown * 100, 1)}`
+      : "fair -";
+  return `${spotText} | ${fairText}`;
+}
+
+function comparePriceMeta(snapshot) {
+  const beat = Number(snapshot?.official_price_to_beat || 0);
+  const quality = String(snapshot?.reference_quality || "").trim();
+  const operability = String(snapshot?.operability_state || "").trim();
+  const beatText = beat > 0 ? `beat ${fmtBtcPrice(beat)}` : "sin beat oficial";
+  return `${beatText}${quality ? ` | ${quality}` : ""}${operability ? ` | ${operability}` : ""}`;
+}
+
 function renderCompareList(snapshot) {
   const rows = [
     ["Ventana", snapshot?.slug || snapshot?.title || "-"],
@@ -353,6 +373,45 @@ function renderCompareStats(snapshot) {
       <li class="mini-item">
         <strong>${escapeHtml(label)}</strong>
         <span>${escapeHtml(String(value || "-"))}</span>
+      </li>
+    `
+    )
+    .join("");
+}
+
+function renderCompareCurrentSnapshotItems(paper, shadow, sampleSummary = {}) {
+  const rows = [
+    [
+      "Precio / fair",
+      `paper ${comparePriceLabel(paper)} | shadow ${comparePriceLabel(shadow)}`,
+    ],
+    [
+      "Budget / min",
+      `paper ${compareBudgetLabel(paper)} | shadow ${compareBudgetLabel(shadow)}`,
+    ],
+    [
+      "Reparto actual",
+      `paper ${compareRatioLabel(paper?.current_up_ratio)} | shadow ${compareRatioLabel(shadow?.current_up_ratio)}`,
+    ],
+    [
+      "Actividad actual",
+      `aperturas ${Number(paper?.open_execution_count || 0)} vs ${Number(shadow?.open_execution_count || 0)} | exposicion ${fmtUsdPlain(Number(paper?.exposure || 0), 2)} vs ${fmtUsdPlain(Number(shadow?.exposure || 0), 2)}`,
+    ],
+    [
+      "Despliegue reciente",
+      `paper ${fmtUsdPlain(Number(sampleSummary?.paper_latest_notional || 0), 2)} | shadow ${fmtUsdPlain(Number(sampleSummary?.shadow_latest_notional || 0), 2)}`,
+    ],
+  ];
+  return rows
+    .map(
+      ([label, value]) => `
+      <li class="mini-item compare-delta-item">
+        <div class="compare-delta-top">
+          <strong>${escapeHtml(label)}</strong>
+        </div>
+        <div class="compare-delta-bottom">
+          <span>${escapeHtml(String(value || "-"))}</span>
+        </div>
       </li>
     `
     )
@@ -482,6 +541,14 @@ function paintRuntimeCompare(summary) {
   const badge = document.getElementById("runtimeCompareBadge");
   const meta = document.getElementById("runtimeCompareMeta");
   const dbMeta = document.getElementById("runtimeCompareDbMeta");
+  const paperCurrentPrice = document.getElementById("comparePaperCurrentPrice");
+  const paperCurrentMeta = document.getElementById("comparePaperCurrentMeta");
+  const shadowCurrentPrice = document.getElementById("compareShadowCurrentPrice");
+  const shadowCurrentMeta = document.getElementById("compareShadowCurrentMeta");
+  const budgetNow = document.getElementById("compareBudgetNow");
+  const budgetNowMeta = document.getElementById("compareBudgetNowMeta");
+  const ratioNow = document.getElementById("compareRatioNow");
+  const ratioNowMeta = document.getElementById("compareRatioNowMeta");
   const paperPnl = document.getElementById("comparePaperPnl");
   const paperMeta = document.getElementById("comparePaperMeta");
   const shadowPnl = document.getElementById("compareShadowPnl");
@@ -502,11 +569,20 @@ function paintRuntimeCompare(summary) {
   const shadowList = document.getElementById("compareShadowList");
   const paperStats = document.getElementById("comparePaperStats");
   const shadowStats = document.getElementById("compareShadowStats");
+  const compareDetails = document.getElementById("compareCurrentWindowDetails");
   if (
     !section ||
     !badge ||
     !meta ||
     !dbMeta ||
+    !paperCurrentPrice ||
+    !paperCurrentMeta ||
+    !shadowCurrentPrice ||
+    !shadowCurrentMeta ||
+    !budgetNow ||
+    !budgetNowMeta ||
+    !ratioNow ||
+    !ratioNowMeta ||
     !paperPnl ||
     !paperMeta ||
     !shadowPnl ||
@@ -543,37 +619,93 @@ function paintRuntimeCompare(summary) {
   const status = String(compare.status || "");
   badge.textContent =
     status === "shared" ? "misma ventana" : status === "paper-missing" ? "paper sin ventana" : "ventanas distintas";
-  meta.textContent =
-    status === "shared"
-      ? `Comparando ${String(compare.shared_slug || shadow.slug || "-")} con el mismo setup en papel y shadow.`
-      : "La ventana activa de shadow no coincide con la que tiene paper abierta ahora mismo.";
   dbMeta.textContent = compare?.db_path
     ? `db comparativa ${String(compare.db_path)} | generado ${Number(compare.generated_at || 0) > 0 ? tsToIso(Number(compare.generated_at)) : "ahora"}`
     : "db comparativa no disponible";
 
   const history = compareHistory(summary);
   const historySummary = history.summary || {};
+  const historyPoints = Array.isArray(history?.points) ? history.points : [];
   const paperSeries = Array.isArray(history?.series?.paper) ? history.series.paper : [];
   const shadowSeries = Array.isArray(history?.series?.shadow) ? history.series.shadow : [];
-  paperPnl.textContent = fmtUsd(Number(historySummary.paper_total_realized_pnl || 0), 2);
-  shadowPnl.textContent = fmtUsd(Number(historySummary.shadow_total_realized_pnl || 0), 2);
-  gapPnl.textContent = fmtUsd(Number(historySummary.cumulative_pnl_gap || 0), 2);
-  gapActivity.textContent = compareGapLeaderLabel(
-    Number(historySummary.filled_orders_gap || 0),
-    `+${Math.abs(Number(historySummary.filled_orders_gap || 0))} fills`,
-    `+${Math.abs(Number(historySummary.filled_orders_gap || 0))} fills`,
-  );
-  paperMeta.textContent = `${Number(historySummary.paper_window_count || 0)} ventanas | media ${fmtUsdPlain(Number(historySummary.paper_avg_deployed_notional || 0), 2)} por ventana`;
-  shadowMeta.textContent = `${Number(historySummary.shadow_window_count || 0)} ventanas | media ${fmtUsdPlain(Number(historySummary.shadow_avg_deployed_notional || 0), 2)} por ventana`;
-  gapPnlMeta.textContent = `${Number(historySummary.shared_window_count || 0)} comparables | ${compareGapLeaderLabel(Number(historySummary.cumulative_pnl_gap || 0), "por delante", "por delante")}`;
-  gapActivityMeta.textContent =
-    `despliegue medio ${fmtUsdPlain(Number(historySummary.paper_avg_deployed_notional || 0), 2)} paper / ${fmtUsdPlain(Number(historySummary.shadow_avg_deployed_notional || 0), 2)} shadow`;
-  paperChartMeta.textContent = `${paperSeries.length} ventanas recientes | ${fmtUsd(Number(historySummary.paper_total_deployed_notional || 0), 2)} desplegados`;
-  shadowChartMeta.textContent = `${shadowSeries.length} ventanas recientes | ${fmtUsd(Number(historySummary.shadow_total_deployed_notional || 0), 2)} desplegados`;
-  paperChart.innerHTML = renderCompareTrendChart(paperSeries, "cumulative_realized_pnl", "paper");
-  shadowChart.innerHTML = renderCompareTrendChart(shadowSeries, "cumulative_realized_pnl", "shadow");
-  deltaList.innerHTML = renderCompareDeltaItems(history);
-  windowCount.textContent = `${Number(historySummary.shared_window_count || 0)} comparables`;
+  const sampleSeries = {
+    paper: Array.isArray(history?.sample_series?.paper) ? history.sample_series.paper : [],
+    shadow: Array.isArray(history?.sample_series?.shadow) ? history.sample_series.shadow : [],
+  };
+  const sampleSummary = history?.sample_summary || {};
+  const hasClosedHistory = Boolean(history.available && (historyPoints.length || paperSeries.length || shadowSeries.length));
+  const useSampleFallback = !hasClosedHistory && (sampleSeries.paper.length || sampleSeries.shadow.length);
+  const trendPaperSeries = useSampleFallback ? sampleSeries.paper : paperSeries;
+  const trendShadowSeries = useSampleFallback ? sampleSeries.shadow : shadowSeries;
+  const trendValueKey = useSampleFallback ? "open_total_notional" : "cumulative_realized_pnl";
+
+  meta.textContent =
+    status === "shared"
+      ? hasClosedHistory
+        ? `Comparando ${String(compare.shared_slug || shadow.slug || "-")} con el mismo setup en papel y shadow.`
+        : `Comparando ${String(compare.shared_slug || shadow.slug || "-")} con la misma ventana activa. Aun no hay cierres comparables, asi que mostramos la foto actual y el despliegue reciente.`
+      : "La ventana activa de shadow no coincide con la que tiene paper abierta ahora mismo.";
+
+  paperCurrentPrice.textContent = comparePriceHeadline(paper);
+  paperCurrentMeta.textContent = comparePriceMeta(paper);
+  shadowCurrentPrice.textContent = comparePriceHeadline(shadow);
+  shadowCurrentMeta.textContent = comparePriceMeta(shadow);
+  budgetNow.textContent = `paper ${fmtUsdPlain(Number(paper?.remaining_cycle_budget || 0), 2)} / shadow ${fmtUsdPlain(Number(shadow?.remaining_cycle_budget || 0), 2)}`;
+  budgetNowMeta.textContent = `min ${fmtUsdPlain(Number(paper?.effective_min_notional || 0), 2)} / ${fmtUsdPlain(Number(shadow?.effective_min_notional || 0), 2)} | exp ${fmtUsdPlain(Number(paper?.exposure || 0), 2)} / ${fmtUsdPlain(Number(shadow?.exposure || 0), 2)}`;
+  ratioNow.textContent = `paper ${compareRatioLabel(paper?.current_up_ratio)}`;
+  ratioNowMeta.textContent = `shadow ${compareRatioLabel(shadow?.current_up_ratio)} | objetivo ${compareRatioLabel(shadow?.desired_up_ratio)}`;
+
+  if (hasClosedHistory) {
+    paperPnl.textContent = fmtUsd(Number(historySummary.paper_total_realized_pnl || 0), 2);
+    shadowPnl.textContent = fmtUsd(Number(historySummary.shadow_total_realized_pnl || 0), 2);
+    gapPnl.textContent = fmtUsd(Number(historySummary.cumulative_pnl_gap || 0), 2);
+    gapActivity.textContent = compareGapLeaderLabel(
+      Number(historySummary.filled_orders_gap || 0),
+      `+${Math.abs(Number(historySummary.filled_orders_gap || 0))} fills`,
+      `+${Math.abs(Number(historySummary.filled_orders_gap || 0))} fills`,
+    );
+    paperMeta.textContent = `${Number(historySummary.paper_window_count || 0)} ventanas | media ${fmtUsdPlain(Number(historySummary.paper_avg_deployed_notional || 0), 2)} por ventana`;
+    shadowMeta.textContent = `${Number(historySummary.shadow_window_count || 0)} ventanas | media ${fmtUsdPlain(Number(historySummary.shadow_avg_deployed_notional || 0), 2)} por ventana`;
+    gapPnlMeta.textContent = `${Number(historySummary.shared_window_count || 0)} comparables | ${compareGapLeaderLabel(Number(historySummary.cumulative_pnl_gap || 0), "por delante", "por delante")}`;
+    gapActivityMeta.textContent =
+      `despliegue medio ${fmtUsdPlain(Number(historySummary.paper_avg_deployed_notional || 0), 2)} paper / ${fmtUsdPlain(Number(historySummary.shadow_avg_deployed_notional || 0), 2)} shadow`;
+    paperChartMeta.textContent = `${paperSeries.length} ventanas recientes | ${fmtUsd(Number(historySummary.paper_total_deployed_notional || 0), 2)} desplegados`;
+    shadowChartMeta.textContent = `${shadowSeries.length} ventanas recientes | ${fmtUsd(Number(historySummary.shadow_total_deployed_notional || 0), 2)} desplegados`;
+    deltaList.innerHTML = renderCompareDeltaItems(history);
+    windowCount.textContent = `${Number(historySummary.shared_window_count || 0)} comparables`;
+  } else {
+    const paperRealized = Number(paper?.total_realized_pnl || 0);
+    const shadowRealized = Number(shadow?.total_realized_pnl || 0);
+    const activityGap = Number(paper?.open_execution_count || 0) - Number(shadow?.open_execution_count || 0);
+    paperPnl.textContent = fmtUsd(paperRealized, 2);
+    shadowPnl.textContent = fmtUsd(shadowRealized, 2);
+    gapPnl.textContent = fmtUsd(paperRealized - shadowRealized, 2);
+    gapActivity.textContent = compareGapLeaderLabel(
+      activityGap,
+      `+${Math.abs(activityGap)} aperturas`,
+      `+${Math.abs(activityGap)} aperturas`,
+    );
+    paperMeta.textContent = `${Number(paper?.closed_window_count || 0)} cierres | ${fmtUsdPlain(Number(paper?.historical_deployed_notional || 0), 2)} historicos`;
+    shadowMeta.textContent = `${Number(shadow?.closed_window_count || 0)} cierres | ${fmtUsdPlain(Number(shadow?.historical_deployed_notional || 0), 2)} historicos`;
+    gapPnlMeta.textContent = useSampleFallback
+      ? `${Math.max(sampleSeries.paper.length, sampleSeries.shadow.length)} muestras recientes | foto actual comparable`
+      : "misma ventana, aun sin cierres comparables";
+    gapActivityMeta.textContent =
+      `aperturas actuales ${Number(paper?.open_execution_count || 0)} paper / ${Number(shadow?.open_execution_count || 0)} shadow`;
+    paperChartMeta.textContent = useSampleFallback
+      ? `${sampleSeries.paper.length} muestras recientes | despliegue actual ${fmtUsdPlain(Number(sampleSummary?.paper_latest_notional || 0), 2)}`
+      : "sin historial ni muestras recientes";
+    shadowChartMeta.textContent = useSampleFallback
+      ? `${sampleSeries.shadow.length} muestras recientes | despliegue actual ${fmtUsdPlain(Number(sampleSummary?.shadow_latest_notional || 0), 2)}`
+      : "sin historial ni muestras recientes";
+    deltaList.innerHTML = renderCompareCurrentSnapshotItems(paper, shadow, sampleSummary);
+    windowCount.textContent = useSampleFallback
+      ? `${Math.max(sampleSeries.paper.length, sampleSeries.shadow.length)} muestras`
+      : "foto actual";
+  }
+
+  paperChart.innerHTML = renderCompareTrendChart(trendPaperSeries, trendValueKey, "paper");
+  shadowChart.innerHTML = renderCompareTrendChart(trendShadowSeries, trendValueKey, "shadow");
 
   paperMode.textContent = String(paper.runtime_mode || "paper").toUpperCase();
   shadowMode.textContent = String(shadow.runtime_mode || "shadow").toUpperCase();
@@ -581,6 +713,9 @@ function paintRuntimeCompare(summary) {
   shadowList.innerHTML = renderCompareList(shadow);
   paperStats.innerHTML = renderCompareStats(paper);
   shadowStats.innerHTML = renderCompareStats(shadow);
+  if (compareDetails) {
+    compareDetails.open = !hasClosedHistory;
+  }
 }
 
 function bracketPhaseLabel(summary) {

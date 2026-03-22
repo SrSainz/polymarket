@@ -100,6 +100,28 @@ CREATE TABLE IF NOT EXISTS runtime_compare_window_pairs (
     shadow_cumulative_realized_pnl REAL NOT NULL,
     cumulative_pnl_gap REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS runtime_compare_samples (
+    runtime_mode TEXT NOT NULL,
+    sample_ts INTEGER NOT NULL,
+    market_slug TEXT NOT NULL,
+    market_title TEXT NOT NULL,
+    price_mode TEXT NOT NULL,
+    operability_state TEXT NOT NULL,
+    cycle_budget REAL NOT NULL,
+    remaining_cycle_budget REAL NOT NULL,
+    effective_min_notional REAL NOT NULL,
+    open_legs INTEGER NOT NULL,
+    exposure REAL NOT NULL,
+    open_execution_count INTEGER NOT NULL,
+    open_total_notional REAL NOT NULL,
+    desired_up_ratio REAL NOT NULL,
+    current_up_ratio REAL NOT NULL,
+    spot_price REAL NOT NULL,
+    fair_up REAL NOT NULL,
+    fair_down REAL NOT NULL,
+    PRIMARY KEY (runtime_mode, sample_ts)
+);
 """
 
 _COMPARE_RUNTIME_FILES = {
@@ -107,6 +129,8 @@ _COMPARE_RUNTIME_FILES = {
     "shadow": "bot_shadow.db",
 }
 _COMPARE_HISTORY_LIMIT = 24
+_COMPARE_SAMPLE_LIMIT = 60
+_COMPARE_SAMPLE_RETENTION = 720
 
 
 def build_runtime_compare_payload(*, data_dir: Path, target_slug: str = "", target_title: str = "") -> dict:
@@ -124,6 +148,14 @@ def build_runtime_compare_payload(*, data_dir: Path, target_slug: str = "", targ
 
     now_ts = int(time.time())
     _write_compare_db(compare_db_path=compare_db_path, generated_at=now_ts, snapshots=snapshots, history=history)
+    sample_history = _read_compare_samples(compare_db_path=compare_db_path, limit=_COMPARE_SAMPLE_LIMIT)
+    history = {
+        **history,
+        "sample_available": bool(sample_history.get("available")),
+        "sample_limit": int(sample_history.get("sample_limit") or 0),
+        "sample_series": sample_history.get("series") or {"paper": [], "shadow": []},
+        "sample_summary": sample_history.get("summary") or {},
+    }
 
     paper = snapshots["paper"]
     shadow = snapshots["shadow"]
@@ -254,6 +286,17 @@ def _read_runtime_snapshot(*, db_path: Path, runtime_mode: str, target_slug: str
             """,
             tuple(execution_params),
         ).fetchone()
+        closed_window_agg = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS closed_count,
+                COALESCE(SUM(realized_pnl), 0) AS total_realized_pnl,
+                COALESCE(SUM(deployed_notional), 0) AS total_deployed_notional,
+                COALESCE(SUM(filled_orders), 0) AS total_filled_orders
+            FROM strategy_windows
+            WHERE slug <> '' AND status = 'closed'
+            """
+        ).fetchone()
 
         recent_executions = [
             {
@@ -303,6 +346,10 @@ def _read_runtime_snapshot(*, db_path: Path, runtime_mode: str, target_slug: str
             "open_min_notional": round(float(execution_agg["min_notional"] or 0.0), 4),
             "open_max_notional": round(float(execution_agg["max_notional"] or 0.0), 4),
             "last_execution_ts": int(execution_agg["last_ts"] or 0),
+            "closed_window_count": int(closed_window_agg["closed_count"] or 0),
+            "total_realized_pnl": round(float(closed_window_agg["total_realized_pnl"] or 0.0), 4),
+            "historical_deployed_notional": round(float(closed_window_agg["total_deployed_notional"] or 0.0), 4),
+            "historical_filled_orders": int(closed_window_agg["total_filled_orders"] or 0),
             "recent_executions": recent_executions,
         }
 
@@ -338,6 +385,10 @@ def _empty_runtime_snapshot(*, runtime_mode: str, db_path: Path) -> dict:
         "open_min_notional": 0.0,
         "open_max_notional": 0.0,
         "last_execution_ts": 0,
+        "closed_window_count": 0,
+        "total_realized_pnl": 0.0,
+        "historical_deployed_notional": 0.0,
+        "historical_filled_orders": 0,
         "recent_executions": [],
     }
 
@@ -574,6 +625,112 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
     }
 
 
+def _empty_compare_samples(*, limit: int) -> dict:
+    return {
+        "available": False,
+        "sample_limit": int(limit),
+        "series": {"paper": [], "shadow": []},
+        "summary": {
+            "paper_sample_count": 0,
+            "shadow_sample_count": 0,
+            "paper_latest_notional": 0.0,
+            "shadow_latest_notional": 0.0,
+            "notional_gap": 0.0,
+            "paper_latest_exposure": 0.0,
+            "shadow_latest_exposure": 0.0,
+            "exposure_gap": 0.0,
+        },
+    }
+
+
+def _read_compare_samples(*, compare_db_path: Path, limit: int) -> dict:
+    safe_limit = max(int(limit), 1)
+    if not compare_db_path.exists():
+        return _empty_compare_samples(limit=safe_limit)
+
+    with _connect(compare_db_path) as conn:
+        conn.executescript(_COMPARE_SCHEMA)
+        series: dict[str, list[dict]] = {}
+        for runtime_mode in _COMPARE_RUNTIME_FILES:
+            rows = conn.execute(
+                """
+                SELECT
+                    sample_ts,
+                    market_slug,
+                    market_title,
+                    price_mode,
+                    operability_state,
+                    cycle_budget,
+                    remaining_cycle_budget,
+                    effective_min_notional,
+                    open_legs,
+                    exposure,
+                    open_execution_count,
+                    open_total_notional,
+                    desired_up_ratio,
+                    current_up_ratio,
+                    spot_price,
+                    fair_up,
+                    fair_down
+                FROM runtime_compare_samples
+                WHERE runtime_mode = ?
+                ORDER BY sample_ts DESC
+                LIMIT ?
+                """,
+                (runtime_mode, safe_limit),
+            ).fetchall()
+            series[runtime_mode] = [
+                {
+                    "ts": int(row["sample_ts"] or 0),
+                    "slug": str(row["market_slug"] or ""),
+                    "title": str(row["market_title"] or ""),
+                    "price_mode": str(row["price_mode"] or ""),
+                    "operability_state": str(row["operability_state"] or ""),
+                    "cycle_budget": round(float(row["cycle_budget"] or 0.0), 4),
+                    "remaining_cycle_budget": round(float(row["remaining_cycle_budget"] or 0.0), 4),
+                    "effective_min_notional": round(float(row["effective_min_notional"] or 0.0), 4),
+                    "open_legs": int(row["open_legs"] or 0),
+                    "exposure": round(float(row["exposure"] or 0.0), 4),
+                    "open_execution_count": int(row["open_execution_count"] or 0),
+                    "open_total_notional": round(float(row["open_total_notional"] or 0.0), 4),
+                    "desired_up_ratio": round(float(row["desired_up_ratio"] or 0.0), 4),
+                    "current_up_ratio": round(float(row["current_up_ratio"] or 0.0), 4),
+                    "spot_price": round(float(row["spot_price"] or 0.0), 4),
+                    "fair_up": round(float(row["fair_up"] or 0.0), 6),
+                    "fair_down": round(float(row["fair_down"] or 0.0), 6),
+                }
+                for row in reversed(rows)
+            ]
+
+    paper_series = series.get("paper") or []
+    shadow_series = series.get("shadow") or []
+    if not paper_series and not shadow_series:
+        return _empty_compare_samples(limit=safe_limit)
+
+    paper_latest = paper_series[-1] if paper_series else {}
+    shadow_latest = shadow_series[-1] if shadow_series else {}
+    paper_latest_notional = float(paper_latest.get("open_total_notional") or 0.0)
+    shadow_latest_notional = float(shadow_latest.get("open_total_notional") or 0.0)
+    paper_latest_exposure = float(paper_latest.get("exposure") or 0.0)
+    shadow_latest_exposure = float(shadow_latest.get("exposure") or 0.0)
+
+    return {
+        "available": True,
+        "sample_limit": safe_limit,
+        "series": series,
+        "summary": {
+            "paper_sample_count": len(paper_series),
+            "shadow_sample_count": len(shadow_series),
+            "paper_latest_notional": round(paper_latest_notional, 4),
+            "shadow_latest_notional": round(shadow_latest_notional, 4),
+            "notional_gap": round(paper_latest_notional - shadow_latest_notional, 4),
+            "paper_latest_exposure": round(paper_latest_exposure, 4),
+            "shadow_latest_exposure": round(shadow_latest_exposure, 4),
+            "exposure_gap": round(paper_latest_exposure - shadow_latest_exposure, 4),
+        },
+    }
+
+
 def _write_compare_db(*, compare_db_path: Path, generated_at: int, snapshots: dict[str, dict], history: dict) -> None:
     compare_db_path.parent.mkdir(parents=True, exist_ok=True)
     with _connect(compare_db_path) as conn:
@@ -635,6 +792,54 @@ def _write_compare_db(*, compare_db_path: Path, generated_at: int, snapshots: di
                         float(snapshot.get("open_min_notional") or 0.0),
                         float(snapshot.get("open_max_notional") or 0.0),
                         int(snapshot.get("last_execution_ts") or 0),
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO runtime_compare_samples(
+                        runtime_mode, sample_ts, market_slug, market_title, price_mode, operability_state,
+                        cycle_budget, remaining_cycle_budget, effective_min_notional, open_legs,
+                        exposure, open_execution_count, open_total_notional, desired_up_ratio,
+                        current_up_ratio, spot_price, fair_up, fair_down
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        runtime_mode,
+                        generated_at,
+                        str(snapshot.get("slug") or ""),
+                        str(snapshot.get("title") or ""),
+                        str(snapshot.get("price_mode") or ""),
+                        str(snapshot.get("operability_state") or ""),
+                        float(snapshot.get("cycle_budget") or 0.0),
+                        float(snapshot.get("remaining_cycle_budget") or 0.0),
+                        float(snapshot.get("effective_min_notional") or 0.0),
+                        int(snapshot.get("open_legs") or 0),
+                        float(snapshot.get("exposure") or 0.0),
+                        int(snapshot.get("open_execution_count") or 0),
+                        float(snapshot.get("open_total_notional") or 0.0),
+                        float(snapshot.get("desired_up_ratio") or 0.0),
+                        float(snapshot.get("current_up_ratio") or 0.0),
+                        float(snapshot.get("spot_price") or 0.0),
+                        float(snapshot.get("fair_up") or 0.0),
+                        float(snapshot.get("fair_down") or 0.0),
+                    ),
+                )
+                conn.execute(
+                    """
+                    DELETE FROM runtime_compare_samples
+                    WHERE runtime_mode = ?
+                      AND sample_ts NOT IN (
+                        SELECT sample_ts
+                        FROM runtime_compare_samples
+                        WHERE runtime_mode = ?
+                        ORDER BY sample_ts DESC
+                        LIMIT ?
+                      )
+                    """,
+                    (
+                        runtime_mode,
+                        runtime_mode,
+                        _COMPARE_SAMPLE_RETENTION,
                     ),
                 )
                 for item in snapshot.get("breakdown") or []:
