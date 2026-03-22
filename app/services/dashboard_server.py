@@ -27,6 +27,7 @@ from app.core.strategy_monitoring import (
     build_recent_resolution_windows,
     build_setup_performance,
 )
+from app.services.runtime_compare_db import build_runtime_compare_payload
 
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
@@ -101,6 +102,9 @@ def _build_handler(
                         live_trading_enabled=live_trading_enabled,
                     )
                 )
+                return
+            if path == "/api/runtime-compare":
+                self._json(_runtime_compare_payload(db_path))
                 return
             if path == "/api/microstructure":
                 self._json(_microstructure_payload(db_path))
@@ -543,8 +547,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             current_market_group["outcomes"].get(strategy_hedge_outcome or "", {}).get("exposure", 0.0)
         )
 
-    runtime_window_compare = _runtime_window_compare_payload(
-        db_path=db_path,
+    runtime_window_compare = _runtime_compare_payload(
+        db_path,
         strategy_runtime_mode=strategy_runtime_mode,
         strategy_market_slug=strategy_market_slug,
         strategy_market_title=strategy_market_title,
@@ -712,6 +716,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_current_market_hedge_exposure": round(hedge_exposure_actual, 4),
         "strategy_current_market_breakdown": current_market_breakdown,
         "strategy_runtime_window_compare": runtime_window_compare,
+        "strategy_runtime_compare_db_path": str(runtime_window_compare.get("db_path") or ""),
         "strategy_recent_resolutions": recent_resolution_windows,
         "strategy_setup_performance": setup_performance,
         "strategy_variant_backtest_generated_at": str(experiment_payload.get("generated_at") or ""),
@@ -754,9 +759,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
     }
 
 
-def _runtime_window_compare_payload(
-    *,
+def _runtime_compare_payload(
     db_path: Path,
+    *,
     strategy_runtime_mode: str,
     strategy_market_slug: str,
     strategy_market_title: str,
@@ -764,43 +769,11 @@ def _runtime_window_compare_payload(
     runtime_mode = str(strategy_runtime_mode or "").strip().lower()
     if runtime_mode != "shadow":
         return {"available": False}
-
-    compare_db_path = db_path.parent / "bot.db"
-    if compare_db_path.resolve() == db_path.resolve() or not compare_db_path.exists():
-        return {"available": False}
-
-    target_slug = str(strategy_market_slug or "").strip()
-    target_title = str(strategy_market_title or "").strip()
-
-    with _connect(db_path) as shadow_conn:
-        shadow_snapshot = _runtime_window_snapshot(
-            shadow_conn,
-            fallback_mode=runtime_mode,
-            target_slug=target_slug,
-            target_title=target_title,
-        )
-    with _connect(compare_db_path) as paper_conn:
-        paper_snapshot = _runtime_window_snapshot(
-            paper_conn,
-            fallback_mode="paper",
-            target_slug=target_slug,
-            target_title=target_title,
-        )
-
-    shared_slug = str(shadow_snapshot.get("slug") or "")
-    same_window = bool(shared_slug and shared_slug == str(paper_snapshot.get("slug") or ""))
-    status = "shared" if same_window else "mismatch"
-    if not paper_snapshot.get("has_window"):
-        status = "paper-missing"
-
-    return {
-        "available": True,
-        "status": status,
-        "same_window": same_window,
-        "shared_slug": shared_slug,
-        "paper": paper_snapshot,
-        "shadow": shadow_snapshot,
-    }
+    return build_runtime_compare_payload(
+        data_dir=db_path.parent,
+        target_slug=str(strategy_market_slug or "").strip(),
+        target_title=str(strategy_market_title or "").strip(),
+    )
 
 
 def _microstructure_payload(db_path: Path) -> dict:
@@ -921,73 +894,6 @@ def _positions_payload(db_path: Path, *, clob_host: str) -> dict:
         positions[-1]["mark_price"] = float(mark_price)
         positions[-1]["unrealized_pnl"] = float((mark_price - float(row["avg_price"])) * float(row["size"]))
     return {"items": positions}
-
-
-def _runtime_window_snapshot(
-    conn: sqlite3.Connection,
-    *,
-    fallback_mode: str,
-    target_slug: str,
-    target_title: str,
-) -> dict:
-    runtime_mode = _bot_state_text(conn, "strategy_runtime_mode") or fallback_mode
-    market_slug = _bot_state_text(conn, "strategy_market_slug")
-    market_title = _bot_state_text(conn, "strategy_market_title")
-    target_market_slug = target_slug or market_slug
-    target_market_title = target_title or market_title
-
-    rows = conn.execute(
-        """
-        SELECT slug, title, outcome, size, avg_price
-        FROM copy_positions
-        WHERE (? <> '' AND slug = ?)
-           OR (? = '' AND ? <> '' AND title = ?)
-        ORDER BY outcome ASC
-        """,
-        (
-            target_market_slug,
-            target_market_slug,
-            target_market_slug,
-            target_market_title,
-            target_market_title,
-        ),
-    ).fetchall()
-
-    breakdown: list[dict] = []
-    total_exposure = 0.0
-    total_shares = 0.0
-    for row in rows:
-        shares = abs(float(row["size"] or 0.0))
-        exposure = abs(float(row["size"] or 0.0) * float(row["avg_price"] or 0.0))
-        total_exposure += exposure
-        total_shares += shares
-        breakdown.append(
-            {
-                "outcome": str(row["outcome"] or ""),
-                "shares": round(shares, 4),
-                "exposure": round(exposure, 4),
-            }
-        )
-
-    for item in breakdown:
-        item["share_pct"] = round((float(item["shares"]) / total_shares) * 100, 2) if total_shares > 0 else 0.0
-
-    return {
-        "runtime_mode": runtime_mode,
-        "slug": target_market_slug,
-        "title": target_market_title,
-        "has_window": bool(target_market_slug or target_market_title),
-        "price_mode": _bot_state_text(conn, "strategy_price_mode"),
-        "operability_state": _bot_state_text(conn, "strategy_operability_state"),
-        "last_note": _bot_state_text(conn, "strategy_last_note"),
-        "cycle_budget": round(_bot_state_float(conn, "strategy_cycle_budget"), 4),
-        "desired_up_ratio": round(_bot_state_float(conn, "strategy_desired_up_ratio"), 4),
-        "current_up_ratio": round(_bot_state_float(conn, "strategy_current_up_ratio"), 4),
-        "window_seconds": int(_bot_state_int(conn, "strategy_window_seconds")),
-        "open_legs": int(len(rows)),
-        "exposure": round(total_exposure, 4),
-        "breakdown": breakdown,
-    }
 
 
 def _executions_payload(db_path: Path, limit: int) -> dict:

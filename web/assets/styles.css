@@ -430,6 +430,20 @@ button:disabled {
   padding: 12px;
 }
 
+.compare-subsection {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(108, 121, 138, 0.18);
+}
+
+.compare-subsection h4 {
+  margin: 0 0 8px;
+  font-size: 0.76rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .panel-head {
   display: flex;
   align-items: flex-start;

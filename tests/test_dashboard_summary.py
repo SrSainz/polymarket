@@ -357,7 +357,58 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
         outcome="Down",
         category="crypto",
     )
+    shadow_db.record_execution(
+        result=ExecutionResult(
+            mode="shadow",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="shadow-down",
+            size=6.0,
+            price=0.25,
+            notional=1.5,
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-shared",
+        source_wallet="strategy:shadow",
+        source_signal_id=0,
+        notes="shadow-open-1",
+    )
+    shadow_db.record_execution(
+        result=ExecutionResult(
+            mode="shadow",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="shadow-up",
+            size=5.0,
+            price=0.33,
+            notional=1.65,
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-shared",
+        source_wallet="strategy:shadow",
+        source_signal_id=0,
+        notes="shadow-open-2",
+    )
     shadow_db.close()
+
+    paper_db = Database(paper_db_path)
+    paper_db.record_execution(
+        result=ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="paper-up",
+            size=10.0,
+            price=0.41,
+            notional=4.1,
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-shared",
+        source_wallet="strategy:paper",
+        source_signal_id=0,
+        notes="paper-open-1",
+    )
+    paper_db.close()
 
     summary = _summary_payload(
         shadow_db_path,
@@ -373,9 +424,15 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert compare["paper"]["runtime_mode"] == "paper"
     assert compare["paper"]["cycle_budget"] == 342.68
     assert compare["paper"]["open_legs"] == 2
+    assert compare["paper"]["open_execution_count"] == 1
     assert compare["shadow"]["runtime_mode"] == "shadow"
     assert compare["shadow"]["cycle_budget"] == 25.0
     assert compare["shadow"]["open_legs"] == 2
+    assert compare["shadow"]["open_execution_count"] == 2
+    assert compare["shadow"]["open_avg_notional"] == 1.575
+    assert compare["shadow"]["recent_executions"][0]["notes"].startswith("shadow-open")
+    assert Path(compare["db_path"]).exists()
+    assert summary["strategy_runtime_compare_db_path"].endswith("runtime_compare.db")
 
 
 def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:
