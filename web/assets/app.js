@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-22-audit1";
+const UI_BUILD = "2026-03-23-compare-reset1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -2496,6 +2496,8 @@ document.getElementById("apiBaseBtn").addEventListener("click", async () => {
     document.getElementById("lastUpdated").textContent = `Backend API guardado: ${apiBase || "local"}`;
     document.getElementById("resetBtn").disabled = false;
     document.getElementById("resetBtn").title = "";
+    document.getElementById("resetCompareBtn").disabled = false;
+    document.getElementById("resetCompareBtn").title = "";
   } catch (error) {
     runtimeMode = apiBase ? "backend-unreachable" : "backend-unreachable";
     document.querySelector(".kicker").textContent =
@@ -2503,6 +2505,9 @@ document.getElementById("apiBaseBtn").addEventListener("click", async () => {
     document.getElementById("runtimeBadge").textContent = modeLabel();
     document.getElementById("resetBtn").disabled = true;
     document.getElementById("resetBtn").title = "Solo disponible cuando el dashboard esta conectado al backend local";
+    document.getElementById("resetCompareBtn").disabled = true;
+    document.getElementById("resetCompareBtn").title =
+      "Solo disponible cuando el dashboard esta conectado al backend local";
     document.getElementById("lastUpdated").textContent = apiBase
       ? `No conecta con ${apiBase}: ${error.message}. La web queda en modo backend desconectado.`
       : "Backend API borrado. La web queda en modo backend desconectado.";
@@ -2543,6 +2548,39 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
   } finally {
     button.disabled = false;
     button.textContent = originalLabel || "Limpiar runtime";
+  }
+});
+
+document.getElementById("resetCompareBtn").addEventListener("click", async () => {
+  const button = document.getElementById("resetCompareBtn");
+  if (runtimeMode !== "local") {
+    document.getElementById("lastUpdated").textContent =
+      "Reset compare no disponible en modo Public API. Usa la URL del backend local.";
+    return;
+  }
+
+  const accepted = window.confirm(
+    "Esto limpiara paper, shadow y la base comparativa runtime_compare.db. No reinicia procesos ni toca live. Continuar?"
+  );
+  if (!accepted) return;
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Limpiando compare...";
+  try {
+    const result = await postJson(withCacheBust(buildApiUrl("/api/reset-compare")), { confirm: "reset-compare" });
+    const paper = result?.runtimes?.paper?.deleted || {};
+    const shadow = result?.runtimes?.shadow?.deleted || {};
+    const compareRemoved = result?.compare_files_removed || {};
+    const compareDbRemoved = Boolean(compareRemoved["runtime_compare.db"]);
+    document.getElementById("lastUpdated").textContent =
+      `Compare limpiado: paper ${Number(paper.executions || 0)} ejecuciones / ${Number(paper.strategy_windows || 0)} ventanas, shadow ${Number(shadow.executions || 0)} ejecuciones / ${Number(shadow.strategy_windows || 0)} ventanas, db comparativa ${compareDbRemoved ? "reiniciada" : "sin archivo"}.`;
+    await refreshAll();
+  } catch (error) {
+    document.getElementById("lastUpdated").textContent = `Error al limpiar compare: ${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel || "Limpiar compare";
   }
 });
 
@@ -2607,12 +2645,17 @@ async function bootstrap() {
       : "Proyecto principal (Backend NAS desconectado)";
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const resetBtn = document.getElementById("resetBtn");
+  const resetCompareBtn = document.getElementById("resetCompareBtn");
   if (runtimeMode !== "local") {
     resetBtn.disabled = true;
     resetBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
+    resetCompareBtn.disabled = true;
+    resetCompareBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
   } else {
     resetBtn.disabled = false;
     resetBtn.title = "";
+    resetCompareBtn.disabled = false;
+    resetCompareBtn.title = "";
   }
 
   await refreshAll();

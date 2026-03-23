@@ -31,7 +31,19 @@ from app.services.runtime_compare_db import build_runtime_compare_payload
 
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
-_DASHBOARD_BUILD = "2026-03-22-d48ec3e-audit1"
+_DASHBOARD_BUILD = "2026-03-23-compare-reset1"
+_RUNTIME_RESET_TABLES = [
+    "source_positions_current",
+    "source_positions_history",
+    "signals",
+    "copy_positions",
+    "executions",
+    "daily_pnl",
+    "strategy_windows",
+    "selected_wallets",
+    "position_mark_history",
+    "trade_approvals",
+]
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
@@ -140,6 +152,21 @@ def _build_handler(
                     )
                     return
                 result = _reset_runtime_state(db_path)
+                self._json(result)
+                return
+            if parsed.path == "/api/reset-compare":
+                payload = self._read_json_body()
+                if str(payload.get("confirm") or "").strip().lower() != "reset-compare":
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "confirmation required",
+                            "hint": "send JSON {\"confirm\":\"reset-compare\"}",
+                        },
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                result = _reset_compare_state(db_path)
                 self._json(result)
                 return
             if parsed.path == "/api/live-control":
@@ -1395,21 +1422,50 @@ def _apply_live_control_action(db_path: Path, *, action: str, note: str = "") ->
 
 
 def _reset_runtime_state(db_path: Path) -> dict:
-    tables = [
-        "source_positions_current",
-        "source_positions_history",
-        "signals",
-        "copy_positions",
-        "executions",
-        "daily_pnl",
-        "strategy_windows",
-        "selected_wallets",
-        "position_mark_history",
-        "trade_approvals",
+    deleted = _reset_runtime_tables(db_path)
+    _MIDPOINT_CACHE.clear()
+    return {"ok": True, "deleted": deleted, "reset_at_utc": datetime.now(timezone.utc).isoformat()}
+
+
+def _reset_compare_state(db_path: Path) -> dict:
+    data_dir = db_path.parent
+    runtime_paths = {
+        "paper": data_dir / "bot.db",
+        "shadow": data_dir / "bot_shadow.db",
+    }
+    runtimes: dict[str, dict] = {}
+    for runtime_mode, runtime_path in runtime_paths.items():
+        runtimes[runtime_mode] = {
+            "db_path": str(runtime_path),
+            "db_exists": runtime_path.exists(),
+            "deleted": _reset_runtime_tables(runtime_path) if runtime_path.exists() else {},
+        }
+
+    compare_files = [
+        data_dir / "runtime_compare.db",
+        data_dir / "runtime_compare.db-shm",
+        data_dir / "runtime_compare.db-wal",
     ]
+    compare_removed: dict[str, bool] = {}
+    for file_path in compare_files:
+        existed = file_path.exists()
+        compare_removed[file_path.name] = existed
+        if existed:
+            file_path.unlink()
+
+    _MIDPOINT_CACHE.clear()
+    return {
+        "ok": True,
+        "runtimes": runtimes,
+        "compare_files_removed": compare_removed,
+        "reset_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _reset_runtime_tables(db_path: Path) -> dict[str, int]:
     deleted: dict[str, int] = {}
     with _connect(db_path) as conn:
-        for table in tables:
+        for table in _RUNTIME_RESET_TABLES:
             count_row = conn.execute(f"SELECT COUNT(*) AS value FROM {table}").fetchone()
             deleted[table] = int(count_row["value"]) if count_row else 0
         bot_state_count = conn.execute(
@@ -1417,8 +1473,7 @@ def _reset_runtime_state(db_path: Path) -> dict:
         ).fetchone()
         deleted["bot_state_runtime"] = int(bot_state_count["value"]) if bot_state_count else 0
         with conn:
-            for table in tables:
+            for table in _RUNTIME_RESET_TABLES:
                 conn.execute(f"DELETE FROM {table}")
             conn.execute("DELETE FROM bot_state WHERE key LIKE 'strategy_%' OR key LIKE 'runtime_guard_%'")
-    _MIDPOINT_CACHE.clear()
-    return {"ok": True, "deleted": deleted, "reset_at_utc": datetime.now(timezone.utc).isoformat()}
+    return deleted

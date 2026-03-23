@@ -13,6 +13,7 @@ from app.services.dashboard_server import (
     _liquidations_payload,
     _metrics_payload,
     _microstructure_payload,
+    _reset_compare_state,
     _reset_runtime_state,
     _summary_payload,
 )
@@ -574,7 +575,7 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert compare["available"] is True
     assert compare["same_window"] is True
     assert compare["status"] == "shared"
-    assert summary["dashboard_build"].startswith("2026-03-22-")
+    assert summary["dashboard_build"].startswith("2026-03-")
     assert "pnl_total" in summary["dashboard_metric_sources"]
     assert "compare_samples" in summary["dashboard_metric_sources"]
     assert compare["paper"]["runtime_mode"] == "paper"
@@ -1054,6 +1055,58 @@ def test_reset_runtime_state_clears_strategy_runtime_keys(tmp_path: Path) -> Non
     assert strategy_window_count == 0
     assert daily_pnl_count == 0
     db.close()
+
+
+def test_reset_compare_state_clears_paper_shadow_and_compare_db(tmp_path: Path) -> None:
+    paper_db_path = tmp_path / "bot.db"
+    shadow_db_path = tmp_path / "bot_shadow.db"
+
+    for db_path, slug in ((paper_db_path, "paper-slug"), (shadow_db_path, "shadow-slug")):
+        db = Database(db_path)
+        db.init_schema()
+        db.set_bot_state("strategy_market_slug", slug)
+        db.set_bot_state("runtime_guard_state", "active")
+        now_ts = int(time.time())
+        with db.conn:
+            db.conn.execute(
+                """
+                INSERT INTO executions(
+                    ts, mode, status, action, side, asset, condition_id, size, price, notional
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (now_ts, "paper", "filled", "open", "buy", "asset-1", "cond-1", 5.0, 0.5, 2.5),
+            )
+            db.conn.execute(
+                """
+                INSERT INTO strategy_windows(
+                    slug, condition_id, title, status, opened_at, price_mode, realized_pnl
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (slug, "cond-1", "Bitcoin Up or Down - Test", "closed", now_ts, "underround", 3.0),
+            )
+        db.close()
+
+    compare_db_path = tmp_path / "runtime_compare.db"
+    compare_db_path.write_text("placeholder", encoding="utf-8")
+
+    result = _reset_compare_state(shadow_db_path)
+
+    assert result["runtimes"]["paper"]["deleted"]["executions"] == 1
+    assert result["runtimes"]["paper"]["deleted"]["strategy_windows"] == 1
+    assert result["runtimes"]["shadow"]["deleted"]["executions"] == 1
+    assert result["runtimes"]["shadow"]["deleted"]["strategy_windows"] == 1
+    assert result["compare_files_removed"]["runtime_compare.db"] is True
+    assert compare_db_path.exists() is False
+
+    for db_path in (paper_db_path, shadow_db_path):
+        db = Database(db_path)
+        execution_count = db.conn.execute("SELECT COUNT(*) AS value FROM executions").fetchone()["value"]
+        strategy_window_count = db.conn.execute("SELECT COUNT(*) AS value FROM strategy_windows").fetchone()["value"]
+        assert execution_count == 0
+        assert strategy_window_count == 0
+        assert db.get_bot_state("strategy_market_slug") is None
+        assert db.get_bot_state("runtime_guard_state") is None
+        db.close()
 
 
 def test_dashboard_payloads_expose_microstructure_runtime_files(tmp_path: Path) -> None:
