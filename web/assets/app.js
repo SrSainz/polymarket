@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-reset-safe1";
+const UI_BUILD = "2026-03-23-window-exposure-fix1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -1518,7 +1518,7 @@ function paintSummary(summary, items = lastPositions) {
   const operability = operabilityInfo(summary);
   const strategySpeedLabel = feedInfo.summaryLabel;
   const currentMarketLivePnl = Number(summary.strategy_current_market_live_pnl || buckets.currentSummary.unrealized || 0);
-  const currentMarketExposure = Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || buckets.currentSummary.exposure || 0);
+  const currentMarketExposure = Number(summary.strategy_current_market_total_exposure ?? buckets.currentSummary.exposure ?? 0);
   const replenishmentCount = Number(summary.strategy_replenishment_count || 0);
   const timing = timingLabel(summary);
   const strategyNoteText = strategyNote || "sin trigger";
@@ -1639,7 +1639,7 @@ function paintLabOverview(summary) {
   const snapshotInfo = snapshotTiming(summary);
   const windowSeconds = timingInfo.elapsed;
   const windowPct = timingInfo.pct;
-  const deployed = Math.max(Number(summary.strategy_current_market_total_exposure || summary.strategy_current_market_exposure || 0), 0);
+  const deployed = Math.max(Number(summary.strategy_current_market_total_exposure ?? 0), 0);
   const cycleBudget = Math.max(Number(summary.strategy_cycle_budget || 0), 0);
   const remainingBudget = Math.max(Number(summary.strategy_cycle_budget_remaining ?? cycleBudget - deployed), 0);
   const effectiveMinNotional = Math.max(Number(summary.strategy_effective_min_notional || 0), 0);
@@ -1941,7 +1941,7 @@ function paintSelectedWallets(items) {
   if (isVidarxLab()) {
     const breakdown = currentBreakdown(lastSummary);
     const state = friendlyWindowState(lastSummary);
-    const currentExposure = Number(lastSummary?.strategy_current_market_total_exposure || 0);
+    const currentExposure = Number(lastSummary?.strategy_current_market_total_exposure ?? 0);
     const currentLivePnl = Number(lastSummary?.strategy_current_market_live_pnl || 0);
     const planRows = [
       ["Estado", state.label],
@@ -2274,7 +2274,7 @@ function paintPositions(items) {
   const btcSummary = buckets.currentSummary;
   const generalSummary = buckets.archivedSummary;
 
-  const currentExposure = Number(lastSummary?.strategy_current_market_total_exposure || btcSummary.exposure || 0);
+  const currentExposure = Number(lastSummary?.strategy_current_market_total_exposure ?? btcSummary.exposure ?? 0);
   const currentLivePnl = Number(lastSummary?.strategy_current_market_live_pnl || btcSummary.unrealized || 0);
   document.getElementById("btcBucketCount").textContent = `${btcItems.length} ops.`;
   document.getElementById("btcBucketExposure").textContent = fmtUsdPlain(currentExposure, 2);

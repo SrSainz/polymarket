@@ -223,6 +223,33 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     assert summary["strategy_resolution_pnl_today"] == 6.0
 
 
+def test_summary_payload_current_window_exposure_ignores_stale_bot_state_without_positions(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+
+    db.set_bot_state("strategy_mode", "btc5m_orderbook")
+    db.set_bot_state("strategy_entry_mode", "vidarx_micro")
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-stale")
+    db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Stale")
+    db.set_bot_state("strategy_current_market_exposure", "47.33")
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    assert summary["strategy_current_market_exposure"] == 47.33
+    assert summary["strategy_current_market_total_exposure"] == 0.0
+    assert summary["strategy_current_market_live_pnl"] == 0.0
+    assert summary["strategy_current_market_breakdown"] == []
+
+
 def test_summary_payload_exposes_setup_performance(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.db"
     db = Database(db_path)

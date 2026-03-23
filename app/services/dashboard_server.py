@@ -32,7 +32,7 @@ from app.services.runtime_compare_db import build_runtime_compare_payload
 
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
-_DASHBOARD_BUILD = "2026-03-23-reset-safe1"
+_DASHBOARD_BUILD = "2026-03-23-window-exposure-fix1"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -665,7 +665,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
     current_market_live_pnl = 0.0
     primary_exposure_actual = 0.0
     hedge_exposure_actual = 0.0
-    current_market_total_exposure = strategy_current_market_exposure
+    current_market_total_exposure = 0.0
     current_market_total_shares = 0.0
     if current_market_group is not None:
         current_market_live_pnl = float(current_market_group["unrealized_pnl"])
