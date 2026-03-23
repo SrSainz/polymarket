@@ -52,11 +52,13 @@ class ExecutionEngine:
         db: Database,
         research_dir: Path,
         paper_broker: BrokerAdapter,
+        shadow_broker: BrokerAdapter,
         live_broker: BrokerAdapter,
     ) -> None:
         self.db = db
         self.research_dir = research_dir
         self.paper_broker = paper_broker
+        self.shadow_broker = shadow_broker
         self.live_broker = live_broker
 
     def execute(self, *, mode: str, instruction: CopyInstruction) -> ExecutionResult:
@@ -67,22 +69,16 @@ class ExecutionEngine:
             self._record_trace(result=result, instruction=instruction, started_ns=started_ns)
             return result
         if safe_mode == "shadow":
-            result = apply_fill_to_database(
-                db=self.db,
-                instruction=instruction,
-                mode="shadow",
-                filled_size=instruction.size,
-                fill_price=instruction.price,
-                fill_notional=instruction.notional,
-                message="shadow fill",
-                status="filled",
-                notes=instruction.reason,
-            )
+            result = self.shadow_broker.execute(instruction)
             self._record_trace(result=result, instruction=instruction, started_ns=started_ns)
             self.db.set_bot_state("shadow_last_instruction_at", str(int(time.time())))
             self.db.set_bot_state(
                 "shadow_last_instruction",
-                f"{instruction.side.value} {instruction.outcome or instruction.asset} size={instruction.size:.4f} price={instruction.price:.4f}",
+                (
+                    f"{result.status} {instruction.side.value} {instruction.outcome or instruction.asset} "
+                    f"req={instruction.size:.4f}@{instruction.price:.4f} "
+                    f"fill={float(result.size or 0.0):.4f}@{float(result.price or instruction.price):.4f}"
+                ),
             )
             return result
         result = self.paper_broker.execute(instruction)

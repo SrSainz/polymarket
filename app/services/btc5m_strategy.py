@@ -16,6 +16,7 @@ from app.core.execution_engine import ExecutionEngine
 from app.core.feature_engine import FeatureEngine
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
+from app.core.shadow_broker import ShadowBroker
 from app.core.risk import RiskManager
 from app.core.state_store import StateStore
 from app.core.strategy_registry import active_variant_metadata
@@ -302,6 +303,7 @@ class BTC5mStrategyService:
         trade_notifier: TelegramTradeNotifierService,
         settings: AppSettings,
         logger: logging.Logger,
+        shadow_broker: ShadowBroker | None = None,
         runtime_diagnostics: RuntimeDiagnosticsService | None = None,
         spot_feed: SpotFeed | None = None,
         liquidation_feed: LiquidationFeed | None = None,
@@ -311,6 +313,12 @@ class BTC5mStrategyService:
         self.gamma_client = gamma_client
         self.clob_client = clob_client
         self.paper_broker = paper_broker
+        self.shadow_broker = shadow_broker or ShadowBroker(
+            db,
+            clob_client,
+            slippage_limit=settings.config.slippage_limit,
+            execution_profile=settings.config.live_execution_profile,
+        )
         self.live_broker = live_broker
         self.autonomous_decider = autonomous_decider
         self.daily_summary = daily_summary
@@ -326,6 +334,7 @@ class BTC5mStrategyService:
             db=self.db,
             research_dir=self.settings.paths.research_dir,
             paper_broker=self.paper_broker,
+            shadow_broker=self.shadow_broker,
             live_broker=self.live_broker,
         )
         self.event_bus = EventBus()

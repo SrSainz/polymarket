@@ -12,6 +12,7 @@ from app.core.strategy_registry import active_variant_metadata
 from app.core.autonomous_decider import AutonomousDecider
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
+from app.core.shadow_broker import ShadowBroker
 from app.db import Database
 from app.logger import setup_logger
 from app.polymarket.activity_client import ActivityClient
@@ -110,6 +111,12 @@ def build_context(root_dir: Path, *, runtime_mode: str = "paper") -> tuple[AppSe
     clob_client = CLOBClient(settings.env.clob_host, settings.env, market_feed=market_feed)
 
     paper_broker = PaperBroker(db)
+    shadow_broker = ShadowBroker(
+        db,
+        clob_client,
+        slippage_limit=settings.config.slippage_limit,
+        execution_profile=settings.config.live_execution_profile,
+    )
     live_broker = LiveBroker(
         db,
         clob_client,
@@ -126,13 +133,14 @@ def build_context(root_dir: Path, *, runtime_mode: str = "paper") -> tuple[AppSe
         db,
         gamma_client,
         clob_client,
-        paper_broker,
-        live_broker,
-        autonomous_decider,
-        daily_summary,
-        trade_notifier,
-        settings,
-        logger,
+        paper_broker=paper_broker,
+        live_broker=live_broker,
+        shadow_broker=shadow_broker,
+        autonomous_decider=autonomous_decider,
+        daily_summary=daily_summary,
+        trade_notifier=trade_notifier,
+        settings=settings,
+        logger=logger,
         runtime_diagnostics=runtime_diagnostics,
         spot_feed=spot_feed,
         liquidation_feed=liquidation_feed,
