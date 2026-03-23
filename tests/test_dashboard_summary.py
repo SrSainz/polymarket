@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 from app.core.paper_broker import PaperBroker
 from app.db import Database
@@ -181,12 +182,13 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     )
     db.close()
 
-    summary = _summary_payload(
-        db_path,
-        clob_host="https://clob.polymarket.com",
-        execution_mode="paper",
-        live_trading_enabled=False,
-    )
+    with patch("app.services.dashboard_server._public_market_official_price_to_beat", return_value=71775.07):
+        summary = _summary_payload(
+            db_path,
+            clob_host="https://clob.polymarket.com",
+            execution_mode="paper",
+            live_trading_enabled=False,
+        )
 
     assert summary["strategy_is_lab"] is True
     assert summary["strategy_market_bias"] == "Down primary / Up hedge"
@@ -221,6 +223,26 @@ def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     assert summary["strategy_recent_resolutions"][0]["slug"] == "btc-updown-5m-1773233400"
     assert summary["strategy_resolution_count_today"] == 1
     assert summary["strategy_resolution_pnl_today"] == 6.0
+
+
+def test_summary_payload_prefers_public_polymarket_price_to_beat_over_zero_bot_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-1774260600")
+    db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Current")
+    db.set_bot_state("strategy_official_price_to_beat", "0.000000")
+    db.close()
+
+    with patch("app.services.dashboard_server._public_market_official_price_to_beat", return_value=68606.91914280105):
+        summary = _summary_payload(
+            db_path,
+            clob_host="https://clob.polymarket.com",
+            execution_mode="paper",
+            live_trading_enabled=False,
+        )
+
+    assert summary["strategy_official_price_to_beat"] == 68606.9191
 
 
 def test_summary_payload_current_window_exposure_ignores_stale_bot_state_without_positions(

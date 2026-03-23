@@ -3895,6 +3895,53 @@ def test_market_official_price_to_beat_reads_refreshed_event_payload_top_level(t
     db.close()
 
 
+def test_market_official_price_to_beat_falls_back_to_public_gamma_when_primary_client_is_incomplete(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-1773600300"
+    partial_market = {
+        "question": "Bitcoin Up or Down - Public Gamma Fallback",
+        "slug": slug,
+        "conditionId": "cond-public-gamma-fallback",
+        "closed": False,
+        "acceptingOrders": True,
+        "events": [{"id": "evt-public-fallback", "eventMetadata": {}}],
+    }
+    primary_gamma = _FakeGammaClient({slug: partial_market}, events={"evt-public-fallback": {"id": "evt-public-fallback"}})
+    public_gamma = _FakeGammaClient(
+        {
+            slug: {
+                "question": "Bitcoin Up or Down - Public Gamma Refreshed",
+                "slug": slug,
+                "conditionId": "cond-public-gamma-refreshed",
+                "closed": False,
+                "acceptingOrders": True,
+                "events": [{"id": "evt-public-fallback", "eventMetadata": {"priceToBeat": 70888.12}}],
+            }
+        }
+    )
+    service = BTC5mStrategyService(
+        db,
+        primary_gamma,
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-public-gamma-fallback"),
+    )
+    service._public_gamma_client = public_gamma  # type: ignore[assignment]
+
+    official = service._market_official_price_to_beat(partial_market)
+
+    assert round(official, 2) == 70888.12
+    db.close()
+
+
 def test_arb_micro_strict_realism_skips_degraded_reference(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

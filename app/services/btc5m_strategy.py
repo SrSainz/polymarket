@@ -118,6 +118,7 @@ _ARB_STABILIZE_EXTREME_RATIO = 0.90
 _ARB_STABILIZE_MAX_PAIR_SUM = 1.015
 _ARB_STABILIZE_MAX_NEG_NET_EDGE = -0.015
 _ARB_STABILIZE_PROGRESS_FRACTION = 0.35
+_PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _ARB_STABILIZE_BUDGET_FRACTION = 0.18
 _ARB_STABILIZE_MIN_DELTA_BPS = 1.0
 _ARB_STABILIZE_CATCHUP_RATIO_GAP = 0.18
@@ -350,6 +351,11 @@ class BTC5mStrategyService:
         self._cached_market: dict | None = None
         self._cached_market_expires_at = 0.0
         self._official_price_cache: dict[str, tuple[float, float]] = {}
+        gamma_base_url = str(getattr(self.gamma_client, "base_url", "") or "").rstrip("/")
+        if gamma_base_url and gamma_base_url != _PUBLIC_GAMMA_API_HOST:
+            self._public_gamma_client: GammaClient | None = GammaClient(_PUBLIC_GAMMA_API_HOST)
+        else:
+            self._public_gamma_client = None
         self._arb_exchange_min_order_size_cache: dict[str, float] = {}
         self._last_cycle_log_signature = ""
         self._last_cycle_log_at = 0.0
@@ -4968,18 +4974,48 @@ class BTC5mStrategyService:
             return official
 
         refreshed_market: dict | None = None
+        official = self._market_official_price_to_beat_from_client(
+            market=market,
+            slug=slug,
+            client=self.gamma_client,
+        )
+        if official > 0:
+            if slug:
+                self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
+            return official
+
+        public_gamma_client = self._public_gamma_client
+        if public_gamma_client is not None:
+            official = self._market_official_price_to_beat_from_client(
+                market=market,
+                slug=slug,
+                client=public_gamma_client,
+            )
+            if official > 0:
+                if slug:
+                    self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
+                return official
+        return 0.0
+
+    def _market_official_price_to_beat_from_client(
+        self,
+        *,
+        market: dict,
+        slug: str,
+        client: GammaClient | object,
+    ) -> float:
+        refreshed_market: dict | None = None
         if slug:
             try:
-                refreshed_market = self.gamma_client.get_market_by_slug(slug)
+                refreshed_market = getattr(client, "get_market_by_slug")(slug)
             except Exception:  # noqa: BLE001
                 refreshed_market = None
             if isinstance(refreshed_market, dict) and refreshed_market is not market:
                 refreshed_official = self._market_official_price_to_beat_from_payload(refreshed_market)
                 if refreshed_official > 0:
-                    self._official_price_cache[slug] = (refreshed_official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
                     return refreshed_official
 
-        event_lookup = getattr(self.gamma_client, "get_event_by_id", None)
+        event_lookup = getattr(client, "get_event_by_id", None)
         if callable(event_lookup):
             for event_id in self._market_event_ids(refreshed_market if isinstance(refreshed_market, dict) else market):
                 try:
@@ -4988,11 +5024,6 @@ class BTC5mStrategyService:
                     continue
                 refreshed_official = self._market_official_price_to_beat_from_payload(event_payload)
                 if refreshed_official > 0:
-                    if slug:
-                        self._official_price_cache[slug] = (
-                            refreshed_official,
-                            time.monotonic() + _MARKET_METADATA_CACHE_SECONDS,
-                        )
                     return refreshed_official
         return 0.0
 

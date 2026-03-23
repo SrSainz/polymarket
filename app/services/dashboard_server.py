@@ -28,11 +28,16 @@ from app.core.strategy_monitoring import (
     build_recent_resolution_windows,
     build_setup_performance,
 )
+from app.polymarket.gamma_client import GammaClient
 from app.services.runtime_compare_db import build_runtime_compare_payload
 
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
-_DASHBOARD_BUILD = "2026-03-23-window-exposure-fix1"
+_PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
+_PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, float]] = {}
+_PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
+_PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
+_DASHBOARD_BUILD = "2026-03-23-official-beat-fix1"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -62,6 +67,58 @@ _RUNTIME_RESET_BOT_STATE_KEYS = [
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+
+
+def _extract_price_to_beat(payload: object) -> float:
+    if isinstance(payload, str):
+        text = payload.strip()
+        if not text:
+            return 0.0
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return 0.0
+    if isinstance(payload, dict):
+        for key in ("priceToBeat", "price_to_beat"):
+            try:
+                value = float(payload.get(key) or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+            if value > 0:
+                return value
+        for nested_key in ("eventMetadata", "metadata", "marketMetadata", "event"):
+            value = _extract_price_to_beat(payload.get(nested_key))
+            if value > 0:
+                return value
+        for list_key in ("events", "markets"):
+            raw_items = payload.get(list_key)
+            if not isinstance(raw_items, list):
+                continue
+            for item in raw_items:
+                value = _extract_price_to_beat(item)
+                if value > 0:
+                    return value
+    return 0.0
+
+
+def _public_market_official_price_to_beat(slug: str) -> float:
+    safe_slug = str(slug or "").strip()
+    if not safe_slug:
+        return 0.0
+    cached = _PUBLIC_GAMMA_BEAT_CACHE.get(safe_slug)
+    now = time.monotonic()
+    if cached is not None:
+        cached_value, cached_expires_at = cached
+        if now < cached_expires_at:
+            return cached_value
+    try:
+        market = _PUBLIC_GAMMA_CLIENT.get_market_by_slug(safe_slug)
+    except Exception:  # noqa: BLE001
+        return 0.0
+    official = _extract_price_to_beat(market)
+    if official > 0:
+        _PUBLIC_GAMMA_BEAT_CACHE[safe_slug] = (official, now + _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS)
+    return official
 
 
 def _normalized_origin(origin: str) -> str:
@@ -483,6 +540,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_spot_anchor = _bot_state_float(conn, "strategy_spot_anchor")
         strategy_spot_local_anchor = _bot_state_float(conn, "strategy_spot_local_anchor")
         strategy_official_price_to_beat = _bot_state_float(conn, "strategy_official_price_to_beat")
+        public_official_price_to_beat = _public_market_official_price_to_beat(strategy_market_slug)
+        if public_official_price_to_beat > 0:
+            strategy_official_price_to_beat = public_official_price_to_beat
         strategy_anchor_source = _bot_state_text(conn, "strategy_anchor_source")
         strategy_reference_quality = _bot_state_text(conn, "strategy_reference_quality")
         strategy_reference_comparable = _bot_state_int(conn, "strategy_reference_comparable")
