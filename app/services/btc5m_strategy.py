@@ -263,6 +263,10 @@ class ArbSpotContext:
     age_ms: int
     binance_price: float | None
     chainlink_price: float | None
+    captured_price_to_beat: float = 0.0
+    effective_price_to_beat: float = 0.0
+    effective_price_source: str = ""
+    captured_vs_official_bps: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -3827,6 +3831,84 @@ class BTC5mStrategyService:
             return up_outcome, down_outcome
         return down_outcome, up_outcome
 
+    def _is_captured_chainlink_anchor_source(self, *, source: str) -> bool:
+        source_text = str(source or "").strip().lower()
+        if not source_text:
+            return False
+        return source_text == "polymarket-chainlink" or source_text.startswith("captured-chainlink")
+
+    def _arb_price_to_beat_state(
+        self,
+        *,
+        market: dict | None,
+        market_slug: str,
+        snapshot: SpotSnapshot,
+        seconds_into_window: int,
+        current_price: float,
+        runtime_mode: str,
+    ) -> dict[str, float | str]:
+        anchor_key = f"arb_spot_anchor:{market_slug}"
+        local_anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
+        local_anchor_source = str(
+            self.db.get_bot_state(f"{anchor_key}:source") or self._arb_anchor_capture_source(snapshot=snapshot)
+        ).strip()
+        if local_anchor_price <= 0 and seconds_into_window <= _ARB_SPOT_ANCHOR_GRACE_SECONDS:
+            captured_anchor = (
+                self._arb_anchor_capture_price(market=market, snapshot=snapshot)
+                if isinstance(market, dict)
+                else self._arb_anchor_capture_price_for_slug(slug=market_slug, snapshot=snapshot)
+            )
+            if captured_anchor > 0:
+                local_anchor_price = captured_anchor
+                local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
+                self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
+                self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
+                self.db.set_bot_state(f"{anchor_key}:captured_at", str(int(time.time())))
+        if runtime_mode == "shadow" and not self.settings.config.shadow_live_like_mode and local_anchor_price <= 0 and current_price > 0:
+            local_anchor_price = current_price
+            local_anchor_source = "shadow-current-price"
+
+        official_price_to_beat = self._market_official_price_to_beat(market) if isinstance(market, dict) else 0.0
+        captured_price_to_beat = (
+            local_anchor_price if local_anchor_price > 0 and self._is_captured_chainlink_anchor_source(source=local_anchor_source) else 0.0
+        )
+        captured_price_source = ""
+        captured_vs_official_bps = 0.0
+        if captured_price_to_beat > 0:
+            captured_price_source = "captured-chainlink"
+            if official_price_to_beat > 0:
+                captured_vs_official_bps = abs((captured_price_to_beat / official_price_to_beat) - 1.0) * 10000
+                max_diff_bps = max(float(self.settings.config.btc5m_captured_chainlink_confirm_max_diff_bps), 0.0)
+                captured_price_source = (
+                    "captured-chainlink-confirmed"
+                    if captured_vs_official_bps <= max_diff_bps
+                    else "captured-chainlink-mismatch"
+                )
+
+        effective_price_to_beat = (
+            official_price_to_beat if official_price_to_beat > 0 else captured_price_to_beat if captured_price_to_beat > 0 else local_anchor_price
+        )
+        if official_price_to_beat > 0:
+            effective_price_source = "public-gamma"
+            anchor_source = "polymarket-official"
+        elif captured_price_to_beat > 0:
+            effective_price_source = captured_price_source
+            anchor_source = captured_price_source
+        else:
+            effective_price_source = local_anchor_source or "missing"
+            anchor_source = local_anchor_source
+        return {
+            "local_anchor_price": float(local_anchor_price),
+            "local_anchor_source": local_anchor_source,
+            "official_price_to_beat": float(official_price_to_beat),
+            "captured_price_to_beat": float(captured_price_to_beat),
+            "captured_price_source": captured_price_source,
+            "captured_vs_official_bps": float(captured_vs_official_bps),
+            "effective_price_to_beat": float(effective_price_to_beat),
+            "effective_price_source": effective_price_source,
+            "anchor_source": anchor_source,
+        }
+
     def _arb_spot_context(self, *, market: dict, seconds_into_window: int) -> ArbSpotContext | None:
         if self.spot_feed is None:
             return None
@@ -3840,29 +3922,21 @@ class BTC5mStrategyService:
         if current_price <= 0:
             return None
 
-        slug = str(market.get("slug") or "")
-        anchor_key = f"arb_spot_anchor:{slug}"
-        local_anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
-        local_anchor_source = str(self.db.get_bot_state(f"{anchor_key}:source") or self._arb_anchor_capture_source(snapshot=snapshot))
-        if local_anchor_price <= 0 and seconds_into_window <= _ARB_SPOT_ANCHOR_GRACE_SECONDS:
-            captured_anchor = self._arb_anchor_capture_price(market=market, snapshot=snapshot)
-            if captured_anchor > 0:
-                local_anchor_price = captured_anchor
-                self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
-                local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
-                self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
         runtime_mode = str(self.db.get_bot_state("strategy_runtime_mode") or "paper").strip().lower()
-        if (
-            runtime_mode == "shadow"
-            and not self.settings.config.shadow_live_like_mode
-            and local_anchor_price <= 0
-            and current_price > 0
-        ):
-            local_anchor_price = current_price
-            local_anchor_source = "shadow-current-price"
-        official_price_to_beat = self._market_official_price_to_beat(market)
-        anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
-        anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
+        slug = str(market.get("slug") or "")
+        beat_state = self._arb_price_to_beat_state(
+            market=market,
+            market_slug=slug,
+            snapshot=snapshot,
+            seconds_into_window=seconds_into_window,
+            current_price=current_price,
+            runtime_mode=runtime_mode,
+        )
+        local_anchor_price = float(beat_state["local_anchor_price"])
+        official_price_to_beat = float(beat_state["official_price_to_beat"])
+        captured_price_to_beat = float(beat_state["captured_price_to_beat"])
+        anchor_price = float(beat_state["effective_price_to_beat"])
+        anchor_source = str(beat_state["anchor_source"])
         if anchor_price <= 0:
             return None
 
@@ -3881,6 +3955,10 @@ class BTC5mStrategyService:
             anchor_price=anchor_price,
             local_anchor_price=local_anchor_price,
             official_price_to_beat=official_price_to_beat,
+            captured_price_to_beat=captured_price_to_beat,
+            effective_price_to_beat=float(beat_state["effective_price_to_beat"]),
+            effective_price_source=str(beat_state["effective_price_source"]),
+            captured_vs_official_bps=float(beat_state["captured_vs_official_bps"]),
             anchor_source=anchor_source,
             fair_up=fair_up,
             fair_down=fair_down,
@@ -5136,6 +5214,11 @@ class BTC5mStrategyService:
         has_chainlink = chainlink_price > 0
         has_official = official_price_to_beat > 0
         has_local_anchor = local_anchor_price > 0
+        has_captured_chainlink_anchor = (
+            has_local_anchor
+            and self.settings.config.btc5m_allow_captured_chainlink_price_to_beat_live_like
+            and self._is_captured_chainlink_anchor_source(source=anchor_source_text)
+        )
         has_any_anchor = has_official or has_local_anchor
         age_limit = max(int(self.settings.config.btc5m_reference_max_age_ms), 100)
         soft_age_limit = max(int(self.settings.config.btc5m_reference_soft_max_age_ms), age_limit)
@@ -5177,6 +5260,13 @@ class BTC5mStrategyService:
                 and has_local_anchor
                 and anchor_source_text.startswith("polymarket")
             ):
+                if official_required_live_like and has_captured_chainlink_anchor:
+                    return ArbReferenceState(
+                        comparable=True,
+                        quality="soft-stale-captured-chainlink",
+                        note=f"RTDS ligeramente vieja: {age_ms}ms > {age_limit}ms; usando captura Chainlink al inicio de ventana",
+                        budget_scale=max(soft_budget_scale, 0.85),
+                    )
                 if official_required_live_like:
                     return ArbReferenceState(
                         comparable=False,
@@ -5221,6 +5311,13 @@ class BTC5mStrategyService:
                 note="sin precio Chainlink RTDS",
             )
         if official_required_live_like and not has_official:
+            if has_captured_chainlink_anchor:
+                return ArbReferenceState(
+                    comparable=True,
+                    quality="captured-chainlink",
+                    note="sin priceToBeat oficial; usando captura propia Chainlink al inicio de ventana",
+                    budget_scale=0.90,
+                )
             return ArbReferenceState(
                 comparable=False,
                 quality="official-missing",
@@ -5232,6 +5329,16 @@ class BTC5mStrategyService:
                 quality="official",
                 note="referencia oficial Polymarket + Chainlink RTDS",
                 budget_scale=1.0,
+            )
+        if (
+            self.settings.config.btc5m_allow_rtds_anchor_fallback
+            and has_captured_chainlink_anchor
+        ):
+            return ArbReferenceState(
+                comparable=True,
+                quality="captured-chainlink",
+                note="sin beat oficial; usando captura propia Chainlink al inicio de ventana",
+                budget_scale=0.90 if is_live_like else 0.75,
             )
         if (
             self.settings.config.btc5m_allow_rtds_anchor_fallback
@@ -5798,28 +5905,23 @@ class BTC5mStrategyService:
                     fetched_market = None
                 if isinstance(fetched_market, dict):
                     live_market = fetched_market
-        anchor_key = f"arb_spot_anchor:{market_slug}"
-        local_anchor_price = _safe_float(self.db.get_bot_state(anchor_key))
-        local_anchor_source = str(self.db.get_bot_state(f"{anchor_key}:source") or self._arb_anchor_capture_source(snapshot=snapshot))
-        if local_anchor_price <= 0 and current_window_seconds <= _ARB_SPOT_ANCHOR_GRACE_SECONDS:
-            captured_anchor = self._arb_anchor_capture_price_for_slug(slug=market_slug, snapshot=snapshot)
-            if captured_anchor > 0:
-                local_anchor_price = captured_anchor
-                local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
-                self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
-                self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
         runtime_mode = str(self.db.get_bot_state("strategy_runtime_mode") or "paper").strip().lower()
-        if (
-            runtime_mode == "shadow"
-            and not self.settings.config.shadow_live_like_mode
-            and local_anchor_price <= 0
-            and current_price > 0
-        ):
-            local_anchor_price = current_price
-            local_anchor_source = "shadow-current-price"
-        official_price_to_beat = self._market_official_price_to_beat(live_market) if live_market is not None else 0.0
-        anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
-        anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
+        beat_state = self._arb_price_to_beat_state(
+            market=live_market,
+            market_slug=market_slug,
+            snapshot=snapshot,
+            seconds_into_window=current_window_seconds,
+            current_price=current_price,
+            runtime_mode=runtime_mode,
+        )
+        local_anchor_price = float(beat_state["local_anchor_price"])
+        official_price_to_beat = float(beat_state["official_price_to_beat"])
+        captured_price_to_beat = float(beat_state["captured_price_to_beat"])
+        captured_price_source = str(beat_state["captured_price_source"])
+        captured_vs_official_bps = float(beat_state["captured_vs_official_bps"])
+        anchor_price = float(beat_state["effective_price_to_beat"])
+        effective_price_source = str(beat_state["effective_price_source"])
+        anchor_source = str(beat_state["anchor_source"])
         reference_state = self._arb_reference_state(
             mode=runtime_mode,
             source=snapshot.source,
@@ -5848,6 +5950,15 @@ class BTC5mStrategyService:
                 "strategy_spot_anchor": f"{anchor_price:.6f}",
                 "strategy_spot_local_anchor": f"{local_anchor_price:.6f}",
                 "strategy_official_price_to_beat": f"{official_price_to_beat:.6f}",
+                "strategy_official_price_slug": market_slug,
+                "strategy_official_price_source": "public-gamma" if official_price_to_beat > 0 else "public-gamma-missing",
+                "strategy_captured_price_to_beat": f"{captured_price_to_beat:.6f}",
+                "strategy_captured_price_slug": market_slug,
+                "strategy_captured_price_source": captured_price_source,
+                "strategy_captured_vs_official_bps": f"{captured_vs_official_bps:.4f}",
+                "strategy_effective_price_to_beat": f"{anchor_price:.6f}",
+                "strategy_effective_price_slug": market_slug,
+                "strategy_effective_price_source": effective_price_source,
                 "strategy_anchor_source": anchor_source,
                 "strategy_spot_delta_bps": f"{delta_bps:.4f}",
                 "strategy_spot_fair_up": f"{fair_up:.6f}",
@@ -5899,6 +6010,15 @@ class BTC5mStrategyService:
             "strategy_pair_sum": "0.000000",
             "strategy_edge_pct": "0.000000",
             "strategy_fair_value": "0.000000",
+            "strategy_official_price_slug": "",
+            "strategy_official_price_source": "public-gamma-missing",
+            "strategy_captured_price_to_beat": "0.000000",
+            "strategy_captured_price_slug": "",
+            "strategy_captured_price_source": "",
+            "strategy_captured_vs_official_bps": "0.0000",
+            "strategy_effective_price_to_beat": "0.000000",
+            "strategy_effective_price_slug": "",
+            "strategy_effective_price_source": "",
             "strategy_strategy_min_notional": f"{self._arb_strategy_min_notional():.6f}",
             "strategy_effective_min_notional": f"{self._arb_strategy_min_notional():.6f}",
             "strategy_desired_up_ratio": "0.500000",

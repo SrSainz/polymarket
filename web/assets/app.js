@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-official-beat-gate1";
+const UI_BUILD = "2026-03-23-chainlink-beat1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -305,15 +305,19 @@ function compareBreakdownLabel(snapshot) {
 }
 
 function comparePriceLabel(snapshot) {
-  const beat = Number(snapshot?.official_price_to_beat || 0);
+  const beat = Number(snapshot?.effective_price_to_beat || snapshot?.official_price_to_beat || 0);
   const spot = Number(snapshot?.spot_price || 0);
   const fairUp = Number(snapshot?.fair_up || 0);
   const fairDown = Number(snapshot?.fair_down || 0);
   const referenceQuality = String(snapshot?.reference_quality || "").trim();
-  const beatSource = String(snapshot?.official_price_source || "").trim();
+  const beatSource = String(snapshot?.effective_price_source || snapshot?.official_price_source || "").trim();
   const spotText = spot > 0 ? fmtBtcPrice(spot) : "-";
   const beatText =
-    beat > 0 ? fmtBtcPrice(beat) : beatSource === "public-gamma-missing" ? "Gamma publica sin beat" : "-";
+    beat > 0
+      ? fmtBtcPrice(beat)
+      : beatSource === "public-gamma-missing"
+      ? "Gamma publica sin beat"
+      : "-";
   const fairText =
     fairUp > 0 || fairDown > 0
       ? `Sube ${fmtPct(fairUp * 100, 1)} / Baja ${fmtPct(fairDown * 100, 1)}`
@@ -340,13 +344,15 @@ function comparePriceHeadline(snapshot) {
 }
 
 function comparePriceMeta(snapshot) {
-  const beat = Number(snapshot?.official_price_to_beat || 0);
+  const beat = Number(snapshot?.effective_price_to_beat || snapshot?.official_price_to_beat || 0);
   const quality = String(snapshot?.reference_quality || "").trim();
   const operability = String(snapshot?.operability_state || "").trim();
-  const beatSource = String(snapshot?.official_price_source || "").trim();
+  const beatSource = String(snapshot?.effective_price_source || snapshot?.official_price_source || "").trim();
   let beatText = "sin beat oficial";
   if (beat > 0 && beatSource === "public-gamma") {
     beatText = `beat ${fmtBtcPrice(beat)} (Gamma publica)`;
+  } else if (beat > 0 && beatSource.startsWith("captured-chainlink")) {
+    beatText = `beat ${fmtBtcPrice(beat)} (captura Chainlink)`;
   } else if (beat > 0 && beatSource === "bot-state-current-slug") {
     beatText = `beat ${fmtBtcPrice(beat)} (snapshot slug actual)`;
   } else if (beat > 0) {
@@ -949,6 +955,10 @@ function currentSpotInfo(summary) {
   const localAnchor = Number(summary?.strategy_spot_local_anchor || 0);
   const officialBeat = Number(summary?.strategy_official_price_to_beat || 0);
   const officialSource = String(summary?.strategy_official_price_source || "").trim();
+  const capturedBeat = Number(summary?.strategy_captured_price_to_beat || 0);
+  const capturedSource = String(summary?.strategy_captured_price_source || "").trim();
+  const effectiveBeat = Number(summary?.strategy_effective_price_to_beat || officialBeat || anchor || 0);
+  const effectiveSource = String(summary?.strategy_effective_price_source || officialSource || "").trim();
   const referenceQuality = String(summary?.strategy_reference_quality || "").trim();
   const referenceComparable = Boolean(summary?.strategy_reference_comparable);
   const referenceNote = String(summary?.strategy_reference_note || "").trim();
@@ -961,8 +971,17 @@ function currentSpotInfo(summary) {
   const source = String(summary?.strategy_spot_source || "").trim();
   const priceMode = String(summary?.strategy_spot_price_mode || "").trim();
   const binance = Number(summary?.strategy_spot_binance || 0);
-  const beatKind = officialBeat > 0 ? "official" : anchor > 0 && referenceQuality === "rtds-derived" ? "rtds-derived" : anchor > 0 ? "fallback" : "missing";
-  const beatReference = officialBeat > 0 ? officialBeat : anchor;
+  const beatKind =
+    effectiveBeat > 0 && effectiveSource === "public-gamma"
+      ? "official"
+      : effectiveBeat > 0 && effectiveSource.startsWith("captured-chainlink")
+      ? "captured-chainlink"
+      : anchor > 0 && referenceQuality === "rtds-derived"
+      ? "rtds-derived"
+      : effectiveBeat > 0
+      ? "fallback"
+      : "missing";
+  const beatReference = effectiveBeat > 0 ? effectiveBeat : anchor;
   const polymarketCurrent = chainlink > 0 ? chainlink : 0;
   const fallbackCurrent = current > 0 && chainlink <= 0 ? current : 0;
   const deltaUsd = current > 0 && beatReference > 0 ? current - beatReference : 0;
@@ -981,6 +1000,7 @@ function currentSpotInfo(summary) {
     hasAnchor: anchor > 0,
     hasLocalAnchor: localAnchor > 0,
     hasOfficialBeat: officialBeat > 0,
+    hasCapturedBeat: capturedBeat > 0,
     hasChainlink: chainlink > 0,
     hasBinance: binance > 0,
     beatKind,
@@ -991,7 +1011,11 @@ function currentSpotInfo(summary) {
     anchor,
     localAnchor,
     officialBeat,
+    capturedBeat,
+    effectiveBeat,
     officialSource: officialSource || "bot-state-current-slug",
+    capturedSource: capturedSource || "",
+    effectiveSource: effectiveSource || "public-gamma-missing",
     polymarketCurrent,
     fallbackCurrent,
     anchorSource: anchorSource || "-",
@@ -1469,7 +1493,11 @@ function disconnectedSummary() {
     strategy_spot_anchor: 0,
     strategy_spot_local_anchor: 0,
     strategy_official_price_to_beat: 0,
+    strategy_captured_price_to_beat: 0,
+    strategy_effective_price_to_beat: 0,
     strategy_anchor_source: "",
+    strategy_captured_price_source: "",
+    strategy_effective_price_source: "",
     strategy_reference_quality: "",
     strategy_reference_comparable: false,
     strategy_reference_note: "",
@@ -1807,32 +1835,42 @@ function paintLabOverview(summary) {
   const beatLabel =
     spotInfo.beatKind === "official"
       ? "Price to beat oficial"
+      : spotInfo.beatKind === "captured-chainlink"
+      ? "Price to beat capturado (Chainlink)"
       : spotInfo.beatKind === "rtds-derived"
       ? "Price to beat RTDS derivado"
       : spotInfo.hasAnchor
-      ? "Price to beat sin oficial"
+      ? "Beat efectivo sin oficial"
       : "Price to beat";
   const beatDeltaLabel =
     spotInfo.beatKind === "official"
       ? "Polymarket vs beat oficial"
+      : spotInfo.beatKind === "captured-chainlink"
+      ? "Polymarket vs beat capturado"
       : spotInfo.beatKind === "rtds-derived"
       ? "Polymarket vs beat RTDS"
       : "Polymarket vs beat usado";
   const fastBeatDeltaLabel =
     spotInfo.beatKind === "official"
       ? "Spot rapido vs beat oficial"
+      : spotInfo.beatKind === "captured-chainlink"
+      ? "Spot rapido vs beat capturado"
       : spotInfo.beatKind === "rtds-derived"
       ? "Spot rapido vs beat RTDS"
       : "Spot rapido vs beat usado";
   const anchorDriftLabel =
     spotInfo.beatKind === "official"
       ? "Ancla propia vs oficial"
+      : spotInfo.beatKind === "captured-chainlink"
+      ? "Ancla propia vs captura Chainlink"
       : spotInfo.beatKind === "rtds-derived"
       ? "Ancla propia vs RTDS"
       : "Ancla propia (sin oficial)";
   const beatMeta =
     spotInfo.beatKind === "official"
       ? `beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}${spotInfo.officialSource === "public-gamma" ? " (Gamma publica)" : " (snapshot slug actual)"}`
+      : spotInfo.beatKind === "captured-chainlink"
+      ? `captura Chainlink ${fmtBtcPrice(spotInfo.effectiveBeat)}`
       : spotInfo.beatKind === "rtds-derived"
       ? `beat RTDS ${fmtBtcPrice(spotInfo.anchor)}`
       : spotInfo.hasAnchor
@@ -1872,10 +1910,12 @@ function paintLabOverview(summary) {
   document.getElementById("labSpotAnchor").textContent =
     spotInfo.beatKind === "official"
       ? fmtBtcPrice(spotInfo.officialBeat)
+      : spotInfo.beatKind === "captured-chainlink"
+      ? `${fmtBtcPrice(spotInfo.effectiveBeat)} (captura Chainlink)`
       : spotInfo.beatKind === "rtds-derived"
       ? `${fmtBtcPrice(spotInfo.anchor)} (RTDS derivado)`
       : spotInfo.hasAnchor
-      ? `${fmtBtcPrice(spotInfo.anchor)} (sin oficial)`
+      ? `${fmtBtcPrice(spotInfo.anchor)} (beat efectivo)`
       : "-";
   document.getElementById("labSpotDelta").textContent =
     visibleComparablePrice > 0 && spotInfo.hasAnchor
@@ -1893,7 +1933,7 @@ function paintLabOverview(summary) {
     spotInfo.hasLocalAnchor && spotInfo.hasAnchor
       ? `${fmtUsd(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftUsd : spotInfo.anchorDriftRefUsd, 2)} | ${fmt(spotInfo.hasOfficialBeat ? spotInfo.anchorDriftBps : spotInfo.anchorDriftRefBps, 1)}bps${spotInfo.beatKind === "official" ? "" : " | derivado"}`
       : spotInfo.hasLocalAnchor
-      ? `${fmtBtcPrice(spotInfo.localAnchor)} (sin oficial)`
+      ? `${fmtBtcPrice(spotInfo.localAnchor)} (${spotInfo.hasCapturedBeat ? "captura local" : "sin oficial"})`
       : "-";
   document.getElementById("labSpotFair").textContent =
     spotInfo.available

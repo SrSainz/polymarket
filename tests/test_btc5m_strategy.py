@@ -4444,6 +4444,51 @@ def test_arb_reference_state_live_like_can_allow_soft_stale_rtds_when_official_g
     db.close()
 
 
+def test_arb_reference_state_live_like_accepts_captured_chainlink_when_official_missing(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", btc5m_reference_soft_budget_scale=0.55),
+        logger=logging.getLogger("test-btc5m-live-captured-chainlink"),
+        spot_feed=None,
+    )
+
+    live_state = service._arb_reference_state(  # noqa: SLF001
+        mode="live",
+        source="polymarket-rtds+binance",
+        age_ms=150,
+        chainlink_price=71775.07,
+        official_price_to_beat=0.0,
+        local_anchor_price=71760.0,
+        anchor_source="polymarket-chainlink",
+    )
+    shadow_state = service._arb_reference_state(  # noqa: SLF001
+        mode="shadow",
+        source="polymarket-rtds+binance",
+        age_ms=150,
+        chainlink_price=71775.07,
+        official_price_to_beat=0.0,
+        local_anchor_price=71760.0,
+        anchor_source="polymarket-chainlink",
+    )
+
+    assert live_state.comparable is True
+    assert live_state.quality == "captured-chainlink"
+    assert "captura propia Chainlink" in live_state.note
+    assert round(live_state.budget_scale, 2) == 0.90
+    assert shadow_state.comparable is True
+    assert shadow_state.quality == "captured-chainlink"
+    db.close()
+
+
 def test_arb_reference_state_allows_shadow_fallback_without_labeled_source(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -4592,6 +4637,60 @@ def test_arb_micro_shadow_bootstraps_anchor_from_current_spot_when_reference_mis
     assert live_spot_state["strategy_anchor_source"] == "shadow-current-price"
     assert live_spot_state["strategy_reference_quality"] == "shadow-fallback"
     assert "realism gate" not in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_live_spot_state_exposes_captured_chainlink_as_effective_beat_when_gamma_missing(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("strategy_runtime_mode", "shadow")
+    slug = "btc-updown-5m-captured-beat"
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "70123.45000000")
+    db.set_bot_state(f"arb_spot_anchor:{slug}:source", "polymarket-chainlink")
+    market = {
+        "question": "Bitcoin Up or Down - Captured Beat",
+        "slug": slug,
+        "conditionId": "cond-captured-beat",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [],
+    }
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70140.0,
+            lead_price=70140.0,
+            binance_price=70138.0,
+            chainlink_price=70140.0,
+            basis=0.0,
+            source="polymarket-rtds+binance",
+            age_ms=12,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=111.26),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=111.26),
+        logger=logging.getLogger("test-btc5m-live-spot-captured-beat"),
+        spot_feed=spot_feed,
+    )
+
+    state = service._arb_live_spot_state(market=market, seconds_into_window=42)  # noqa: SLF001
+
+    assert state["strategy_official_price_to_beat"] == "0.000000"
+    assert state["strategy_captured_price_to_beat"] == "70123.450000"
+    assert state["strategy_captured_price_source"] == "captured-chainlink"
+    assert state["strategy_effective_price_to_beat"] == "70123.450000"
+    assert state["strategy_effective_price_source"] == "captured-chainlink"
+    assert state["strategy_reference_quality"] == "captured-chainlink"
     db.close()
 
 

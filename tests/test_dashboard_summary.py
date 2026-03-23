@@ -307,6 +307,38 @@ def test_summary_payload_ignores_bot_state_official_when_slug_mismatch_and_publi
     assert summary["strategy_official_price_available"] is False
 
 
+def test_summary_payload_exposes_captured_chainlink_as_effective_beat_when_public_gamma_missing(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-current")
+    db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Current")
+    db.set_bot_state("strategy_official_price_to_beat", "0.000000")
+    db.set_bot_state("strategy_captured_price_to_beat", "70123.45")
+    db.set_bot_state("strategy_captured_price_slug", "btc-updown-5m-current")
+    db.set_bot_state("strategy_captured_price_source", "captured-chainlink")
+    db.set_bot_state("strategy_effective_price_to_beat", "70123.45")
+    db.set_bot_state("strategy_effective_price_slug", "btc-updown-5m-current")
+    db.set_bot_state("strategy_effective_price_source", "captured-chainlink")
+    db.close()
+
+    with patch("app.services.dashboard_server._public_market_official_price_to_beat", return_value=0.0):
+        summary = _summary_payload(
+            db_path,
+            clob_host="https://clob.polymarket.com",
+            execution_mode="paper",
+            live_trading_enabled=False,
+        )
+
+    assert summary["strategy_official_price_to_beat"] == 0.0
+    assert summary["strategy_official_price_source"] == "public-gamma-missing"
+    assert summary["strategy_captured_price_to_beat"] == 70123.45
+    assert summary["strategy_captured_price_source"] == "captured-chainlink"
+    assert summary["strategy_effective_price_to_beat"] == 70123.45
+    assert summary["strategy_effective_price_source"] == "captured-chainlink"
+    assert summary["strategy_effective_price_available"] is True
+
+
 def test_summary_payload_current_window_exposure_ignores_stale_bot_state_without_positions(
     tmp_path: Path,
 ) -> None:
@@ -352,6 +384,8 @@ def test_summary_payload_metric_sources_match_computed_balance_fields(tmp_path: 
     assert "min(bot_state.live_cash_balance, bot_state.live_cash_allowance)" in sources["live_available_to_trade"]
     assert "live_cash_balance + exposure_mark" in sources["live_equity_estimate"]
     assert "Gamma publica de Polymarket" in sources["strategy_official_price_to_beat"]
+    assert "captura propia Chainlink RTDS" in sources["strategy_captured_price_to_beat"]
+    assert "captura propia Chainlink RTDS" in sources["strategy_effective_price_to_beat"]
 
 
 def test_summary_payload_exposes_setup_performance(tmp_path: Path) -> None:

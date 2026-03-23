@@ -125,6 +125,8 @@ class BotConfig(BaseModel):
     btc5m_reference_soft_budget_scale: float = 0.55
     btc5m_allow_rtds_anchor_fallback: bool = True
     btc5m_require_official_price_to_beat_live_like: bool = True
+    btc5m_allow_captured_chainlink_price_to_beat_live_like: bool = True
+    btc5m_captured_chainlink_confirm_max_diff_bps: float = 15.0
     live_only_btc5m: bool = False
     live_btc5m_ticket_allocation_pct: float = 0.10
     live_btc5m_cycle_budget_usdc: float = 0.0

@@ -37,7 +37,7 @@ _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-23-official-beat-gate1"
+_DASHBOARD_BUILD = "2026-03-23-chainlink-beat1"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -134,15 +134,53 @@ def _with_public_official_price(snapshot: dict | None) -> dict:
         bot_state_official = 0.0
     if official_slug and slug and official_slug != slug:
         bot_state_official = 0.0
+    captured_slug = str(enriched.get("captured_price_slug") or slug).strip()
+    bot_state_captured = 0.0
+    try:
+        bot_state_captured = float(enriched.get("captured_price_to_beat") or 0.0)
+    except (TypeError, ValueError):
+        bot_state_captured = 0.0
+    if captured_slug and slug and captured_slug != slug:
+        bot_state_captured = 0.0
+    bot_state_captured_source = str(enriched.get("captured_price_source") or "").strip()
+    effective_slug = str(enriched.get("effective_price_slug") or slug).strip()
+    bot_state_effective = 0.0
+    try:
+        bot_state_effective = float(enriched.get("effective_price_to_beat") or 0.0)
+    except (TypeError, ValueError):
+        bot_state_effective = 0.0
+    if effective_slug and slug and effective_slug != slug:
+        bot_state_effective = 0.0
+    bot_state_effective_source = str(enriched.get("effective_price_source") or "").strip()
     public_official = _public_market_official_price_to_beat(slug) if slug else 0.0
     if public_official > 0:
         enriched["official_price_to_beat"] = round(public_official, 4)
         enriched["official_price_source"] = "public-gamma"
         enriched["official_price_available"] = True
+        enriched["effective_price_to_beat"] = round(public_official, 4)
+        enriched["effective_price_source"] = "public-gamma"
+        enriched["effective_price_available"] = True
+        enriched["captured_price_to_beat"] = round(bot_state_captured, 4)
+        enriched["captured_price_source"] = bot_state_captured_source
+        enriched["captured_price_available"] = bool(bot_state_captured > 0)
         return enriched
     enriched["official_price_to_beat"] = round(bot_state_official, 4)
     enriched["official_price_source"] = "bot-state-current-slug" if bot_state_official > 0 else "public-gamma-missing"
     enriched["official_price_available"] = bool(bot_state_official > 0)
+    effective_price = bot_state_effective
+    effective_source = bot_state_effective_source
+    if effective_price <= 0 and bot_state_captured > 0:
+        effective_price = bot_state_captured
+        effective_source = bot_state_captured_source or "captured-chainlink"
+    if effective_price <= 0 and bot_state_official > 0:
+        effective_price = bot_state_official
+        effective_source = "bot-state-current-slug"
+    enriched["captured_price_to_beat"] = round(bot_state_captured, 4)
+    enriched["captured_price_source"] = bot_state_captured_source
+    enriched["captured_price_available"] = bool(bot_state_captured > 0)
+    enriched["effective_price_to_beat"] = round(effective_price, 4)
+    enriched["effective_price_source"] = effective_source or "public-gamma-missing"
+    enriched["effective_price_available"] = bool(effective_price > 0)
     return enriched
 
 
@@ -566,8 +604,21 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_spot_local_anchor = _bot_state_float(conn, "strategy_spot_local_anchor")
         strategy_official_price_slug = _bot_state_text(conn, "strategy_official_price_slug")
         strategy_official_price_to_beat = _bot_state_float(conn, "strategy_official_price_to_beat")
+        strategy_captured_price_slug = _bot_state_text(conn, "strategy_captured_price_slug")
+        strategy_captured_price_to_beat = _bot_state_float(conn, "strategy_captured_price_to_beat")
+        strategy_captured_price_source = _bot_state_text(conn, "strategy_captured_price_source")
+        strategy_captured_vs_official_bps = _bot_state_float(conn, "strategy_captured_vs_official_bps")
+        strategy_effective_price_slug = _bot_state_text(conn, "strategy_effective_price_slug")
+        strategy_effective_price_to_beat = _bot_state_float(conn, "strategy_effective_price_to_beat")
+        strategy_effective_price_source = _bot_state_text(conn, "strategy_effective_price_source")
         if strategy_official_price_slug and strategy_market_slug and strategy_official_price_slug != strategy_market_slug:
             strategy_official_price_to_beat = 0.0
+        if strategy_captured_price_slug and strategy_market_slug and strategy_captured_price_slug != strategy_market_slug:
+            strategy_captured_price_to_beat = 0.0
+            strategy_captured_price_source = ""
+        if strategy_effective_price_slug and strategy_market_slug and strategy_effective_price_slug != strategy_market_slug:
+            strategy_effective_price_to_beat = 0.0
+            strategy_effective_price_source = ""
         strategy_official_price_source = (
             "bot-state-current-slug" if strategy_official_price_to_beat > 0 else "public-gamma-missing"
         )
@@ -575,6 +626,14 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         if public_official_price_to_beat > 0:
             strategy_official_price_to_beat = public_official_price_to_beat
             strategy_official_price_source = "public-gamma"
+            strategy_effective_price_to_beat = public_official_price_to_beat
+            strategy_effective_price_source = "public-gamma"
+        elif strategy_effective_price_to_beat <= 0 and strategy_captured_price_to_beat > 0:
+            strategy_effective_price_to_beat = strategy_captured_price_to_beat
+            strategy_effective_price_source = strategy_captured_price_source or "captured-chainlink"
+        elif strategy_effective_price_to_beat <= 0 and strategy_official_price_to_beat > 0:
+            strategy_effective_price_to_beat = strategy_official_price_to_beat
+            strategy_effective_price_source = strategy_official_price_source
         strategy_anchor_source = _bot_state_text(conn, "strategy_anchor_source")
         strategy_reference_quality = _bot_state_text(conn, "strategy_reference_quality")
         strategy_reference_comparable = _bot_state_int(conn, "strategy_reference_comparable")
@@ -897,6 +956,15 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_official_price_slug": strategy_official_price_slug,
         "strategy_official_price_source": strategy_official_price_source,
         "strategy_official_price_available": bool(strategy_official_price_to_beat > 0),
+        "strategy_captured_price_to_beat": round(strategy_captured_price_to_beat, 4),
+        "strategy_captured_price_slug": strategy_captured_price_slug,
+        "strategy_captured_price_source": strategy_captured_price_source,
+        "strategy_captured_price_available": bool(strategy_captured_price_to_beat > 0),
+        "strategy_captured_vs_official_bps": round(strategy_captured_vs_official_bps, 2),
+        "strategy_effective_price_to_beat": round(strategy_effective_price_to_beat, 4),
+        "strategy_effective_price_slug": strategy_effective_price_slug,
+        "strategy_effective_price_source": strategy_effective_price_source,
+        "strategy_effective_price_available": bool(strategy_effective_price_to_beat > 0),
         "strategy_anchor_source": strategy_anchor_source,
         "strategy_reference_quality": strategy_reference_quality,
         "strategy_reference_comparable": bool(strategy_reference_comparable),
@@ -982,7 +1050,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "realized_pnl": "SUM(daily_pnl.pnl)",
             "unrealized_pnl": "mark-to-market de copy_positions usando midpoint del libro; si no hay midpoint usa avg_price",
             "pnl_total": "realized_pnl + unrealized_pnl",
-            "strategy_official_price_to_beat": "Gamma publica de Polymarket si la API devuelve priceToBeat; si no, snapshot del bot ligado al slug actual",
+            "strategy_official_price_to_beat": "Gamma publica de Polymarket si la API devuelve priceToBeat; si no, 0 para el slug actual",
+            "strategy_captured_price_to_beat": "captura propia Chainlink RTDS al inicio de la ventana actual",
+            "strategy_effective_price_to_beat": "Gamma publica si existe; si no, captura propia Chainlink RTDS ligada al slug actual",
             "strategy_current_market_total_exposure": "exposicion del slug actual agregada desde copy_positions",
             "strategy_current_market_live_pnl": "unrealized_pnl del slug actual",
             "compare_realized_pnl": "SUM(strategy_windows.realized_pnl) por runtime",
