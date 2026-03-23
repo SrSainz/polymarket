@@ -62,6 +62,7 @@ btc5m_reference_max_age_ms: 1200
 btc5m_reference_soft_max_age_ms: 2200
 btc5m_reference_soft_budget_scale: 0.55
 btc5m_allow_rtds_anchor_fallback: true
+btc5m_require_official_price_to_beat_live_like: true
 live_only_btc5m: true
 live_btc5m_ticket_allocation_pct: 0.25
 live_btc5m_cycle_budget_usdc: 50.0

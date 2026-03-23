@@ -4786,6 +4786,13 @@ class BTC5mStrategyService:
                 blocking=True,
             )
         if "realism gate" in note_lower:
+            if "pricetobeat" in note_lower or "beat oficial" in note_lower or "gamma publica" in note_lower:
+                return StrategyOperabilityState(
+                    state="waiting_official",
+                    label="Esperando beat oficial",
+                    reason=note_text.split(":", 1)[-1].strip() or "La Gamma publica no trae priceToBeat para esta ventana.",
+                    blocking=True,
+                )
             return StrategyOperabilityState(
                 state="degraded_reference",
                 label="Referencia degradada",
@@ -5137,6 +5144,11 @@ class BTC5mStrategyService:
         is_live_like = mode_text in {"live", "shadow"}
         is_shadow = mode_text == "shadow"
         shadow_relaxed_reference = is_shadow and not self.settings.config.shadow_live_like_mode
+        official_required_live_like = (
+            is_live_like
+            and not shadow_relaxed_reference
+            and self.settings.config.btc5m_require_official_price_to_beat_live_like
+        )
         shadow_fallback_budget_scale = min(max(soft_budget_scale, 0.50), 0.60)
         shadow_missing_budget_scale = min(max(soft_budget_scale, 0.35), 0.45)
 
@@ -5165,6 +5177,12 @@ class BTC5mStrategyService:
                 and has_local_anchor
                 and anchor_source_text.startswith("polymarket")
             ):
+                if official_required_live_like:
+                    return ArbReferenceState(
+                        comparable=False,
+                        quality="official-missing",
+                        note="Gamma publica sin priceToBeat para esta ventana",
+                    )
                 return ArbReferenceState(
                     comparable=True,
                     quality="soft-stale-rtds",
@@ -5201,6 +5219,12 @@ class BTC5mStrategyService:
                 comparable=False,
                 quality="degraded",
                 note="sin precio Chainlink RTDS",
+            )
+        if official_required_live_like and not has_official:
+            return ArbReferenceState(
+                comparable=False,
+                quality="official-missing",
+                note="Gamma publica sin priceToBeat para esta ventana",
             )
         if has_official:
             return ArbReferenceState(

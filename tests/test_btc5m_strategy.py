@@ -4399,10 +4399,48 @@ def test_arb_reference_state_relaxes_soft_stale_rtds_budget_in_live(tmp_path: Pa
 
     assert paper_state.quality == "soft-stale-rtds"
     assert round(paper_state.budget_scale, 2) == 0.45
+    assert live_state.comparable is False
+    assert live_state.quality == "official-missing"
+    assert "priceToBeat" in live_state.note
+    assert shadow_state.comparable is False
+    assert shadow_state.quality == "official-missing"
+    assert "priceToBeat" in shadow_state.note
+    db.close()
+
+
+def test_arb_reference_state_live_like_can_allow_soft_stale_rtds_when_official_gate_is_disabled(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            btc5m_reference_soft_budget_scale=0.55,
+            btc5m_require_official_price_to_beat_live_like=False,
+        ),
+        logger=logging.getLogger("test-btc5m-live-soft-stale-rtds-optout"),
+        spot_feed=None,
+    )
+
+    live_state = service._arb_reference_state(  # noqa: SLF001
+        mode="live",
+        source="polymarket-rtds+binance",
+        age_ms=1600,
+        chainlink_price=71775.07,
+        official_price_to_beat=0.0,
+        local_anchor_price=71760.0,
+        anchor_source="polymarket-rtds-anchor",
+    )
+
     assert live_state.quality == "soft-stale-rtds"
     assert round(live_state.budget_scale, 2) == 0.80
-    assert shadow_state.quality == "soft-stale-rtds"
-    assert round(shadow_state.budget_scale, 2) == 0.80
     db.close()
 
 

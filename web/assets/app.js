@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-audit-safe1";
+const UI_BUILD = "2026-03-23-official-beat-gate1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -483,6 +483,7 @@ function compareOperabilityLabel(value) {
   if (!raw) return "sin bloqueo dominante";
   if (raw === "waiting_book") return "shadow se queda en waiting_book";
   if (raw === "waiting_edge") return "shadow espera edge";
+  if (raw === "waiting_official") return "shadow espera beat oficial";
   if (raw === "waiting_budget") return "shadow espera presupuesto";
   if (raw === "degraded_reference") return "shadow bloqueado por referencia";
   if (raw === "waiting_time") return "shadow espera ventana";
@@ -508,6 +509,7 @@ function compareFocusHeadline(paper, shadow, sampleSummary = {}) {
   if (paperLegs >= 2 && shadowLegs === 1) return "Shadow se queda cojo con una sola pata";
   if (paperLegs >= 2 && shadowLegs >= 2) return "Ambos tienen paquete de dos patas";
   if (shadowState === "budget_limited") return "Shadow se esta quedando sin presupuesto util";
+  if (shadowState === "waiting_official") return "Shadow espera priceToBeat oficial";
   if (shadowState === "waiting_book") return "Shadow no ve libro suficiente para entrar";
   if (shadowState === "waiting_edge") return "Shadow espera edge valido antes de entrar";
   if (shadowState === "degraded_reference") return "Shadow se bloquea por referencia degradada";
