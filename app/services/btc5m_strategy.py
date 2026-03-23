@@ -3836,6 +3836,10 @@ class BTC5mStrategyService:
                 self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
                 local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
                 self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
+        runtime_mode = str(self.db.get_bot_state("strategy_runtime_mode") or "paper").strip().lower()
+        if runtime_mode == "shadow" and local_anchor_price <= 0 and current_price > 0:
+            local_anchor_price = current_price
+            local_anchor_source = "shadow-current-price"
         official_price_to_beat = self._market_official_price_to_beat(market)
         anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
         anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
@@ -5723,11 +5727,15 @@ class BTC5mStrategyService:
                 local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
                 self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
                 self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
+        runtime_mode = str(self.db.get_bot_state("strategy_runtime_mode") or "paper").strip().lower()
+        if runtime_mode == "shadow" and local_anchor_price <= 0 and current_price > 0:
+            local_anchor_price = current_price
+            local_anchor_source = "shadow-current-price"
         official_price_to_beat = self._market_official_price_to_beat(live_market) if live_market is not None else 0.0
         anchor_price = official_price_to_beat if official_price_to_beat > 0 else local_anchor_price
         anchor_source = "polymarket-official" if official_price_to_beat > 0 else local_anchor_source
         reference_state = self._arb_reference_state(
-            mode=str(self.db.get_bot_state("strategy_runtime_mode") or "paper"),
+            mode=runtime_mode,
             source=snapshot.source,
             age_ms=int(snapshot.age_ms),
             chainlink_price=float(snapshot.chainlink_price or 0.0),

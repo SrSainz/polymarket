@@ -3536,7 +3536,7 @@ def test_record_strategy_snapshot_keeps_market_official_over_zero_snapshot(tmp_p
     db.close()
 
 
-def test_record_strategy_snapshot_clears_stale_market_and_trigger_state(tmp_path: Path) -> None:
+def test_record_strategy_snapshot_preserves_market_context_when_market_is_missing(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     db.set_bot_state("strategy_market_slug", "btc-updown-5m-stale")
@@ -3562,13 +3562,13 @@ def test_record_strategy_snapshot_clears_stale_market_and_trigger_state(tmp_path
 
     service._record_strategy_snapshot(note="no active btc5m market")
 
-    assert db.get_bot_state("strategy_market_slug") == ""
-    assert db.get_bot_state("strategy_market_title") == ""
+    assert db.get_bot_state("strategy_market_slug") == "btc-updown-5m-stale"
+    assert db.get_bot_state("strategy_market_title") == "Bitcoin Up or Down - Stale"
     assert db.get_bot_state("strategy_target_outcome") == ""
     assert db.get_bot_state("strategy_target_price") == "0.000000"
     assert db.get_bot_state("strategy_trigger_outcome") == ""
     assert db.get_bot_state("strategy_trigger_price_seen") == "0.000000"
-    assert db.get_bot_state("strategy_official_price_to_beat") == "0.000000"
+    assert db.get_bot_state("strategy_official_price_to_beat") == "71234.560000"
     db.close()
 
 
@@ -4324,6 +4324,86 @@ def test_arb_reference_state_allows_shadow_fallback_without_labeled_source(tmp_p
     assert shadow_state.comparable is True
     assert shadow_state.quality == "shadow-fallback"
     assert round(shadow_state.budget_scale, 2) == 0.45
+    db.close()
+
+
+def test_arb_micro_shadow_bootstraps_anchor_from_current_spot_when_reference_missing(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("strategy_runtime_mode", "shadow")
+    slug = "btc-updown-5m-shadow-bootstrap"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=80)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Shadow Bootstrap",
+        "slug": slug,
+        "conditionId": "cond-arb-shadow-bootstrap",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "min_order_size": "5.0",
+                "bids": [{"price": "0.40"}],
+                "asks": [{"price": "0.41", "size": "250"}, {"price": "0.42", "size": "250"}],
+            },
+            "asset-down": {
+                "min_order_size": "5.0",
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.54", "size": "250"}, {"price": "0.55", "size": "250"}],
+            },
+        },
+        balance=111.26,
+    )
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=None,
+            lead_price=71750.0,
+            binance_price=71750.0,
+            chainlink_price=None,
+            basis=0.0,
+            source="",
+            age_ms=12,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            min_trade_amount=5.0,
+            arb_min_trade_amount=1.0,
+            btc5m_strict_realism_mode=True,
+            live_small_target_capital=111.26,
+            live_btc5m_cycle_budget_usdc=25.0,
+            btc5m_reference_soft_budget_scale=0.55,
+        ),
+        logger=logging.getLogger("test-btc5m-shadow-bootstrap"),
+        spot_feed=spot_feed,
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="shadow")
+    live_spot_state = service._arb_live_spot_state(market=market, seconds_into_window=80)  # noqa: SLF001
+
+    assert stats["filled"] > 0
+    assert db.get_bot_state("strategy_reference_comparable") == "1"
+    assert db.get_bot_state("strategy_reference_quality") == "shadow-fallback"
+    assert float(live_spot_state["strategy_spot_local_anchor"]) > 0
+    assert live_spot_state["strategy_anchor_source"] == "shadow-current-price"
+    assert live_spot_state["strategy_reference_quality"] == "shadow-fallback"
+    assert "realism gate" not in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
