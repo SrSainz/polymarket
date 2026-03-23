@@ -37,7 +37,7 @@ _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-23-official-beat-fix1"
+_DASHBOARD_BUILD = "2026-03-23-shadow-lifecycle1"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -950,6 +950,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "compare_realized_pnl": "SUM(strategy_windows.realized_pnl) por runtime",
             "compare_history": "strategy_windows cerradas de paper y shadow",
             "compare_samples": "snapshots recientes guardados en runtime_compare_samples",
+            "compare_two_sided": "ventanas activas con >=2 assets distintos en fills open por condition_id",
+            "compare_settlement": "ejecuciones close con notes strategy_resolution:*",
+            "compare_cadence": "media entre timestamps de fills open dentro de cada ventana",
         },
         "strategy_recent_resolutions": recent_resolution_windows,
         "strategy_setup_performance": setup_performance,

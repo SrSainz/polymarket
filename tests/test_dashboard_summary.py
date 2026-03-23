@@ -809,6 +809,212 @@ def test_summary_payload_exposes_compare_snapshot_series_without_closed_history(
     assert compare["shadow"]["total_realized_pnl"] == 0.0
 
 
+def test_summary_payload_runtime_compare_exposes_lifecycle_metrics(tmp_path: Path) -> None:
+    slug = "btc-updown-5m-shared"
+    title = "Bitcoin Up or Down - Shared"
+    base_ts = 1774260600
+    paper_db_path = tmp_path / "bot.db"
+    shadow_db_path = tmp_path / "bot_shadow.db"
+
+    paper_db = Database(paper_db_path)
+    paper_db.init_schema()
+    with paper_db.conn:
+        paper_db.conn.execute(
+            """
+            INSERT INTO strategy_windows(
+                slug, condition_id, title, status, opened_at, first_trade_at, last_trade_at, closed_at,
+                price_mode, timing_regime, primary_outcome, hedge_outcome, primary_ratio,
+                planned_budget, deployed_notional, current_exposure, filled_orders, replenishment_count,
+                realized_pnl, winning_outcome, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                slug,
+                "cond-shared",
+                title,
+                "closed",
+                base_ts,
+                base_ts + 1,
+                base_ts + 3,
+                base_ts + 295,
+                "underround",
+                "mid-window",
+                "Up",
+                "Down",
+                0.5,
+                12.0,
+                8.0,
+                0.0,
+                2,
+                0,
+                1.25,
+                "Up",
+                "resolved up",
+            ),
+        )
+        paper_db.conn.executemany(
+            """
+            INSERT INTO executions(
+                ts, mode, status, action, side, asset, condition_id, size, price, notional,
+                source_wallet, source_signal_id, strategy_variant, notes, pnl_delta
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    base_ts + 1,
+                    "paper",
+                    "filled",
+                    "open",
+                    "buy",
+                    "paper-up",
+                    "cond-shared",
+                    10.0,
+                    0.41,
+                    4.1,
+                    "strategy:paper",
+                    0,
+                    "",
+                    "paper-open-up",
+                    0.0,
+                ),
+                (
+                    base_ts + 3,
+                    "paper",
+                    "filled",
+                    "open",
+                    "buy",
+                    "paper-down",
+                    "cond-shared",
+                    10.0,
+                    0.39,
+                    3.9,
+                    "strategy:paper",
+                    0,
+                    "",
+                    "paper-open-down",
+                    0.0,
+                ),
+                (
+                    base_ts + 295,
+                    "paper",
+                    "filled",
+                    "close",
+                    "sell",
+                    "paper-up",
+                    "cond-shared",
+                    10.0,
+                    1.0,
+                    10.0,
+                    "strategy:settlement",
+                    0,
+                    "",
+                    f"strategy_resolution:{slug}:Up",
+                    1.25,
+                ),
+            ],
+        )
+    paper_db.close()
+
+    shadow_db = Database(shadow_db_path)
+    shadow_db.init_schema()
+    shadow_db.set_bot_state("strategy_runtime_mode", "shadow")
+    shadow_db.set_bot_state("strategy_market_slug", slug)
+    shadow_db.set_bot_state("strategy_market_title", title)
+    with shadow_db.conn:
+        shadow_db.conn.execute(
+            """
+            INSERT INTO strategy_windows(
+                slug, condition_id, title, status, opened_at, first_trade_at, last_trade_at, closed_at,
+                price_mode, timing_regime, primary_outcome, hedge_outcome, primary_ratio,
+                planned_budget, deployed_notional, current_exposure, filled_orders, replenishment_count,
+                realized_pnl, winning_outcome, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                slug,
+                "cond-shared",
+                title,
+                "closed",
+                base_ts,
+                base_ts + 2,
+                base_ts + 2,
+                base_ts + 295,
+                "underround",
+                "mid-window",
+                "Up",
+                "Down",
+                0.5,
+                12.0,
+                1.8,
+                0.0,
+                1,
+                0,
+                0.0,
+                "",
+                "shadow one sided",
+            ),
+        )
+        shadow_db.conn.execute(
+            """
+            INSERT INTO executions(
+                ts, mode, status, action, side, asset, condition_id, size, price, notional,
+                source_wallet, source_signal_id, strategy_variant, notes, pnl_delta
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                base_ts + 2,
+                "shadow",
+                "filled",
+                "open",
+                "buy",
+                "shadow-down",
+                "cond-shared",
+                5.0,
+                0.36,
+                1.8,
+                "strategy:shadow",
+                0,
+                "",
+                "shadow-open-down",
+                0.0,
+            ),
+        )
+    shadow_db.close()
+
+    with patch("app.services.dashboard_server._public_market_official_price_to_beat", return_value=0.0):
+        summary = _summary_payload(
+            shadow_db_path,
+            clob_host="https://clob.polymarket.com",
+            execution_mode="paper",
+            live_trading_enabled=False,
+        )
+
+    compare = summary["strategy_runtime_window_compare"]
+    history = compare["history"]
+    metrics = history["summary"]
+
+    assert compare["same_window"] is True
+    assert history["available"] is True
+    assert metrics["paper_active_window_count"] == 1
+    assert metrics["shadow_active_window_count"] == 1
+    assert metrics["paper_two_sided_window_count"] == 1
+    assert metrics["shadow_two_sided_window_count"] == 0
+    assert metrics["paper_one_sided_window_count"] == 0
+    assert metrics["shadow_one_sided_window_count"] == 1
+    assert metrics["paper_two_sided_window_pct"] == 100.0
+    assert metrics["shadow_two_sided_window_pct"] == 0.0
+    assert metrics["paper_settlement_window_pct"] == 100.0
+    assert metrics["shadow_settlement_window_pct"] == 0.0
+    assert metrics["paper_avg_open_cadence_seconds"] == 2.0
+    assert metrics["shadow_avg_open_cadence_seconds"] == 0.0
+    assert metrics["paper_avg_open_span_seconds"] == 2.0
+    assert metrics["shadow_avg_open_span_seconds"] == 0.0
+    assert history["points"][0]["paper_two_sided"] is True
+    assert history["points"][0]["shadow_two_sided"] is False
+    assert history["points"][0]["paper_settlement_visible"] is True
+    assert history["points"][0]["shadow_settlement_visible"] is False
+
+
 def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.db"
     db = Database(db_path)

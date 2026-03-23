@@ -435,6 +435,44 @@ button:disabled {
   margin-top: 14px;
 }
 
+.compare-focus-card {
+  margin-top: 14px;
+  border: 1px solid rgba(240, 163, 74, 0.22);
+  border-radius: var(--radius-md);
+  background:
+    radial-gradient(circle at top right, rgba(240, 163, 74, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(40, 31, 22, 0.98), rgba(24, 21, 18, 0.98));
+  padding: 14px;
+}
+
+.compare-focus-kicker {
+  margin: 0;
+  color: #f0c182;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.compare-focus-headline {
+  margin: 8px 0 0;
+  font-size: clamp(1rem, 3vw, 1.45rem);
+  line-height: 1.2;
+}
+
+.compare-focus-meta {
+  margin: 8px 0 0;
+  color: var(--muted-strong);
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.compare-lifecycle-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .compare-kpi,
 .compare-chart-card {
   border: 1px solid var(--line);
@@ -1013,6 +1051,10 @@ td {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
+  .compare-lifecycle-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .compare-charts-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1063,6 +1105,10 @@ td {
   }
 
   .compare-now-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .compare-lifecycle-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

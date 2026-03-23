@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-window-exposure-fix1";
+const UI_BUILD = "2026-03-23-shadow-lifecycle1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -68,6 +68,12 @@ function fmtBps(value, digits = 1) {
   const asNumber = Number(value);
   if (Number.isNaN(asNumber)) return "-";
   return `${asNumber.toFixed(digits)}bps`;
+}
+
+function fmtSeconds(value, digits = 1) {
+  const asNumber = Number(value);
+  if (Number.isNaN(asNumber) || asNumber <= 0) return "-";
+  return `${asNumber.toFixed(digits)}s`;
 }
 
 function tsToIso(ts) {
@@ -459,6 +465,40 @@ function compareParticipationLabel(historySummary) {
   return `paper ${fmtPct(Number(historySummary?.paper_participation_pct || 0), 1)} / shadow ${fmtPct(Number(historySummary?.shadow_participation_pct || 0), 1)}`;
 }
 
+function compareBooleanLabel(value) {
+  return value ? "si" : "no";
+}
+
+function compareFocusHeadline(paper, shadow, sampleSummary = {}) {
+  const paperFills = Number(paper?.open_execution_count || 0);
+  const shadowFills = Number(shadow?.open_execution_count || 0);
+  const paperLegs = Number(paper?.open_legs || 0);
+  const shadowLegs = Number(shadow?.open_legs || 0);
+  const shadowState = String(shadow?.operability_state || sampleSummary?.shadow_dominant_operability_state || "").trim();
+
+  if (paperFills > 0 && shadowFills === 0) return "Paper ya esta dentro y shadow sigue fuera";
+  if (paperLegs >= 2 && shadowLegs === 1) return "Shadow se queda cojo con una sola pata";
+  if (paperLegs >= 2 && shadowLegs >= 2) return "Ambos tienen paquete de dos patas";
+  if (shadowState === "budget_limited") return "Shadow se esta quedando sin presupuesto util";
+  if (shadowState === "waiting_book") return "Shadow no ve libro suficiente para entrar";
+  if (shadowState === "waiting_edge") return "Shadow espera edge valido antes de entrar";
+  if (shadowState === "degraded_reference") return "Shadow se bloquea por referencia degradada";
+  if (paperFills === 0 && shadowFills === 0) return "Ambos siguen esperando una entrada valida";
+  return "Comparativa activa paper vs shadow";
+}
+
+function compareFocusMeta(paper, shadow, sampleSummary = {}) {
+  const shadowState = String(shadow?.operability_state || sampleSummary?.shadow_dominant_operability_state || "").trim();
+  const shadowNote = String(shadow?.last_note || "").trim();
+  const parts = [
+    `paper ${Number(paper?.open_execution_count || 0)} fills / ${Number(paper?.open_legs || 0)} patas`,
+    `shadow ${Number(shadow?.open_execution_count || 0)} fills / ${Number(shadow?.open_legs || 0)} patas`,
+  ];
+  if (shadowState) parts.push(`shadow ${shadowState}`);
+  if (shadowNote) parts.push(shadowNote);
+  return parts.join(" | ");
+}
+
 function shortCompareWindow(point) {
   const slug = String(point?.slug || "").trim();
   const title = String(point?.title || "").trim();
@@ -549,6 +589,8 @@ function renderCompareDeltaItems(history) {
           <span>${escapeHtml(comparePresenceLabel(point))}</span>
           <span>${escapeHtml(`PnL ${fmtUsd(Number(point?.paper_realized_pnl || 0), 2)} paper / ${fmtUsd(Number(point?.shadow_realized_pnl || 0), 2)} shadow / gap ${fmtUsd(Number(point?.pnl_gap || 0), 2)}`)}</span>
           <span>${escapeHtml(`Despliegue ${fmtUsdPlain(Number(point?.paper_deployed_notional || 0), 2)} vs ${fmtUsdPlain(Number(point?.shadow_deployed_notional || 0), 2)} | fills ${Number(point?.paper_filled_orders || 0)} vs ${Number(point?.shadow_filled_orders || 0)}`)}</span>
+          <span>${escapeHtml(`Dos patas ${compareBooleanLabel(Boolean(point?.paper_two_sided))} vs ${compareBooleanLabel(Boolean(point?.shadow_two_sided))} | settlement ${compareBooleanLabel(Boolean(point?.paper_settlement_visible))} vs ${compareBooleanLabel(Boolean(point?.shadow_settlement_visible))}`)}</span>
+          <span>${escapeHtml(`Cadencia ${fmtSeconds(Number(point?.paper_open_cadence_seconds || 0), 1)} vs ${fmtSeconds(Number(point?.shadow_open_cadence_seconds || 0), 1)} | span ${fmtSeconds(Number(point?.paper_open_span_seconds || 0), 0)} vs ${fmtSeconds(Number(point?.shadow_open_span_seconds || 0), 0)}`)}</span>
         </div>
       </li>
     `
@@ -569,6 +611,16 @@ function paintRuntimeCompare(summary) {
   const budgetNowMeta = document.getElementById("compareBudgetNowMeta");
   const ratioNow = document.getElementById("compareRatioNow");
   const ratioNowMeta = document.getElementById("compareRatioNowMeta");
+  const focusHeadline = document.getElementById("compareFocusHeadline");
+  const focusMeta = document.getElementById("compareFocusMeta");
+  const twoSided = document.getElementById("compareTwoSided");
+  const twoSidedMeta = document.getElementById("compareTwoSidedMeta");
+  const oneSided = document.getElementById("compareOneSided");
+  const oneSidedMeta = document.getElementById("compareOneSidedMeta");
+  const settlement = document.getElementById("compareSettlement");
+  const settlementMeta = document.getElementById("compareSettlementMeta");
+  const cadence = document.getElementById("compareCadence");
+  const cadenceMeta = document.getElementById("compareCadenceMeta");
   const paperPnl = document.getElementById("comparePaperPnl");
   const paperMeta = document.getElementById("comparePaperMeta");
   const shadowPnl = document.getElementById("compareShadowPnl");
@@ -603,6 +655,16 @@ function paintRuntimeCompare(summary) {
     !budgetNowMeta ||
     !ratioNow ||
     !ratioNowMeta ||
+    !focusHeadline ||
+    !focusMeta ||
+    !twoSided ||
+    !twoSidedMeta ||
+    !oneSided ||
+    !oneSidedMeta ||
+    !settlement ||
+    !settlementMeta ||
+    !cadence ||
+    !cadenceMeta ||
     !paperPnl ||
     !paperMeta ||
     !shadowPnl ||
@@ -676,6 +738,31 @@ function paintRuntimeCompare(summary) {
   budgetNowMeta.textContent = `min ${fmtUsdPlain(Number(paper?.effective_min_notional || 0), 2)} / ${fmtUsdPlain(Number(shadow?.effective_min_notional || 0), 2)} | exp ${fmtUsdPlain(Number(paper?.exposure || 0), 2)} / ${fmtUsdPlain(Number(shadow?.exposure || 0), 2)}`;
   ratioNow.textContent = `paper ${compareRatioLabel(paper?.current_up_ratio)}`;
   ratioNowMeta.textContent = `shadow ${compareRatioLabel(shadow?.current_up_ratio)} | objetivo ${compareRatioLabel(shadow?.desired_up_ratio)}`;
+  focusHeadline.textContent = compareFocusHeadline(paper, shadow, sampleSummary);
+  focusMeta.textContent = compareFocusMeta(paper, shadow, sampleSummary);
+
+  const lifecycleHistoryAvailable =
+    Number(historySummary?.paper_active_window_count || 0) > 0 ||
+    Number(historySummary?.shadow_active_window_count || 0) > 0;
+  if (lifecycleHistoryAvailable) {
+    twoSided.textContent = `paper ${fmtPct(Number(historySummary?.paper_two_sided_window_pct || 0), 0)} / shadow ${fmtPct(Number(historySummary?.shadow_two_sided_window_pct || 0), 0)}`;
+    twoSidedMeta.textContent = `${Number(historySummary?.paper_two_sided_window_count || 0)}/${Number(historySummary?.paper_active_window_count || 0)} paper y ${Number(historySummary?.shadow_two_sided_window_count || 0)}/${Number(historySummary?.shadow_active_window_count || 0)} shadow con las dos patas visibles`;
+    oneSided.textContent = `paper ${Number(historySummary?.paper_one_sided_window_count || 0)} / shadow ${Number(historySummary?.shadow_one_sided_window_count || 0)}`;
+    oneSidedMeta.textContent = "ventanas activas que se quedaron con una sola pata visible";
+    settlement.textContent = `paper ${fmtPct(Number(historySummary?.paper_settlement_window_pct || 0), 0)} / shadow ${fmtPct(Number(historySummary?.shadow_settlement_window_pct || 0), 0)}`;
+    settlementMeta.textContent = `${Number(historySummary?.paper_settlement_window_count || 0)} paper y ${Number(historySummary?.shadow_settlement_window_count || 0)} shadow con cierre visible por strategy_resolution`;
+    cadence.textContent = `paper ${fmtSeconds(Number(historySummary?.paper_avg_open_cadence_seconds || 0), 1)} / shadow ${fmtSeconds(Number(historySummary?.shadow_avg_open_cadence_seconds || 0), 1)}`;
+    cadenceMeta.textContent = `span medio ${fmtSeconds(Number(historySummary?.paper_avg_open_span_seconds || 0), 0)} / ${fmtSeconds(Number(historySummary?.shadow_avg_open_span_seconds || 0), 0)} entre primer y ultimo fill de apertura`;
+  } else {
+    twoSided.textContent = `paper ${compareBooleanLabel(Number(paper?.open_legs || 0) >= 2)} / shadow ${compareBooleanLabel(Number(shadow?.open_legs || 0) >= 2)}`;
+    twoSidedMeta.textContent = `ventana actual | ${Number(paper?.open_legs || 0)} patas paper / ${Number(shadow?.open_legs || 0)} patas shadow`;
+    oneSided.textContent = `paper ${compareBooleanLabel(Number(paper?.open_legs || 0) === 1)} / shadow ${compareBooleanLabel(Number(shadow?.open_legs || 0) === 1)}`;
+    oneSidedMeta.textContent = "sin suficiente historial cerrado; mostramos solo la foto actual";
+    settlement.textContent = "sin cierres";
+    settlementMeta.textContent = "necesitamos al menos una ventana cerrada para medir settlement visible";
+    cadence.textContent = "sin historial";
+    cadenceMeta.textContent = "la cadencia se calcula a partir de fills reales dentro de cada ventana";
+  }
 
   if (hasClosedHistory) {
     paperPnl.textContent = fmtUsd(Number(historySummary.paper_comparable_realized_pnl || 0), 2);

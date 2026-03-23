@@ -402,6 +402,7 @@ def _read_runtime_history(*, db_path: Path, runtime_mode: str, limit: int) -> li
             """
             SELECT
                 slug,
+                condition_id,
                 title,
                 COALESCE(closed_at, last_trade_at, opened_at, 0) AS ts,
                 status,
@@ -423,6 +424,11 @@ def _read_runtime_history(*, db_path: Path, runtime_mode: str, limit: int) -> li
     cumulative_realized_pnl = 0.0
     history: list[dict] = []
     for row in ordered_rows:
+        execution_metrics = _window_execution_metrics(
+            conn,
+            runtime_mode=runtime_mode,
+            condition_id=str(row["condition_id"] or ""),
+        )
         cumulative_realized_pnl += float(row["realized_pnl"] or 0.0)
         history.append(
             {
@@ -438,9 +444,94 @@ def _read_runtime_history(*, db_path: Path, runtime_mode: str, limit: int) -> li
                 "primary_ratio": round(float(row["primary_ratio"] or 0.0), 4),
                 "price_mode": str(row["price_mode"] or ""),
                 "cumulative_realized_pnl": round(cumulative_realized_pnl, 4),
+                "open_asset_count": int(execution_metrics["open_asset_count"]),
+                "two_sided": bool(execution_metrics["two_sided"]),
+                "one_sided": bool(execution_metrics["one_sided"]),
+                "settlement_count": int(execution_metrics["settlement_count"]),
+                "settlement_visible": bool(execution_metrics["settlement_visible"]),
+                "close_execution_count": int(execution_metrics["close_execution_count"]),
+                "open_cadence_seconds": round(float(execution_metrics["open_cadence_seconds"]), 4),
+                "open_span_seconds": round(float(execution_metrics["open_span_seconds"]), 4),
             }
         )
     return history
+
+
+def _window_execution_metrics(
+    conn: sqlite3.Connection,
+    *,
+    runtime_mode: str,
+    condition_id: str,
+) -> dict[str, float | int | bool]:
+    if not str(condition_id or "").strip():
+        return {
+            "open_asset_count": 0,
+            "two_sided": False,
+            "one_sided": False,
+            "settlement_count": 0,
+            "settlement_visible": False,
+            "close_execution_count": 0,
+            "open_cadence_seconds": 0.0,
+            "open_span_seconds": 0.0,
+        }
+
+    rows = conn.execute(
+        """
+        SELECT ts, status, action, asset, notes
+        FROM executions
+        WHERE mode = ? AND condition_id = ?
+        ORDER BY ts ASC, id ASC
+        """,
+        (runtime_mode, condition_id),
+    ).fetchall()
+
+    open_rows = [
+        row
+        for row in rows
+        if str(row["status"] or "").strip().lower() == "filled" and str(row["action"] or "").strip().lower() == "open"
+    ]
+    open_assets = {
+        str(row["asset"] or "").strip()
+        for row in open_rows
+        if str(row["asset"] or "").strip()
+    }
+    open_ts = [int(row["ts"] or 0) for row in open_rows if int(row["ts"] or 0) > 0]
+    open_intervals = [
+        float(curr - prev)
+        for prev, curr in zip(open_ts, open_ts[1:])
+        if curr > prev
+    ]
+
+    settlement_count = 0
+    close_execution_count = 0
+    for row in rows:
+        if str(row["status"] or "").strip().lower() != "filled":
+            continue
+        action = str(row["action"] or "").strip().lower()
+        if action != "close":
+            continue
+        close_execution_count += 1
+        note = str(row["notes"] or "").strip().lower()
+        if note.startswith("strategy_resolution:"):
+            settlement_count += 1
+
+    open_asset_count = len(open_assets)
+    return {
+        "open_asset_count": open_asset_count,
+        "two_sided": open_asset_count >= 2,
+        "one_sided": open_asset_count == 1,
+        "settlement_count": settlement_count,
+        "settlement_visible": settlement_count > 0,
+        "close_execution_count": close_execution_count,
+        "open_cadence_seconds": _average(open_intervals),
+        "open_span_seconds": float(open_ts[-1] - open_ts[0]) if len(open_ts) >= 2 else 0.0,
+    }
+
+
+def _average(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return float(sum(values) / len(values))
 
 
 def _empty_compare_history(*, limit: int) -> dict:
@@ -454,6 +545,8 @@ def _empty_compare_history(*, limit: int) -> dict:
             "paper_window_count": 0,
             "shadow_window_count": 0,
             "shared_window_count": 0,
+            "paper_active_window_count": 0,
+            "shadow_active_window_count": 0,
             "paper_participation_pct": 0.0,
             "shadow_participation_pct": 0.0,
             "paper_comparable_realized_pnl": 0.0,
@@ -478,6 +571,20 @@ def _empty_compare_history(*, limit: int) -> dict:
             "filled_orders_gap": 0,
             "paper_avg_filled_orders": 0.0,
             "shadow_avg_filled_orders": 0.0,
+            "paper_two_sided_window_count": 0,
+            "shadow_two_sided_window_count": 0,
+            "paper_one_sided_window_count": 0,
+            "shadow_one_sided_window_count": 0,
+            "paper_two_sided_window_pct": 0.0,
+            "shadow_two_sided_window_pct": 0.0,
+            "paper_settlement_window_count": 0,
+            "shadow_settlement_window_count": 0,
+            "paper_settlement_window_pct": 0.0,
+            "shadow_settlement_window_pct": 0.0,
+            "paper_avg_open_cadence_seconds": 0.0,
+            "shadow_avg_open_cadence_seconds": 0.0,
+            "paper_avg_open_span_seconds": 0.0,
+            "shadow_avg_open_span_seconds": 0.0,
         },
     }
 
@@ -531,6 +638,8 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
     paper_window_count = 0
     shadow_window_count = 0
     shared_window_count = 0
+    paper_active_window_count = 0
+    shadow_active_window_count = 0
     paper_comparable_realized_pnl = 0.0
     shadow_comparable_realized_pnl = 0.0
     paper_comparable_deployed_notional = 0.0
@@ -543,9 +652,22 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
     shadow_total_deployed_notional = 0.0
     paper_total_filled_orders = 0
     shadow_total_filled_orders = 0
+    paper_two_sided_window_count = 0
+    shadow_two_sided_window_count = 0
+    paper_one_sided_window_count = 0
+    shadow_one_sided_window_count = 0
+    paper_settlement_window_count = 0
+    shadow_settlement_window_count = 0
+    paper_cadence_samples: list[float] = []
+    shadow_cadence_samples: list[float] = []
+    paper_span_samples: list[float] = []
+    shadow_span_samples: list[float] = []
     points: list[dict] = []
 
     for item in recent_points:
+        slug = str(item["slug"] or "")
+        paper_item = paper_by_slug.get(slug)
+        shadow_item = shadow_by_slug.get(slug)
         paper_present = bool(item["paper_present"])
         shadow_present = bool(item["shadow_present"])
         if paper_present:
@@ -559,6 +681,42 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
         shadow_deployed_notional = float(item["shadow_deployed_notional"] or 0.0)
         paper_filled_orders = int(item["paper_filled_orders"] or 0)
         shadow_filled_orders = int(item["shadow_filled_orders"] or 0)
+        paper_two_sided = bool((paper_item or {}).get("two_sided"))
+        shadow_two_sided = bool((shadow_item or {}).get("two_sided"))
+        paper_settlement_visible = bool((paper_item or {}).get("settlement_visible"))
+        shadow_settlement_visible = bool((shadow_item or {}).get("settlement_visible"))
+        paper_open_cadence_seconds = float((paper_item or {}).get("open_cadence_seconds") or 0.0)
+        shadow_open_cadence_seconds = float((shadow_item or {}).get("open_cadence_seconds") or 0.0)
+        paper_open_span_seconds = float((paper_item or {}).get("open_span_seconds") or 0.0)
+        shadow_open_span_seconds = float((shadow_item or {}).get("open_span_seconds") or 0.0)
+        paper_active = paper_present and (paper_deployed_notional > 0 or paper_filled_orders > 0)
+        shadow_active = shadow_present and (shadow_deployed_notional > 0 or shadow_filled_orders > 0)
+
+        if paper_active:
+            paper_active_window_count += 1
+            if paper_two_sided:
+                paper_two_sided_window_count += 1
+            else:
+                paper_one_sided_window_count += 1
+            if paper_settlement_visible:
+                paper_settlement_window_count += 1
+            if paper_open_cadence_seconds > 0:
+                paper_cadence_samples.append(paper_open_cadence_seconds)
+            if paper_open_span_seconds > 0:
+                paper_span_samples.append(paper_open_span_seconds)
+
+        if shadow_active:
+            shadow_active_window_count += 1
+            if shadow_two_sided:
+                shadow_two_sided_window_count += 1
+            else:
+                shadow_one_sided_window_count += 1
+            if shadow_settlement_visible:
+                shadow_settlement_window_count += 1
+            if shadow_open_cadence_seconds > 0:
+                shadow_cadence_samples.append(shadow_open_cadence_seconds)
+            if shadow_open_span_seconds > 0:
+                shadow_span_samples.append(shadow_open_span_seconds)
 
         if paper_present and shadow_present:
             shared_window_count += 1
@@ -594,6 +752,14 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
                 "paper_filled_orders": paper_filled_orders,
                 "shadow_filled_orders": shadow_filled_orders,
                 "filled_orders_gap": int(paper_filled_orders - shadow_filled_orders),
+                "paper_two_sided": paper_two_sided,
+                "shadow_two_sided": shadow_two_sided,
+                "paper_settlement_visible": paper_settlement_visible,
+                "shadow_settlement_visible": shadow_settlement_visible,
+                "paper_open_cadence_seconds": round(paper_open_cadence_seconds, 4),
+                "shadow_open_cadence_seconds": round(shadow_open_cadence_seconds, 4),
+                "paper_open_span_seconds": round(paper_open_span_seconds, 4),
+                "shadow_open_span_seconds": round(shadow_open_span_seconds, 4),
                 "paper_cumulative_realized_pnl": round(paper_cumulative_realized_pnl, 4),
                 "shadow_cumulative_realized_pnl": round(shadow_cumulative_realized_pnl, 4),
                 "cumulative_pnl_gap": round(paper_cumulative_realized_pnl - shadow_cumulative_realized_pnl, 4),
@@ -614,6 +780,8 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
             "paper_window_count": int(paper_window_count),
             "shadow_window_count": int(shadow_window_count),
             "shared_window_count": int(shared_window_count),
+            "paper_active_window_count": int(paper_active_window_count),
+            "shadow_active_window_count": int(shadow_active_window_count),
             "paper_participation_pct": round(paper_participation_pct, 2),
             "shadow_participation_pct": round(shadow_participation_pct, 2),
             "paper_comparable_realized_pnl": round(paper_comparable_realized_pnl, 4),
@@ -654,6 +822,32 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
                 shadow_total_filled_orders / shadow_window_count if shadow_window_count > 0 else 0.0,
                 4,
             ),
+            "paper_two_sided_window_count": int(paper_two_sided_window_count),
+            "shadow_two_sided_window_count": int(shadow_two_sided_window_count),
+            "paper_one_sided_window_count": int(paper_one_sided_window_count),
+            "shadow_one_sided_window_count": int(shadow_one_sided_window_count),
+            "paper_two_sided_window_pct": round(
+                (paper_two_sided_window_count / paper_active_window_count) * 100 if paper_active_window_count > 0 else 0.0,
+                2,
+            ),
+            "shadow_two_sided_window_pct": round(
+                (shadow_two_sided_window_count / shadow_active_window_count) * 100 if shadow_active_window_count > 0 else 0.0,
+                2,
+            ),
+            "paper_settlement_window_count": int(paper_settlement_window_count),
+            "shadow_settlement_window_count": int(shadow_settlement_window_count),
+            "paper_settlement_window_pct": round(
+                (paper_settlement_window_count / paper_active_window_count) * 100 if paper_active_window_count > 0 else 0.0,
+                2,
+            ),
+            "shadow_settlement_window_pct": round(
+                (shadow_settlement_window_count / shadow_active_window_count) * 100 if shadow_active_window_count > 0 else 0.0,
+                2,
+            ),
+            "paper_avg_open_cadence_seconds": round(_average(paper_cadence_samples), 4),
+            "shadow_avg_open_cadence_seconds": round(_average(shadow_cadence_samples), 4),
+            "paper_avg_open_span_seconds": round(_average(paper_span_samples), 4),
+            "shadow_avg_open_span_seconds": round(_average(shadow_span_samples), 4),
         },
     }
 
