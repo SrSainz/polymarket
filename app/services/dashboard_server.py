@@ -37,7 +37,7 @@ _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-23-shadow-lifecycle1"
+_DASHBOARD_BUILD = "2026-03-23-price-beat-source1"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -119,6 +119,28 @@ def _public_market_official_price_to_beat(slug: str) -> float:
     if official > 0:
         _PUBLIC_GAMMA_BEAT_CACHE[safe_slug] = (official, now + _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS)
     return official
+
+
+def _with_public_official_price(snapshot: dict | None) -> dict:
+    if not isinstance(snapshot, dict):
+        return {}
+    enriched = dict(snapshot)
+    slug = str(enriched.get("slug") or "").strip()
+    bot_state_official = 0.0
+    try:
+        bot_state_official = float(enriched.get("official_price_to_beat") or 0.0)
+    except (TypeError, ValueError):
+        bot_state_official = 0.0
+    public_official = _public_market_official_price_to_beat(slug) if slug else 0.0
+    if public_official > 0:
+        enriched["official_price_to_beat"] = round(public_official, 4)
+        enriched["official_price_source"] = "public-gamma"
+        enriched["official_price_available"] = True
+        return enriched
+    enriched["official_price_to_beat"] = round(bot_state_official, 4)
+    enriched["official_price_source"] = "bot-state" if bot_state_official > 0 else "public-gamma-missing"
+    enriched["official_price_available"] = bool(bot_state_official > 0)
+    return enriched
 
 
 def _normalized_origin(origin: str) -> str:
@@ -540,9 +562,11 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_spot_anchor = _bot_state_float(conn, "strategy_spot_anchor")
         strategy_spot_local_anchor = _bot_state_float(conn, "strategy_spot_local_anchor")
         strategy_official_price_to_beat = _bot_state_float(conn, "strategy_official_price_to_beat")
+        strategy_official_price_source = "bot-state" if strategy_official_price_to_beat > 0 else "public-gamma-missing"
         public_official_price_to_beat = _public_market_official_price_to_beat(strategy_market_slug)
         if public_official_price_to_beat > 0:
             strategy_official_price_to_beat = public_official_price_to_beat
+            strategy_official_price_source = "public-gamma"
         strategy_anchor_source = _bot_state_text(conn, "strategy_anchor_source")
         strategy_reference_quality = _bot_state_text(conn, "strategy_reference_quality")
         strategy_reference_comparable = _bot_state_int(conn, "strategy_reference_comparable")
@@ -862,6 +886,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_spot_anchor": round(strategy_spot_anchor, 4),
         "strategy_spot_local_anchor": round(strategy_spot_local_anchor, 4),
         "strategy_official_price_to_beat": round(strategy_official_price_to_beat, 4),
+        "strategy_official_price_source": strategy_official_price_source,
+        "strategy_official_price_available": bool(strategy_official_price_to_beat > 0),
         "strategy_anchor_source": strategy_anchor_source,
         "strategy_reference_quality": strategy_reference_quality,
         "strategy_reference_comparable": bool(strategy_reference_comparable),
@@ -1007,11 +1033,16 @@ def _runtime_compare_payload(
     if runtime_mode != "shadow":
         if runtime_mode:
             return {"available": False}
-    return build_runtime_compare_payload(
+    payload = build_runtime_compare_payload(
         data_dir=db_path.parent,
         target_slug=str(strategy_market_slug or "").strip(),
         target_title=str(strategy_market_title or "").strip(),
     )
+    if not isinstance(payload, dict):
+        return {"available": False}
+    payload["paper"] = _with_public_official_price(payload.get("paper"))
+    payload["shadow"] = _with_public_official_price(payload.get("shadow"))
+    return payload
 
 
 def _microstructure_payload(db_path: Path) -> dict:

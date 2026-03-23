@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-shadow-lifecycle1";
+const UI_BUILD = "2026-03-23-price-beat-source1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -294,8 +294,10 @@ function comparePriceLabel(snapshot) {
   const fairUp = Number(snapshot?.fair_up || 0);
   const fairDown = Number(snapshot?.fair_down || 0);
   const referenceQuality = String(snapshot?.reference_quality || "").trim();
+  const beatSource = String(snapshot?.official_price_source || "").trim();
   const spotText = spot > 0 ? fmtBtcPrice(spot) : "-";
-  const beatText = beat > 0 ? fmtBtcPrice(beat) : "-";
+  const beatText =
+    beat > 0 ? fmtBtcPrice(beat) : beatSource === "public-gamma-missing" ? "Gamma publica sin beat" : "-";
   const fairText =
     fairUp > 0 || fairDown > 0
       ? `Sube ${fmtPct(fairUp * 100, 1)} / Baja ${fmtPct(fairDown * 100, 1)}`
@@ -325,7 +327,15 @@ function comparePriceMeta(snapshot) {
   const beat = Number(snapshot?.official_price_to_beat || 0);
   const quality = String(snapshot?.reference_quality || "").trim();
   const operability = String(snapshot?.operability_state || "").trim();
-  const beatText = beat > 0 ? `beat ${fmtBtcPrice(beat)}` : "sin beat oficial";
+  const beatSource = String(snapshot?.official_price_source || "").trim();
+  let beatText = "sin beat oficial";
+  if (beat > 0 && beatSource === "public-gamma") {
+    beatText = `beat ${fmtBtcPrice(beat)} (Gamma publica)`;
+  } else if (beat > 0) {
+    beatText = `beat ${fmtBtcPrice(beat)}`;
+  } else if (beatSource === "public-gamma-missing") {
+    beatText = "Gamma publica sin priceToBeat";
+  }
   return `${beatText}${quality ? ` | ${quality}` : ""}${operability ? ` | ${operability}` : ""}`;
 }
 

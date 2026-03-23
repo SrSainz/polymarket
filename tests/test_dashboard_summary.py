@@ -243,6 +243,45 @@ def test_summary_payload_prefers_public_polymarket_price_to_beat_over_zero_bot_s
         )
 
     assert summary["strategy_official_price_to_beat"] == 68606.9191
+    assert summary["strategy_official_price_source"] == "public-gamma"
+    assert summary["strategy_official_price_available"] is True
+
+
+def test_summary_payload_runtime_compare_prefers_public_polymarket_price_to_beat(tmp_path: Path) -> None:
+    paper_db_path = tmp_path / "bot.db"
+    shadow_db_path = tmp_path / "bot_shadow.db"
+
+    paper_db = Database(paper_db_path)
+    paper_db.init_schema()
+    paper_db.set_bot_state("strategy_runtime_mode", "paper")
+    paper_db.set_bot_state("strategy_market_slug", "btc-updown-5m-1774271700")
+    paper_db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Shared")
+    paper_db.set_bot_state("strategy_official_price_to_beat", "0.000000")
+    paper_db.close()
+
+    shadow_db = Database(shadow_db_path)
+    shadow_db.init_schema()
+    shadow_db.set_bot_state("strategy_runtime_mode", "shadow")
+    shadow_db.set_bot_state("strategy_market_slug", "btc-updown-5m-1774271700")
+    shadow_db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Shared")
+    shadow_db.set_bot_state("strategy_official_price_to_beat", "0.000000")
+    shadow_db.close()
+
+    with patch("app.services.dashboard_server._public_market_official_price_to_beat", return_value=70888.12):
+        summary = _summary_payload(
+            shadow_db_path,
+            clob_host="https://clob.polymarket.com",
+            execution_mode="paper",
+            live_trading_enabled=False,
+        )
+
+    compare = summary["strategy_runtime_window_compare"]
+    assert compare["paper"]["official_price_to_beat"] == 70888.12
+    assert compare["paper"]["official_price_source"] == "public-gamma"
+    assert compare["paper"]["official_price_available"] is True
+    assert compare["shadow"]["official_price_to_beat"] == 70888.12
+    assert compare["shadow"]["official_price_source"] == "public-gamma"
+    assert compare["shadow"]["official_price_available"] is True
 
 
 def test_summary_payload_current_window_exposure_ignores_stale_bot_state_without_positions(
