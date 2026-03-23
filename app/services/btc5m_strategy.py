@@ -3837,7 +3837,12 @@ class BTC5mStrategyService:
                 local_anchor_source = self._arb_anchor_capture_source(snapshot=snapshot)
                 self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
         runtime_mode = str(self.db.get_bot_state("strategy_runtime_mode") or "paper").strip().lower()
-        if runtime_mode == "shadow" and local_anchor_price <= 0 and current_price > 0:
+        if (
+            runtime_mode == "shadow"
+            and not self.settings.config.shadow_live_like_mode
+            and local_anchor_price <= 0
+            and current_price > 0
+        ):
             local_anchor_price = current_price
             local_anchor_source = "shadow-current-price"
         official_price_to_beat = self._market_official_price_to_beat(market)
@@ -5081,11 +5086,12 @@ class BTC5mStrategyService:
         mode_text = str(mode or "").strip().lower()
         is_live_like = mode_text in {"live", "shadow"}
         is_shadow = mode_text == "shadow"
+        shadow_relaxed_reference = is_shadow and not self.settings.config.shadow_live_like_mode
         shadow_fallback_budget_scale = min(max(soft_budget_scale, 0.50), 0.60)
         shadow_missing_budget_scale = min(max(soft_budget_scale, 0.35), 0.45)
 
         if not source_text:
-            if is_shadow and has_any_anchor:
+            if shadow_relaxed_reference and has_any_anchor:
                 return ArbReferenceState(
                     comparable=True,
                     quality="shadow-fallback",
@@ -5121,7 +5127,7 @@ class BTC5mStrategyService:
                 note=f"referencia vieja: {age_ms}ms > {age_limit}ms",
             )
         if not has_rtds:
-            if is_shadow and has_any_anchor:
+            if shadow_relaxed_reference and has_any_anchor:
                 return ArbReferenceState(
                     comparable=True,
                     quality="shadow-fallback",
@@ -5134,7 +5140,7 @@ class BTC5mStrategyService:
                 note=f"fuente degradada: {source_text}",
             )
         if not has_chainlink:
-            if is_shadow and has_any_anchor:
+            if shadow_relaxed_reference and has_any_anchor:
                 return ArbReferenceState(
                     comparable=True,
                     quality="shadow-fallback",
@@ -5475,7 +5481,8 @@ class BTC5mStrategyService:
         return False, message
 
     def _live_control_can_execute(self, *, mode: str) -> tuple[bool, str]:
-        if mode != "live":
+        mode_text = str(mode or "").strip().lower()
+        if mode_text != "live":
             return True, ""
         raw_state_value = self.db.get_bot_state("live_control_state")
         if raw_state_value is None or not str(raw_state_value).strip():
@@ -5583,7 +5590,7 @@ class BTC5mStrategyService:
         if self.settings.config.strategy_entry_mode in {"vidarx_micro", "arb_micro"}:
             return
         live_allowed, _ = self._live_control_can_execute(mode=mode)
-        if mode == "live" and not live_allowed:
+        if not live_allowed:
             return
         positions = self.db.list_copy_positions()
         for position in positions:
@@ -5728,7 +5735,12 @@ class BTC5mStrategyService:
                 self.db.set_bot_state(anchor_key, f"{local_anchor_price:.8f}")
                 self.db.set_bot_state(f"{anchor_key}:source", local_anchor_source)
         runtime_mode = str(self.db.get_bot_state("strategy_runtime_mode") or "paper").strip().lower()
-        if runtime_mode == "shadow" and local_anchor_price <= 0 and current_price > 0:
+        if (
+            runtime_mode == "shadow"
+            and not self.settings.config.shadow_live_like_mode
+            and local_anchor_price <= 0
+            and current_price > 0
+        ):
             local_anchor_price = current_price
             local_anchor_source = "shadow-current-price"
         official_price_to_beat = self._market_official_price_to_beat(live_market) if live_market is not None else 0.0

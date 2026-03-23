@@ -290,6 +290,31 @@ def test_execute_instruction_uses_latest_microstructure_execution_profile_for_li
     db.close()
 
 
+def test_shadow_ignores_live_control_even_in_live_like_mode(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("live_control_state", "paused")
+    db.set_bot_state("live_control_reason", "dashboard pause")
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-shadow-ignore-live-control"),
+    )
+
+    allowed, note = service._live_control_can_execute(mode="shadow")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    db.close()
+
+
 def test_strategy_uses_more_operable_trigger_profile(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -4011,6 +4036,7 @@ def test_arb_micro_shadow_allows_degraded_reference_with_reduced_budget(tmp_path
             min_trade_amount=5.0,
             arb_min_trade_amount=1.0,
             btc5m_strict_realism_mode=True,
+            shadow_live_like_mode=False,
             live_small_target_capital=111.26,
             live_btc5m_cycle_budget_usdc=25.0,
             btc5m_reference_soft_budget_scale=0.55,
@@ -4306,7 +4332,11 @@ def test_arb_reference_state_allows_shadow_fallback_without_labeled_source(tmp_p
         autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
         daily_summary=SimpleNamespace(send_if_due=lambda: False),
         trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
-        settings=_settings(strategy_entry_mode="arb_micro", btc5m_reference_soft_budget_scale=0.55),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            btc5m_reference_soft_budget_scale=0.55,
+            shadow_live_like_mode=False,
+        ),
         logger=logging.getLogger("test-btc5m-shadow-missing-source"),
         spot_feed=None,
     )
@@ -4324,6 +4354,39 @@ def test_arb_reference_state_allows_shadow_fallback_without_labeled_source(tmp_p
     assert shadow_state.comparable is True
     assert shadow_state.quality == "shadow-fallback"
     assert round(shadow_state.budget_scale, 2) == 0.45
+    db.close()
+
+
+def test_arb_reference_state_blocks_shadow_fallback_in_live_like_mode(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", btc5m_reference_soft_budget_scale=0.55),
+        logger=logging.getLogger("test-btc5m-shadow-live-like-reference"),
+        spot_feed=None,
+    )
+
+    shadow_state = service._arb_reference_state(  # noqa: SLF001
+        mode="shadow",
+        source="",
+        age_ms=25,
+        chainlink_price=0.0,
+        official_price_to_beat=0.0,
+        local_anchor_price=71760.0,
+        anchor_source="local-anchor",
+    )
+
+    assert shadow_state.comparable is False
+    assert shadow_state.quality == "missing"
+    assert shadow_state.note == "sin spot de referencia"
     db.close()
 
 
@@ -4385,6 +4448,7 @@ def test_arb_micro_shadow_bootstraps_anchor_from_current_spot_when_reference_mis
             min_trade_amount=5.0,
             arb_min_trade_amount=1.0,
             btc5m_strict_realism_mode=True,
+            shadow_live_like_mode=False,
             live_small_target_capital=111.26,
             live_btc5m_cycle_budget_usdc=25.0,
             btc5m_reference_soft_budget_scale=0.55,

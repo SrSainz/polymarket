@@ -53,6 +53,7 @@ class BotConfig(BaseModel):
     liquidation_feed_enabled: bool = True
     liquidation_bybit_symbol: str = "BTCUSDT"
     shadow_mode_enabled: bool = False
+    shadow_live_like_mode: bool = True
     execution_mode: Literal["paper", "live"] = "paper"
     live_execution_profile: Literal["taker_fok", "taker_fak", "maker_gtd", "maker_post_only_gtc"] = "taker_fak"
     live_small_target_capital: float = 100.0
