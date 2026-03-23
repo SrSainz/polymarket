@@ -281,20 +281,59 @@ def _runtime_session_state(db: Database) -> dict[str, int | str]:
     }
 
 
+def _runtime_pid_alive(pid: int) -> bool:
+    if int(pid) <= 0:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _runtime_session_is_active(
+    state: dict[str, int | str],
+    *,
+    now_ts: int,
+    current_pid: int | None = None,
+) -> tuple[bool, int]:
+    heartbeat_age = now_ts - int(state["heartbeat"])
+    pid = int(state["pid"])
+    if not str(state["mode"]) or heartbeat_age > _RUNTIME_SESSION_TTL_SECONDS or pid <= 0:
+        return False, heartbeat_age
+    if current_pid is not None and pid == int(current_pid):
+        return False, heartbeat_age
+    if not _runtime_pid_alive(pid):
+        return False, heartbeat_age
+    return True, heartbeat_age
+
+
+def _clear_stale_runtime_session(db: Database, state: dict[str, int | str], *, now_ts: int) -> None:
+    heartbeat_age = now_ts - int(state["heartbeat"])
+    pid = int(state["pid"])
+    if not str(state["mode"]):
+        return
+    if heartbeat_age <= _RUNTIME_SESSION_TTL_SECONDS and pid > 0 and _runtime_pid_alive(pid):
+        return
+    db.set_bot_state("runtime_session_mode", "")
+    db.set_bot_state("runtime_session_pid", "0")
+    db.set_bot_state("runtime_session_heartbeat", "0")
+
+
 def _acquire_runtime_session(db: Database, *, mode: str) -> None:
     now_ts = int(time.time())
     current_pid = os.getpid()
     state = _runtime_session_state(db)
-    heartbeat_age = now_ts - int(state["heartbeat"])
-    if (
-        str(state["mode"])
-        and heartbeat_age <= _RUNTIME_SESSION_TTL_SECONDS
-        and int(state["pid"]) > 0
-        and int(state["pid"]) != current_pid
-    ):
+    active, heartbeat_age = _runtime_session_is_active(state, now_ts=now_ts, current_pid=current_pid)
+    if active:
         raise RuntimeError(
             f"runtime session active: mode={state['mode']} pid={state['pid']} heartbeat_age={heartbeat_age}s"
         )
+    _clear_stale_runtime_session(db, state, now_ts=now_ts)
     db.set_bot_state("runtime_session_mode", mode)
     db.set_bot_state("runtime_session_pid", str(current_pid))
     db.set_bot_state("runtime_session_heartbeat", str(now_ts))
@@ -321,11 +360,12 @@ def _release_runtime_session(db: Database, *, mode: str) -> None:
 def _clear_runtime_ledger(db: Database) -> None:
     state = _runtime_session_state(db)
     now_ts = int(time.time())
-    heartbeat_age = now_ts - int(state["heartbeat"])
-    if str(state["mode"]) and heartbeat_age <= _RUNTIME_SESSION_TTL_SECONDS and int(state["pid"]) > 0:
+    active, heartbeat_age = _runtime_session_is_active(state, now_ts=now_ts)
+    if active:
         raise RuntimeError(
             f"runtime session active: mode={state['mode']} pid={state['pid']} heartbeat_age={heartbeat_age}s"
         )
+    _clear_stale_runtime_session(db, state, now_ts=now_ts)
     db.clear_copy_positions()
     db.set_bot_state("position_ledger_mode", "")
     db.set_bot_state("position_ledger_preflight", "ready")
@@ -355,11 +395,12 @@ def _clone_runtime_state(root_dir: Path, *, source_mode: str, target_mode: str) 
     try:
         state = _runtime_session_state(target_db)
         now_ts = int(time.time())
-        heartbeat_age = now_ts - int(state["heartbeat"])
-        if str(state["mode"]) and heartbeat_age <= _RUNTIME_SESSION_TTL_SECONDS and int(state["pid"]) > 0:
+        active, heartbeat_age = _runtime_session_is_active(state, now_ts=now_ts)
+        if active:
             raise RuntimeError(
                 f"target runtime session active: mode={state['mode']} pid={state['pid']} heartbeat_age={heartbeat_age}s"
             )
+        _clear_stale_runtime_session(target_db, state, now_ts=now_ts)
     finally:
         target_db.close()
 

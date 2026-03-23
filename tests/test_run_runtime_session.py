@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import run as run_module
 from app.db import Database
 from app.settings import AppPaths, AppSettings, BotConfig, EnvSettings
 from run import (
@@ -16,16 +17,32 @@ from run import (
 )
 
 
-def test_acquire_runtime_session_blocks_other_active_pid(tmp_path: Path) -> None:
+def test_acquire_runtime_session_blocks_other_active_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     db.set_bot_state("runtime_session_mode", "paper")
     db.set_bot_state("runtime_session_pid", "999999")
     db.set_bot_state("runtime_session_heartbeat", str(int(time.time())))
+    monkeypatch.setattr(run_module, "_runtime_pid_alive", lambda pid: True)
 
     with pytest.raises(RuntimeError, match="runtime session active"):
         _acquire_runtime_session(db, mode="live")
 
+    db.close()
+
+
+def test_acquire_runtime_session_ignores_dead_pid_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("runtime_session_mode", "paper")
+    db.set_bot_state("runtime_session_pid", "999999")
+    db.set_bot_state("runtime_session_heartbeat", str(int(time.time())))
+    monkeypatch.setattr(run_module, "_runtime_pid_alive", lambda pid: False)
+
+    _acquire_runtime_session(db, mode="live")
+
+    assert db.get_bot_state("runtime_session_mode") == "live"
+    assert int(str(db.get_bot_state("runtime_session_pid") or "0")) > 0
     db.close()
 
 
@@ -50,6 +67,21 @@ def test_clear_runtime_ledger_deletes_positions_and_arms_live(tmp_path: Path) ->
     assert db.get_bot_state("position_ledger_mode") == ""
     assert db.get_bot_state("position_ledger_preflight") == "ready"
     assert db.get_bot_state("live_control_state") == "armed"
+    db.close()
+
+
+def test_clear_runtime_ledger_ignores_dead_pid_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("runtime_session_mode", "shadow")
+    db.set_bot_state("runtime_session_pid", "31337")
+    db.set_bot_state("runtime_session_heartbeat", str(int(time.time())))
+    monkeypatch.setattr(run_module, "_runtime_pid_alive", lambda pid: False)
+
+    _clear_runtime_ledger(db)
+
+    assert db.get_bot_state("runtime_session_mode") == ""
+    assert db.get_bot_state("runtime_session_pid") == "0"
     db.close()
 
 
@@ -116,7 +148,7 @@ def test_clone_runtime_state_copies_positions_and_clears_runtime_lock(tmp_path: 
     shadow_db.close()
 
 
-def test_clone_runtime_state_blocks_active_target_runtime(tmp_path: Path) -> None:
+def test_clone_runtime_state_blocks_active_target_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     source_db = Database(_runtime_db_path(tmp_path, runtime_mode="live"))
     source_db.init_schema()
@@ -128,6 +160,28 @@ def test_clone_runtime_state_blocks_active_target_runtime(tmp_path: Path) -> Non
     target_db.set_bot_state("runtime_session_pid", "31337")
     target_db.set_bot_state("runtime_session_heartbeat", str(int(time.time())))
     target_db.close()
+    monkeypatch.setattr(run_module, "_runtime_pid_alive", lambda pid: True)
 
     with pytest.raises(RuntimeError, match="target runtime session active"):
         _clone_runtime_state(tmp_path, source_mode="live", target_mode="shadow")
+
+
+def test_clone_runtime_state_ignores_dead_target_runtime_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "data").mkdir(parents=True, exist_ok=True)
+    source_db = Database(_runtime_db_path(tmp_path, runtime_mode="live"))
+    source_db.init_schema()
+    source_db.close()
+
+    target_db = Database(_runtime_db_path(tmp_path, runtime_mode="shadow"))
+    target_db.init_schema()
+    target_db.set_bot_state("runtime_session_mode", "shadow")
+    target_db.set_bot_state("runtime_session_pid", "31337")
+    target_db.set_bot_state("runtime_session_heartbeat", str(int(time.time())))
+    target_db.close()
+    monkeypatch.setattr(run_module, "_runtime_pid_alive", lambda pid: False)
+
+    cloned_path = _clone_runtime_state(tmp_path, source_mode="live", target_mode="shadow")
+
+    assert cloned_path.name == "bot_shadow.db"
