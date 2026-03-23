@@ -126,10 +126,13 @@ def _with_public_official_price(snapshot: dict | None) -> dict:
         return {}
     enriched = dict(snapshot)
     slug = str(enriched.get("slug") or "").strip()
+    official_slug = str(enriched.get("official_price_slug") or "").strip()
     bot_state_official = 0.0
     try:
         bot_state_official = float(enriched.get("official_price_to_beat") or 0.0)
     except (TypeError, ValueError):
+        bot_state_official = 0.0
+    if official_slug and slug and official_slug != slug:
         bot_state_official = 0.0
     public_official = _public_market_official_price_to_beat(slug) if slug else 0.0
     if public_official > 0:
@@ -138,7 +141,7 @@ def _with_public_official_price(snapshot: dict | None) -> dict:
         enriched["official_price_available"] = True
         return enriched
     enriched["official_price_to_beat"] = round(bot_state_official, 4)
-    enriched["official_price_source"] = "bot-state" if bot_state_official > 0 else "public-gamma-missing"
+    enriched["official_price_source"] = "bot-state-current-slug" if bot_state_official > 0 else "public-gamma-missing"
     enriched["official_price_available"] = bool(bot_state_official > 0)
     return enriched
 
@@ -561,8 +564,13 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_spot_price = _bot_state_float(conn, "strategy_spot_price")
         strategy_spot_anchor = _bot_state_float(conn, "strategy_spot_anchor")
         strategy_spot_local_anchor = _bot_state_float(conn, "strategy_spot_local_anchor")
+        strategy_official_price_slug = _bot_state_text(conn, "strategy_official_price_slug")
         strategy_official_price_to_beat = _bot_state_float(conn, "strategy_official_price_to_beat")
-        strategy_official_price_source = "bot-state" if strategy_official_price_to_beat > 0 else "public-gamma-missing"
+        if strategy_official_price_slug and strategy_market_slug and strategy_official_price_slug != strategy_market_slug:
+            strategy_official_price_to_beat = 0.0
+        strategy_official_price_source = (
+            "bot-state-current-slug" if strategy_official_price_to_beat > 0 else "public-gamma-missing"
+        )
         public_official_price_to_beat = _public_market_official_price_to_beat(strategy_market_slug)
         if public_official_price_to_beat > 0:
             strategy_official_price_to_beat = public_official_price_to_beat
@@ -886,6 +894,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_spot_anchor": round(strategy_spot_anchor, 4),
         "strategy_spot_local_anchor": round(strategy_spot_local_anchor, 4),
         "strategy_official_price_to_beat": round(strategy_official_price_to_beat, 4),
+        "strategy_official_price_slug": strategy_official_price_slug,
         "strategy_official_price_source": strategy_official_price_source,
         "strategy_official_price_available": bool(strategy_official_price_to_beat > 0),
         "strategy_anchor_source": strategy_anchor_source,
@@ -966,11 +975,14 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_runtime_compare_db_path": str(runtime_window_compare.get("db_path") or ""),
         "dashboard_build": _DASHBOARD_BUILD,
         "dashboard_metric_sources": {
+            "live_cash_balance": "bot_state.live_cash_balance",
             "live_total_capital": "bot_state.live_total_capital",
-            "live_available_to_trade": "bot_state.live_cash_allowance",
+            "live_available_to_trade": "min(bot_state.live_cash_balance, bot_state.live_cash_allowance); si allowance<=0 usa balance",
+            "live_equity_estimate": "live_cash_balance + exposure_mark (caja + mark-to-market de copy_positions)",
             "realized_pnl": "SUM(daily_pnl.pnl)",
             "unrealized_pnl": "mark-to-market de copy_positions usando midpoint del libro; si no hay midpoint usa avg_price",
             "pnl_total": "realized_pnl + unrealized_pnl",
+            "strategy_official_price_to_beat": "Gamma publica de Polymarket si la API devuelve priceToBeat; si no, snapshot del bot ligado al slug actual",
             "strategy_current_market_total_exposure": "exposicion del slug actual agregada desde copy_positions",
             "strategy_current_market_live_pnl": "unrealized_pnl del slug actual",
             "compare_realized_pnl": "SUM(strategy_windows.realized_pnl) por runtime",

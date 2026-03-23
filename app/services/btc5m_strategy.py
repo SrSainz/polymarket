@@ -4663,6 +4663,11 @@ class BTC5mStrategyService:
     ) -> None:
         snapshot_state = dict(extra_state or {})
         official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
+        previous_market_slug = str(self.db.get_bot_state("strategy_market_slug") or "").strip()
+        previous_official_slug = str(
+            self.db.get_bot_state("strategy_official_price_slug") or previous_market_slug
+        ).strip()
+        previous_official_price = _safe_float(self.db.get_bot_state("strategy_official_price_to_beat"))
         if market is not None:
             snapshot_state.setdefault("strategy_market_slug", str(market.get("slug") or ""))
             snapshot_state.setdefault("strategy_market_title", str(market.get("question") or market.get("slug") or ""))
@@ -4683,13 +4688,18 @@ class BTC5mStrategyService:
             snapshot_state.setdefault("strategy_target_price", "0.000000")
             snapshot_state.setdefault("strategy_trigger_outcome", "")
             snapshot_state.setdefault("strategy_trigger_price_seen", "0.000000")
+        current_market_slug = str(snapshot_state.get("strategy_market_slug") or "").strip()
         if official_price_to_beat > 0:
             snapshot_state["strategy_official_price_to_beat"] = f"{official_price_to_beat:.6f}"
+            snapshot_state["strategy_official_price_slug"] = current_market_slug
         else:
-            snapshot_state.setdefault(
-                "strategy_official_price_to_beat",
-                str(self.db.get_bot_state("strategy_official_price_to_beat") or "0.000000"),
+            keep_current_window_official = bool(
+                current_market_slug and current_market_slug == previous_official_slug and previous_official_price > 0
             )
+            snapshot_state["strategy_official_price_to_beat"] = (
+                f"{previous_official_price:.6f}" if keep_current_window_official else "0.000000"
+            )
+            snapshot_state["strategy_official_price_slug"] = current_market_slug
         self._snapshot_microstructure_state(market=market, note=note)
         operability_state = self._derive_strategy_operability_state(note=note, extra_state=snapshot_state)
         self.db.set_bot_state("strategy_mode", self.settings.config.strategy_mode)

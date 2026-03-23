@@ -315,6 +315,17 @@ button:disabled {
   color: var(--danger);
 }
 
+.card.is-stale,
+.hero-inline-card.is-stale {
+  border-color: rgba(223, 105, 101, 0.42);
+  box-shadow: 0 0 0 1px rgba(223, 105, 101, 0.08);
+}
+
+.card.is-stale .card-value,
+.hero-inline-card.is-stale strong {
+  color: var(--danger);
+}
+
 .pnl-flat {
   color: var(--muted-strong);
 }

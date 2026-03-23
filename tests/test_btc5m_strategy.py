@@ -3597,6 +3597,45 @@ def test_record_strategy_snapshot_preserves_market_context_when_market_is_missin
     db.close()
 
 
+def test_record_strategy_snapshot_clears_stale_official_when_slug_changes_without_new_beat(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-old")
+    db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Old")
+    db.set_bot_state("strategy_official_price_to_beat", "71234.560000")
+    db.set_bot_state("strategy_official_price_slug", "btc-updown-5m-old")
+    market = {
+        "question": "Bitcoin Up or Down - New",
+        "slug": "btc-updown-5m-new",
+        "conditionId": "cond-new-window",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": "2026-03-15T17:55:00Z", "eventMetadata": {}}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({market["slug"]: market}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-clear-stale-official"),
+        spot_feed=None,
+    )
+
+    service._record_strategy_snapshot(market=market, note="sin beat oficial en esta ventana")
+
+    assert db.get_bot_state("strategy_market_slug") == "btc-updown-5m-new"
+    assert db.get_bot_state("strategy_official_price_to_beat") == "0.000000"
+    assert db.get_bot_state("strategy_official_price_slug") == "btc-updown-5m-new"
+    db.close()
+
+
 def test_market_official_price_to_beat_refetches_partial_market_by_slug(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

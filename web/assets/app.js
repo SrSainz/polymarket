@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-price-beat-source1";
+const UI_BUILD = "2026-03-23-audit-safe1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -97,6 +97,22 @@ function fmtAgeCompact(seconds) {
   if (safe < 60) return `${Math.round(safe)}s`;
   if (safe < 3600) return `${Math.round(safe / 60)}m`;
   return `${Math.round(safe / 3600)}h`;
+}
+
+const STRATEGY_STALE_SECONDS = 45;
+const LIVE_BALANCE_STALE_SECONDS = 45;
+
+function isMetricSnapshotStale(ageSeconds, hasSnapshot, thresholdSeconds) {
+  if (!hasSnapshot) return true;
+  const safeAge = Number(ageSeconds);
+  if (Number.isNaN(safeAge) || safeAge < 0) return true;
+  return safeAge > thresholdSeconds;
+}
+
+function toggleClosestClass(elementId, selector, className, enabled) {
+  const node = document.getElementById(elementId)?.closest(selector);
+  if (!node) return;
+  node.classList.toggle(className, Boolean(enabled));
 }
 
 function statusPill(status) {
@@ -331,6 +347,8 @@ function comparePriceMeta(snapshot) {
   let beatText = "sin beat oficial";
   if (beat > 0 && beatSource === "public-gamma") {
     beatText = `beat ${fmtBtcPrice(beat)} (Gamma publica)`;
+  } else if (beat > 0 && beatSource === "bot-state-current-slug") {
+    beatText = `beat ${fmtBtcPrice(beat)} (snapshot slug actual)`;
   } else if (beat > 0) {
     beatText = `beat ${fmtBtcPrice(beat)}`;
   } else if (beatSource === "public-gamma-missing") {
@@ -928,6 +946,7 @@ function currentSpotInfo(summary) {
   const anchor = Number(summary?.strategy_spot_anchor || 0);
   const localAnchor = Number(summary?.strategy_spot_local_anchor || 0);
   const officialBeat = Number(summary?.strategy_official_price_to_beat || 0);
+  const officialSource = String(summary?.strategy_official_price_source || "").trim();
   const referenceQuality = String(summary?.strategy_reference_quality || "").trim();
   const referenceComparable = Boolean(summary?.strategy_reference_comparable);
   const referenceNote = String(summary?.strategy_reference_note || "").trim();
@@ -970,6 +989,7 @@ function currentSpotInfo(summary) {
     anchor,
     localAnchor,
     officialBeat,
+    officialSource: officialSource || "bot-state-current-slug",
     polymarketCurrent,
     fallbackCurrent,
     anchorSource: anchorSource || "-",
@@ -1008,13 +1028,17 @@ function snapshotTiming(summary) {
   const nowMs = Date.now();
   const backendDate = summary?.timestamp_utc ? new Date(summary.timestamp_utc) : null;
   const backendMs = backendDate && !Number.isNaN(backendDate.getTime()) ? backendDate.getTime() : 0;
-  const strategyMs = Number(summary?.strategy_last_updated_at || 0) > 0 ? Number(summary.strategy_last_updated_at) * 1000 : 0;
-  const liveBalanceMs = Number(summary?.live_balance_updated_at || 0) > 0 ? Number(summary.live_balance_updated_at) * 1000 : 0;
+  const strategyTs = Number(summary?.strategy_last_updated_at || 0);
+  const liveBalanceTs = Number(summary?.live_balance_updated_at || 0);
+  const strategyMs = strategyTs > 0 ? strategyTs * 1000 : 0;
+  const liveBalanceMs = liveBalanceTs > 0 ? liveBalanceTs * 1000 : 0;
   return {
     backendText: backendMs > 0 ? isoText(summary.timestamp_utc) : new Date().toISOString().replace(".000Z", "Z"),
     backendAgeSeconds: backendMs > 0 ? Math.max((nowMs - backendMs) / 1000, 0) : 0,
     strategyAgeSeconds: strategyMs > 0 ? Math.max((nowMs - strategyMs) / 1000, 0) : 0,
     liveBalanceAgeSeconds: liveBalanceMs > 0 ? Math.max((nowMs - liveBalanceMs) / 1000, 0) : 0,
+    hasStrategySnapshot: strategyTs > 0,
+    hasLiveBalanceSnapshot: liveBalanceTs > 0,
   };
 }
 
@@ -1080,7 +1104,7 @@ function applyLocalModeLabels() {
   document.getElementById("heroTriggerLabel").textContent = "Tiempo de ventana";
   document.getElementById("heroFeedLabel").textContent = "Salud del feed";
   document.getElementById("pnlLabel").textContent = "Ganancia / pérdida total";
-  document.getElementById("liveCashLabel").textContent = "Capital total del simulador";
+  document.getElementById("liveCashLabel").textContent = "Equity estimada del simulador";
   document.getElementById("pendingSignalsLabel").textContent = "Siguientes compras";
   document.getElementById("strategyModeLabel").textContent = "Estado ahora";
   document.getElementById("positionsCurrentTitle").textContent = "Patas abiertas";
@@ -1519,6 +1543,16 @@ function paintSummary(summary, items = lastPositions) {
   const windowState = friendlyWindowState(summary);
   const timingInfo = windowTiming(summary);
   const snapshotInfo = snapshotTiming(summary);
+  const liveBalanceStale = !isPublicRuntime() && isMetricSnapshotStale(
+    snapshotInfo.liveBalanceAgeSeconds,
+    snapshotInfo.hasLiveBalanceSnapshot,
+    LIVE_BALANCE_STALE_SECONDS
+  );
+  const strategySnapshotStale = !isPublicRuntime() && isMetricSnapshotStale(
+    snapshotInfo.strategyAgeSeconds,
+    snapshotInfo.hasStrategySnapshot,
+    STRATEGY_STALE_SECONDS
+  );
   const currentWindowExposure = Number(summary.strategy_current_market_total_exposure ?? buckets.currentSummary.exposure ?? 0);
   const totalExposure = Number(summary.exposure ?? buckets.totalExposure ?? 0);
   const totalExposureMark = Number(summary.exposure_mark ?? totalExposure);
@@ -1567,16 +1601,28 @@ function paintSummary(summary, items = lastPositions) {
   const liveEquityEstimate = Number(summary.live_equity_estimate ?? summary.live_total_capital ?? liveCashBalance);
   const liveBalanceUpdatedAt = Number(summary.live_balance_updated_at ?? 0);
   const liveSnapshotText = liveBalanceUpdatedAt > 0 ? tsToIso(liveBalanceUpdatedAt) : "sin snapshot";
-  document.getElementById("liveCashBalance").textContent = isPublicRuntime() ? "-" : fmtUsdPlain(liveEquityEstimate, 2);
+  toggleClosestClass("liveCashBalance", ".card", "is-stale", liveBalanceStale);
+  toggleClosestClass("heroCashBalance", ".hero-inline-card", "is-stale", liveBalanceStale);
+  document.getElementById("liveCashBalance").textContent = isPublicRuntime()
+    ? "-"
+    : liveBalanceStale
+    ? "-"
+    : fmtUsdPlain(liveEquityEstimate, 2);
   document.getElementById("liveCashMeta").textContent = isPublicRuntime()
     ? "requiere backend del NAS para caja, capital y estado reales"
-    : `disponible ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
+    : liveBalanceStale
+    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); ocultando equity, caja y operable`
+    : `equity = caja + MTM | operable ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
   document.getElementById("heroCashBalance").textContent = isPublicRuntime()
     ? fmtUsdPlain(totalExposure, 2)
+    : liveBalanceStale
+    ? "-"
     : fmtUsdPlain(liveAvailableToTrade, 2);
   document.getElementById("heroCashMeta").textContent = isPublicRuntime()
     ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones visibles | wallet ${shortWallet(watchedWallet)}`
-    : `capital total ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
+    : liveBalanceStale
+    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); capital operativo oculto`
+    : `operable = min(caja, allowance) | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
@@ -1678,6 +1724,12 @@ function paintSummary(summary, items = lastPositions) {
       ? `public api fallback (${watchedWallet})`
       : `public api mode (${watchedWallet})`;
   document.getElementById("lastUpdated").textContent = `Ultima actualizacion ${snapshotInfo.backendText} | snapshot ${fmtAgeCompact(snapshotInfo.backendAgeSeconds)} | ${modeText}`;
+  if (!isPublicRuntime() && (strategySnapshotStale || liveBalanceStale)) {
+    document.getElementById("lastUpdated").textContent +=
+      ` | ${strategySnapshotStale ? `motor stale ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}` : ""}` +
+      `${strategySnapshotStale && liveBalanceStale ? " | " : ""}` +
+      `${liveBalanceStale ? `balance stale ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}` : ""}`;
+  }
   document.getElementById("headerTimestamp").textContent = `snapshot backend ${snapshotInfo.backendText} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)}`;
   if (headerBuildMeta) {
     headerBuildMeta.textContent = `ui ${UI_BUILD} | api ${String(summary?.dashboard_build || "-")}`;
@@ -1778,7 +1830,7 @@ function paintLabOverview(summary) {
       : "Ancla propia (sin oficial)";
   const beatMeta =
     spotInfo.beatKind === "official"
-      ? `beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}`
+      ? `beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}${spotInfo.officialSource === "public-gamma" ? " (Gamma publica)" : " (snapshot slug actual)"}`
       : spotInfo.beatKind === "rtds-derived"
       ? `beat RTDS ${fmtBtcPrice(spotInfo.anchor)}`
       : spotInfo.hasAnchor
