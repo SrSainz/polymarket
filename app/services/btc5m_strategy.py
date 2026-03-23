@@ -4652,8 +4652,12 @@ class BTC5mStrategyService:
             snapshot_state.setdefault("strategy_market_slug", str(market.get("slug") or ""))
             snapshot_state.setdefault("strategy_market_title", str(market.get("question") or market.get("slug") or ""))
         else:
-            snapshot_state.setdefault("strategy_market_slug", "")
-            snapshot_state.setdefault("strategy_market_title", "")
+            current_slug = str(self.db.get_bot_state("strategy_market_slug") or "").strip()
+            if not current_slug:
+                now_ts = int(time.time())
+                current_slug = f"btc-updown-5m-{now_ts - (now_ts % 300)}"
+            snapshot_state.setdefault("strategy_market_slug", current_slug)
+            snapshot_state.setdefault("strategy_market_title", str(self.db.get_bot_state("strategy_market_title") or ""))
         if opportunity is not None:
             snapshot_state.setdefault("strategy_target_outcome", opportunity.target.label)
             snapshot_state.setdefault("strategy_target_price", f"{opportunity.target.best_ask:.6f}")
@@ -4667,7 +4671,10 @@ class BTC5mStrategyService:
         if official_price_to_beat > 0:
             snapshot_state["strategy_official_price_to_beat"] = f"{official_price_to_beat:.6f}"
         else:
-            snapshot_state.setdefault("strategy_official_price_to_beat", "0.000000")
+            snapshot_state.setdefault(
+                "strategy_official_price_to_beat",
+                str(self.db.get_bot_state("strategy_official_price_to_beat") or "0.000000"),
+            )
         self._snapshot_microstructure_state(market=market, note=note)
         operability_state = self._derive_strategy_operability_state(note=note, extra_state=snapshot_state)
         self.db.set_bot_state("strategy_mode", self.settings.config.strategy_mode)

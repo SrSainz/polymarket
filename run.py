@@ -68,7 +68,7 @@ def build_core_context(root_dir: Path, *, runtime_mode: str = "paper") -> tuple[
     settings = _settings_for_runtime_mode(settings, runtime_mode=runtime_mode)
     db = Database(settings.paths.db_path)
     db.init_schema()
-    _record_runtime_metadata(db, settings)
+    _record_runtime_metadata(db, settings, runtime_mode=runtime_mode)
     return settings, db
 
 
@@ -142,10 +142,11 @@ def build_context(root_dir: Path, *, runtime_mode: str = "paper") -> tuple[AppSe
     return settings, db, strategy_service, report_service
 
 
-def _record_runtime_metadata(db: Database, settings: AppSettings) -> None:
+def _record_runtime_metadata(db: Database, settings: AppSettings, *, runtime_mode: str) -> None:
     db.set_bot_state("strategy_variant", settings.config.strategy_variant)
     db.set_bot_state("strategy_notes", settings.config.strategy_notes)
     db.set_bot_state("strategy_incubation_stage", settings.config.incubation_stage)
+    db.set_bot_state("strategy_runtime_mode", str(runtime_mode or "paper").strip().lower() or "paper")
     db.set_bot_state("live_control_default_state", settings.config.live_control_default_state)
     db.set_bot_state(
         "telegram_status_summary_enabled",
