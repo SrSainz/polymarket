@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-compare-reset1";
+const UI_BUILD = "2026-03-23-compare-audit2";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -444,6 +444,21 @@ function compareGapLeaderLabel(value, positiveLabel, negativeLabel, unit = "") {
   return `shadow ${negativeLabel}${unit ? ` ${unit}` : ""}`;
 }
 
+function compareOperabilityLabel(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "sin bloqueo dominante";
+  if (raw === "waiting_book") return "shadow se queda en waiting_book";
+  if (raw === "waiting_edge") return "shadow espera edge";
+  if (raw === "waiting_budget") return "shadow espera presupuesto";
+  if (raw === "degraded_reference") return "shadow bloqueado por referencia";
+  if (raw === "waiting_time") return "shadow espera ventana";
+  return `shadow ${raw}`;
+}
+
+function compareParticipationLabel(historySummary) {
+  return `paper ${fmtPct(Number(historySummary?.paper_participation_pct || 0), 1)} / shadow ${fmtPct(Number(historySummary?.shadow_participation_pct || 0), 1)}`;
+}
+
 function shortCompareWindow(point) {
   const slug = String(point?.slug || "").trim();
   const title = String(point?.title || "").trim();
@@ -643,6 +658,8 @@ function paintRuntimeCompare(summary) {
   const trendPaperSeries = useSampleFallback ? sampleSeries.paper : paperSeries;
   const trendShadowSeries = useSampleFallback ? sampleSeries.shadow : shadowSeries;
   const trendValueKey = useSampleFallback ? "open_total_notional" : "cumulative_realized_pnl";
+  const comparableCount = Number(historySummary.shared_window_count || 0);
+  const totalPointCount = Number(historySummary.point_count || historyPoints.length || 0);
 
   meta.textContent =
     status === "shared"
@@ -661,45 +678,38 @@ function paintRuntimeCompare(summary) {
   ratioNowMeta.textContent = `shadow ${compareRatioLabel(shadow?.current_up_ratio)} | objetivo ${compareRatioLabel(shadow?.desired_up_ratio)}`;
 
   if (hasClosedHistory) {
-    paperPnl.textContent = fmtUsd(Number(historySummary.paper_total_realized_pnl || 0), 2);
-    shadowPnl.textContent = fmtUsd(Number(historySummary.shadow_total_realized_pnl || 0), 2);
-    gapPnl.textContent = fmtUsd(Number(historySummary.cumulative_pnl_gap || 0), 2);
-    gapActivity.textContent = compareGapLeaderLabel(
-      Number(historySummary.filled_orders_gap || 0),
-      `+${Math.abs(Number(historySummary.filled_orders_gap || 0))} fills`,
-      `+${Math.abs(Number(historySummary.filled_orders_gap || 0))} fills`,
-    );
-    paperMeta.textContent = `${Number(historySummary.paper_window_count || 0)} ventanas | media ${fmtUsdPlain(Number(historySummary.paper_avg_deployed_notional || 0), 2)} por ventana`;
-    shadowMeta.textContent = `${Number(historySummary.shadow_window_count || 0)} ventanas | media ${fmtUsdPlain(Number(historySummary.shadow_avg_deployed_notional || 0), 2)} por ventana`;
-    gapPnlMeta.textContent = `${Number(historySummary.shared_window_count || 0)} comparables | ${compareGapLeaderLabel(Number(historySummary.cumulative_pnl_gap || 0), "por delante", "por delante")}`;
+    paperPnl.textContent = fmtUsd(Number(historySummary.paper_comparable_realized_pnl || 0), 2);
+    shadowPnl.textContent = fmtUsd(Number(historySummary.shadow_comparable_realized_pnl || 0), 2);
+    gapPnl.textContent = fmtUsd(Number(historySummary.comparable_pnl_gap || 0), 2);
+    gapActivity.textContent = compareParticipationLabel(historySummary);
+    paperMeta.textContent = `${comparableCount} comparables | total runtime ${fmtUsdPlain(Number(historySummary.paper_total_realized_pnl || 0), 2)} en ${Number(historySummary.paper_window_count || 0)} ventanas`;
+    shadowMeta.textContent = `${comparableCount} comparables | total runtime ${fmtUsdPlain(Number(historySummary.shadow_total_realized_pnl || 0), 2)} en ${Number(historySummary.shadow_window_count || 0)} ventanas`;
+    gapPnlMeta.textContent = `${comparableCount} comparables | gap total ${fmtUsdPlain(Number(historySummary.total_pnl_gap || 0), 2)} fuera de comparables`;
     gapActivityMeta.textContent =
-      `despliegue medio ${fmtUsdPlain(Number(historySummary.paper_avg_deployed_notional || 0), 2)} paper / ${fmtUsdPlain(Number(historySummary.shadow_avg_deployed_notional || 0), 2)} shadow`;
-    paperChartMeta.textContent = `${paperSeries.length} ventanas recientes | ${fmtUsd(Number(historySummary.paper_total_deployed_notional || 0), 2)} desplegados`;
-    shadowChartMeta.textContent = `${shadowSeries.length} ventanas recientes | ${fmtUsd(Number(historySummary.shadow_total_deployed_notional || 0), 2)} desplegados`;
+      `${comparableCount}/${totalPointCount} compartidas | ${compareOperabilityLabel(sampleSummary?.shadow_dominant_operability_state)}${Number(sampleSummary?.shadow_dominant_operability_count || 0) > 0 ? ` (${fmtPct(Number(sampleSummary?.shadow_dominant_operability_pct || 0), 0)})` : ""}`;
+    paperChartMeta.textContent = `${paperSeries.length} ventanas recientes | total runtime ${fmtUsd(Number(historySummary.paper_total_deployed_notional || 0), 2)} desplegados`;
+    shadowChartMeta.textContent = `${shadowSeries.length} ventanas recientes | total runtime ${fmtUsd(Number(historySummary.shadow_total_deployed_notional || 0), 2)} desplegados`;
     deltaList.innerHTML = renderCompareDeltaItems(history);
-    windowCount.textContent = `${Number(historySummary.shared_window_count || 0)} comparables`;
+    windowCount.textContent = `${comparableCount} comparables`;
   } else {
     const paperRealized = Number(paper?.total_realized_pnl || 0);
     const shadowRealized = Number(shadow?.total_realized_pnl || 0);
-    const activityGap = Number(paper?.open_execution_count || 0) - Number(shadow?.open_execution_count || 0);
     const paperHasClosed = Number(paper?.closed_window_count || 0) > 0;
     const shadowHasClosed = Number(shadow?.closed_window_count || 0) > 0;
-    const hasComparableClosed = paperHasClosed || shadowHasClosed;
-    paperPnl.textContent = fmtUsdMaybe(paperRealized, paperHasClosed, 2);
-    shadowPnl.textContent = fmtUsdMaybe(shadowRealized, shadowHasClosed, 2);
-    gapPnl.textContent = hasComparableClosed ? fmtUsd(paperRealized - shadowRealized, 2) : "sin cierres";
-    gapActivity.textContent = compareGapLeaderLabel(
-      activityGap,
-      `+${Math.abs(activityGap)} aperturas`,
-      `+${Math.abs(activityGap)} aperturas`,
-    );
-    paperMeta.textContent = `${Number(paper?.closed_window_count || 0)} cierres | ${fmtUsdPlain(Number(paper?.historical_deployed_notional || 0), 2)} historicos`;
-    shadowMeta.textContent = `${Number(shadow?.closed_window_count || 0)} cierres | ${fmtUsdPlain(Number(shadow?.historical_deployed_notional || 0), 2)} historicos`;
+    paperPnl.textContent = "sin cierres";
+    shadowPnl.textContent = "sin cierres";
+    gapPnl.textContent = "sin cierres";
+    gapActivity.textContent = useSampleFallback
+      ? `paper ${Number(sampleSummary?.paper_sample_count || 0)} / shadow ${Number(sampleSummary?.shadow_sample_count || 0)} muestras`
+      : "sin historial";
+    paperMeta.textContent = `${Number(paper?.closed_window_count || 0)} cierres | total runtime ${fmtUsdPlain(paperRealized, 2)} / ${fmtUsdPlain(Number(paper?.historical_deployed_notional || 0), 2)} historicos`;
+    shadowMeta.textContent = `${Number(shadow?.closed_window_count || 0)} cierres | total runtime ${fmtUsdPlain(shadowRealized, 2)} / ${fmtUsdPlain(Number(shadow?.historical_deployed_notional || 0), 2)} historicos`;
     gapPnlMeta.textContent = useSampleFallback
-      ? `${Math.max(sampleSeries.paper.length, sampleSeries.shadow.length)} muestras recientes | foto actual comparable`
+      ? `${Math.max(sampleSeries.paper.length, sampleSeries.shadow.length)} muestras recientes | aun no hay cierres compartidos`
       : "misma ventana, aun sin cierres comparables";
-    gapActivityMeta.textContent =
-      `aperturas actuales ${Number(paper?.open_execution_count || 0)} paper / ${Number(shadow?.open_execution_count || 0)} shadow`;
+    gapActivityMeta.textContent = useSampleFallback
+      ? `${Math.max(sampleSeries.paper.length, sampleSeries.shadow.length)} muestras | ${compareOperabilityLabel(sampleSummary?.shadow_dominant_operability_state)}${Number(sampleSummary?.shadow_dominant_operability_count || 0) > 0 ? ` (${fmtPct(Number(sampleSummary?.shadow_dominant_operability_pct || 0), 0)})` : ""}`
+      : `aperturas actuales ${Number(paper?.open_execution_count || 0)} paper / ${Number(shadow?.open_execution_count || 0)} shadow`;
     paperChartMeta.textContent = useSampleFallback
       ? `${sampleSeries.paper.length} muestras recientes | despliegue actual ${fmtUsdPlain(Number(sampleSummary?.paper_latest_notional || 0), 2)}`
       : "sin historial ni muestras recientes";

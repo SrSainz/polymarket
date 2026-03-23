@@ -8,7 +8,9 @@ from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.services.dashboard_server import (
+    _allowed_cors_origin,
     _apply_live_control_action,
+    _destructive_request_allowed,
     _latency_payload,
     _liquidations_payload,
     _metrics_payload,
@@ -607,11 +609,21 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert history["summary"]["paper_window_count"] == 2
     assert history["summary"]["shadow_window_count"] == 2
     assert history["summary"]["shared_window_count"] == 1
+    assert history["summary"]["point_count"] == 3
+    assert history["summary"]["paper_comparable_realized_pnl"] == 4.2
+    assert history["summary"]["shadow_comparable_realized_pnl"] == 1.1
+    assert history["summary"]["comparable_pnl_gap"] == 3.1
+    assert history["summary"]["paper_comparable_filled_orders"] == 6
+    assert history["summary"]["shadow_comparable_filled_orders"] == 2
+    assert history["summary"]["comparable_filled_orders_gap"] == 4
     assert history["summary"]["paper_total_realized_pnl"] == 6.7
     assert history["summary"]["shadow_total_realized_pnl"] == 0.85
+    assert history["summary"]["total_pnl_gap"] == 5.85
     assert history["summary"]["cumulative_pnl_gap"] == 5.85
     assert history["summary"]["paper_total_filled_orders"] == 10
     assert history["summary"]["shadow_total_filled_orders"] == 3
+    assert history["sample_summary"]["shadow_dominant_operability_state"] == "ready"
+    assert history["sample_summary"]["shadow_dominant_operability_pct"] == 100.0
     assert any(
         item["slug"] == "btc-updown-5m-paper-only" and item["shadow_status"] == "missing"
         for item in history["points"]
@@ -738,6 +750,8 @@ def test_summary_payload_exposes_compare_snapshot_series_without_closed_history(
     assert history["sample_available"] is True
     assert history["sample_summary"]["paper_latest_notional"] == 4.1
     assert history["sample_summary"]["shadow_latest_notional"] == 1.45
+    assert history["sample_summary"]["shadow_dominant_operability_state"] == "waiting_book"
+    assert history["sample_summary"]["shadow_dominant_operability_pct"] == 100.0
     assert len(history["sample_series"]["paper"]) == 1
     assert len(history["sample_series"]["shadow"]) == 1
     assert compare["paper"]["closed_window_count"] == 0
@@ -1107,6 +1121,30 @@ def test_reset_compare_state_clears_paper_shadow_and_compare_db(tmp_path: Path) 
         assert db.get_bot_state("strategy_market_slug") is None
         assert db.get_bot_state("runtime_guard_state") is None
         db.close()
+
+
+def test_allowed_cors_origin_accepts_same_site_and_blocks_foreign() -> None:
+    assert _allowed_cors_origin("https://polysainz.com", "nas.polysainz.com:8765") == "https://polysainz.com"
+    assert _allowed_cors_origin("https://nas.polysainz.com", "nas.polysainz.com:8765") == "https://nas.polysainz.com"
+    assert _allowed_cors_origin("https://evil.example", "nas.polysainz.com:8765") == ""
+
+
+def test_destructive_request_allowed_requires_private_client_or_same_site_origin() -> None:
+    assert _destructive_request_allowed(
+        client_host="127.0.0.1",
+        origin="",
+        host_header="nas.polysainz.com:8765",
+    ) is True
+    assert _destructive_request_allowed(
+        client_host="203.0.113.10",
+        origin="https://polysainz.com",
+        host_header="nas.polysainz.com:8765",
+    ) is True
+    assert _destructive_request_allowed(
+        client_host="203.0.113.10",
+        origin="https://evil.example",
+        host_header="nas.polysainz.com:8765",
+    ) is False
 
 
 def test_dashboard_payloads_expose_microstructure_runtime_files(tmp_path: Path) -> None:

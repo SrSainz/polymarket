@@ -450,13 +450,23 @@ def _empty_compare_history(*, limit: int) -> dict:
         "series": {"paper": [], "shadow": []},
         "points": [],
         "summary": {
+            "point_count": 0,
             "paper_window_count": 0,
             "shadow_window_count": 0,
             "shared_window_count": 0,
             "paper_participation_pct": 0.0,
             "shadow_participation_pct": 0.0,
+            "paper_comparable_realized_pnl": 0.0,
+            "shadow_comparable_realized_pnl": 0.0,
+            "comparable_pnl_gap": 0.0,
+            "paper_comparable_deployed_notional": 0.0,
+            "shadow_comparable_deployed_notional": 0.0,
+            "paper_comparable_filled_orders": 0,
+            "shadow_comparable_filled_orders": 0,
+            "comparable_filled_orders_gap": 0,
             "paper_total_realized_pnl": 0.0,
             "shadow_total_realized_pnl": 0.0,
+            "total_pnl_gap": 0.0,
             "cumulative_pnl_gap": 0.0,
             "paper_total_deployed_notional": 0.0,
             "shadow_total_deployed_notional": 0.0,
@@ -521,6 +531,12 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
     paper_window_count = 0
     shadow_window_count = 0
     shared_window_count = 0
+    paper_comparable_realized_pnl = 0.0
+    shadow_comparable_realized_pnl = 0.0
+    paper_comparable_deployed_notional = 0.0
+    shadow_comparable_deployed_notional = 0.0
+    paper_comparable_filled_orders = 0
+    shadow_comparable_filled_orders = 0
     paper_total_realized_pnl = 0.0
     shadow_total_realized_pnl = 0.0
     paper_total_deployed_notional = 0.0
@@ -536,8 +552,6 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
             paper_window_count += 1
         if shadow_present:
             shadow_window_count += 1
-        if paper_present and shadow_present:
-            shared_window_count += 1
 
         paper_realized_pnl = float(item["paper_realized_pnl"] or 0.0)
         shadow_realized_pnl = float(item["shadow_realized_pnl"] or 0.0)
@@ -545,6 +559,15 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
         shadow_deployed_notional = float(item["shadow_deployed_notional"] or 0.0)
         paper_filled_orders = int(item["paper_filled_orders"] or 0)
         shadow_filled_orders = int(item["shadow_filled_orders"] or 0)
+
+        if paper_present and shadow_present:
+            shared_window_count += 1
+            paper_comparable_realized_pnl += paper_realized_pnl
+            shadow_comparable_realized_pnl += shadow_realized_pnl
+            paper_comparable_deployed_notional += paper_deployed_notional
+            shadow_comparable_deployed_notional += shadow_deployed_notional
+            paper_comparable_filled_orders += paper_filled_orders
+            shadow_comparable_filled_orders += shadow_filled_orders
 
         paper_total_realized_pnl += paper_realized_pnl
         shadow_total_realized_pnl += shadow_realized_pnl
@@ -587,13 +610,23 @@ def _build_compare_history(*, data_dir: Path, limit: int) -> dict:
         "series": series,
         "points": points,
         "summary": {
+            "point_count": int(point_count),
             "paper_window_count": int(paper_window_count),
             "shadow_window_count": int(shadow_window_count),
             "shared_window_count": int(shared_window_count),
             "paper_participation_pct": round(paper_participation_pct, 2),
             "shadow_participation_pct": round(shadow_participation_pct, 2),
+            "paper_comparable_realized_pnl": round(paper_comparable_realized_pnl, 4),
+            "shadow_comparable_realized_pnl": round(shadow_comparable_realized_pnl, 4),
+            "comparable_pnl_gap": round(paper_comparable_realized_pnl - shadow_comparable_realized_pnl, 4),
+            "paper_comparable_deployed_notional": round(paper_comparable_deployed_notional, 4),
+            "shadow_comparable_deployed_notional": round(shadow_comparable_deployed_notional, 4),
+            "paper_comparable_filled_orders": int(paper_comparable_filled_orders),
+            "shadow_comparable_filled_orders": int(shadow_comparable_filled_orders),
+            "comparable_filled_orders_gap": int(paper_comparable_filled_orders - shadow_comparable_filled_orders),
             "paper_total_realized_pnl": round(paper_total_realized_pnl, 4),
             "shadow_total_realized_pnl": round(shadow_total_realized_pnl, 4),
+            "total_pnl_gap": round(paper_total_realized_pnl - shadow_total_realized_pnl, 4),
             "cumulative_pnl_gap": round(paper_total_realized_pnl - shadow_total_realized_pnl, 4),
             "paper_total_deployed_notional": round(paper_total_deployed_notional, 4),
             "shadow_total_deployed_notional": round(shadow_total_deployed_notional, 4),
@@ -713,6 +746,8 @@ def _read_compare_samples(*, compare_db_path: Path, limit: int) -> dict:
     shadow_latest_notional = float(shadow_latest.get("open_total_notional") or 0.0)
     paper_latest_exposure = float(paper_latest.get("exposure") or 0.0)
     shadow_latest_exposure = float(shadow_latest.get("exposure") or 0.0)
+    paper_state, paper_state_count, paper_state_pct = _dominant_operability_state(paper_series)
+    shadow_state, shadow_state_count, shadow_state_pct = _dominant_operability_state(shadow_series)
 
     return {
         "available": True,
@@ -727,8 +762,28 @@ def _read_compare_samples(*, compare_db_path: Path, limit: int) -> dict:
             "paper_latest_exposure": round(paper_latest_exposure, 4),
             "shadow_latest_exposure": round(shadow_latest_exposure, 4),
             "exposure_gap": round(paper_latest_exposure - shadow_latest_exposure, 4),
+            "paper_dominant_operability_state": paper_state,
+            "paper_dominant_operability_count": int(paper_state_count),
+            "paper_dominant_operability_pct": round(paper_state_pct, 2),
+            "shadow_dominant_operability_state": shadow_state,
+            "shadow_dominant_operability_count": int(shadow_state_count),
+            "shadow_dominant_operability_pct": round(shadow_state_pct, 2),
         },
     }
+
+
+def _dominant_operability_state(series: list[dict]) -> tuple[str, int, float]:
+    counts: dict[str, int] = {}
+    for item in series:
+        state = str(item.get("operability_state") or "").strip()
+        if not state:
+            continue
+        counts[state] = counts.get(state, 0) + 1
+    if not counts:
+        return "", 0, 0.0
+    state, count = max(counts.items(), key=lambda item: (item[1], item[0]))
+    pct = (count / len(series)) * 100 if series else 0.0
+    return state, count, pct
 
 
 def _write_compare_db(*, compare_db_path: Path, generated_at: int, snapshots: dict[str, dict], history: dict) -> None:

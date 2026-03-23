@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -31,7 +32,15 @@ from app.services.runtime_compare_db import build_runtime_compare_payload
 
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
-_DASHBOARD_BUILD = "2026-03-23-compare-reset1"
+_DASHBOARD_BUILD = "2026-03-23-compare-audit2"
+_PRIVATE_IPV4_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+_PRIVATE_IPV6_NETWORKS = (
+    ipaddress.ip_network("fc00::/7"),
+)
 _RUNTIME_RESET_TABLES = [
     "source_positions_current",
     "source_positions_history",
@@ -48,6 +57,82 @@ _RUNTIME_RESET_TABLES = [
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
+
+
+def _normalized_origin(origin: str) -> str:
+    parsed = urlparse(str(origin or "").strip())
+    scheme = str(parsed.scheme or "").lower()
+    host = str(parsed.hostname or "").strip().lower()
+    if scheme not in {"http", "https"} or not host:
+        return ""
+    default_port = 443 if scheme == "https" else 80
+    if parsed.port and parsed.port != default_port:
+        return f"{scheme}://{host}:{parsed.port}"
+    return f"{scheme}://{host}"
+
+
+def _host_from_header(host_header: str) -> str:
+    parsed = urlparse(f"//{str(host_header or '').strip()}")
+    return str(parsed.hostname or "").strip().lower()
+
+
+def _is_private_or_loopback_address(address: str) -> bool:
+    raw = str(address or "").strip()
+    if not raw:
+        return False
+    try:
+        ip = ipaddress.ip_address(raw.split("%", 1)[0])
+    except ValueError:
+        return False
+    if ip.is_loopback or ip.is_link_local:
+        return True
+    if isinstance(ip, ipaddress.IPv4Address):
+        return any(ip in network for network in _PRIVATE_IPV4_NETWORKS)
+    return any(ip in network for network in _PRIVATE_IPV6_NETWORKS)
+
+
+def _same_site_host(left: str, right: str) -> bool:
+    left_host = str(left or "").strip().lower()
+    right_host = str(right or "").strip().lower()
+    if not left_host or not right_host:
+        return False
+    if left_host == right_host:
+        return True
+    if left_host == "localhost" and _is_private_or_loopback_address(right_host):
+        return True
+    if right_host == "localhost" and _is_private_or_loopback_address(left_host):
+        return True
+    try:
+        left_ip = ipaddress.ip_address(left_host)
+        right_ip = ipaddress.ip_address(right_host)
+        return bool(
+            _is_private_or_loopback_address(str(left_ip))
+            and _is_private_or_loopback_address(str(right_ip))
+        )
+    except ValueError:
+        pass
+    left_parts = [part for part in left_host.split(".") if part]
+    right_parts = [part for part in right_host.split(".") if part]
+    if len(left_parts) < 2 or len(right_parts) < 2:
+        return False
+    return left_parts[-2:] == right_parts[-2:]
+
+
+def _allowed_cors_origin(origin: str, host_header: str) -> str:
+    normalized_origin = _normalized_origin(origin)
+    if not normalized_origin:
+        return ""
+    origin_host = str(urlparse(normalized_origin).hostname or "").strip().lower()
+    request_host = _host_from_header(host_header)
+    if request_host and _same_site_host(origin_host, request_host):
+        return normalized_origin
+    if not request_host and (origin_host == "localhost" or _is_private_or_loopback_address(origin_host)):
+        return normalized_origin
+    return ""
+
+
+def _destructive_request_allowed(*, client_host: str, origin: str, host_header: str) -> bool:
+    return _is_private_or_loopback_address(client_host) or bool(_allowed_cors_origin(origin, host_header))
 
 
 def run_dashboard_server(
@@ -82,10 +167,12 @@ def _build_handler(
         def do_OPTIONS(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             if parsed.path.startswith("/api/"):
+                cors_origin = self._cors_origin()
+                if not cors_origin:
+                    self.send_error(HTTPStatus.FORBIDDEN, "Origin not allowed")
+                    return
                 self.send_response(HTTPStatus.NO_CONTENT)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+                self._send_cors_headers(cors_origin)
                 self.end_headers()
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
@@ -144,6 +231,8 @@ def _build_handler(
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             if parsed.path == "/api/reset":
+                if not self._allow_destructive_post():
+                    return
                 payload = self._read_json_body()
                 if str(payload.get("confirm") or "").strip().lower() != "reset":
                     self._json(
@@ -155,6 +244,8 @@ def _build_handler(
                 self._json(result)
                 return
             if parsed.path == "/api/reset-compare":
+                if not self._allow_destructive_post():
+                    return
                 payload = self._read_json_body()
                 if str(payload.get("confirm") or "").strip().lower() != "reset-compare":
                     self._json(
@@ -170,6 +261,8 @@ def _build_handler(
                 self._json(result)
                 return
             if parsed.path == "/api/live-control":
+                if not self._allow_destructive_post():
+                    return
                 payload = self._read_json_body()
                 try:
                     result = _apply_live_control_action(
@@ -204,9 +297,9 @@ def _build_handler(
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            cors_origin = self._cors_origin()
+            if cors_origin:
+                self._send_cors_headers(cors_origin)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -236,6 +329,35 @@ def _build_handler(
             except (UnicodeDecodeError, json.JSONDecodeError):
                 return {}
             return {}
+
+        def _cors_origin(self) -> str:
+            return _allowed_cors_origin(
+                self.headers.get("Origin", ""),
+                self.headers.get("Host", ""),
+            )
+
+        def _send_cors_headers(self, cors_origin: str) -> None:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Vary", "Origin")
+
+        def _allow_destructive_post(self) -> bool:
+            if _destructive_request_allowed(
+                client_host=str(self.client_address[0] if self.client_address else ""),
+                origin=self.headers.get("Origin", ""),
+                host_header=self.headers.get("Host", ""),
+            ):
+                return True
+            self._json(
+                {
+                    "ok": False,
+                    "error": "forbidden",
+                    "hint": "destructive actions are limited to same-site or private-network requests",
+                },
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return False
 
     return DashboardHandler
 
