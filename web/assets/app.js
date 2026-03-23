@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-compare-audit2";
+const UI_BUILD = "2026-03-23-reset-safe1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -2535,7 +2535,7 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
 
   const runtimeLabel = String(lastSummary?.strategy_runtime_mode || "runtime actual").trim() || "runtime actual";
   const accepted = window.confirm(
-    `Esto limpiara el runtime actual (${runtimeLabel}): posiciones, senales, ejecuciones, pnl diario y ventanas de estrategia. No reinicia procesos ni toca otros runtimes. Continuar?`
+    `Esto limpiara el ledger del runtime actual (${runtimeLabel}): posiciones, senales, ejecuciones, pnl diario y ventanas de estrategia. Mantiene el mercado y la referencia actual para que pueda seguir operando. No reinicia procesos ni toca otros runtimes. Continuar?`
   );
   if (!accepted) return;
 
@@ -2551,7 +2551,7 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
     const windows = Number(deleted.strategy_windows || 0);
     const dailyPnl = Number(deleted.daily_pnl || 0);
     document.getElementById("lastUpdated").textContent =
-      `Limpieza de ${runtimeLabel}: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}, ventanas ${windows}, pnl diario ${dailyPnl}.`;
+      `Limpieza de ${runtimeLabel}: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}, ventanas ${windows}, pnl diario ${dailyPnl}. Se mantiene el snapshot actual de mercado/referencia.`;
     await refreshAll();
   } catch (error) {
     document.getElementById("lastUpdated").textContent = `Error al limpiar: ${error.message}`;
@@ -2570,7 +2570,7 @@ document.getElementById("resetCompareBtn").addEventListener("click", async () =>
   }
 
   const accepted = window.confirm(
-    "Esto limpiara paper, shadow y la base comparativa runtime_compare.db. No reinicia procesos ni toca live. Continuar?"
+    "Esto limpiara el ledger de paper, shadow y la base comparativa runtime_compare.db. Mantiene el snapshot actual de mercado/referencia y no toca live. No reinicia procesos. Continuar?"
   );
   if (!accepted) return;
 

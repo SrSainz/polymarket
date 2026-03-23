@@ -32,7 +32,7 @@ from app.services.runtime_compare_db import build_runtime_compare_payload
 
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
-_DASHBOARD_BUILD = "2026-03-23-compare-audit2"
+_DASHBOARD_BUILD = "2026-03-23-reset-safe1"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -49,9 +49,14 @@ _RUNTIME_RESET_TABLES = [
     "executions",
     "daily_pnl",
     "strategy_windows",
-    "selected_wallets",
-    "position_mark_history",
-    "trade_approvals",
+]
+_RUNTIME_RESET_BOT_STATE_PREFIXES = [
+    "runtime_guard_",
+]
+_RUNTIME_RESET_BOT_STATE_KEYS = [
+    "position_ledger_mode",
+    "shadow_last_instruction_at",
+    "shadow_last_instruction",
 ]
 
 
@@ -1590,12 +1595,23 @@ def _reset_runtime_tables(db_path: Path) -> dict[str, int]:
         for table in _RUNTIME_RESET_TABLES:
             count_row = conn.execute(f"SELECT COUNT(*) AS value FROM {table}").fetchone()
             deleted[table] = int(count_row["value"]) if count_row else 0
+        prefix_clauses = " OR ".join("key LIKE ?" for _ in _RUNTIME_RESET_BOT_STATE_PREFIXES)
+        exact_clauses = " OR ".join("key = ?" for _ in _RUNTIME_RESET_BOT_STATE_KEYS)
+        where_parts = [part for part in (prefix_clauses, exact_clauses) if part]
+        where_sql = " OR ".join(where_parts) if where_parts else "0"
+        bot_state_params = [f"{prefix}%" for prefix in _RUNTIME_RESET_BOT_STATE_PREFIXES] + list(
+            _RUNTIME_RESET_BOT_STATE_KEYS
+        )
         bot_state_count = conn.execute(
-            "SELECT COUNT(*) AS value FROM bot_state WHERE key LIKE 'strategy_%' OR key LIKE 'runtime_guard_%'"
+            f"SELECT COUNT(*) AS value FROM bot_state WHERE {where_sql}",
+            tuple(bot_state_params),
         ).fetchone()
-        deleted["bot_state_runtime"] = int(bot_state_count["value"]) if bot_state_count else 0
+        deleted["bot_state_runtime_reset"] = int(bot_state_count["value"]) if bot_state_count else 0
         with conn:
             for table in _RUNTIME_RESET_TABLES:
                 conn.execute(f"DELETE FROM {table}")
-            conn.execute("DELETE FROM bot_state WHERE key LIKE 'strategy_%' OR key LIKE 'runtime_guard_%'")
+            conn.execute(
+                f"DELETE FROM bot_state WHERE {where_sql}",
+                tuple(bot_state_params),
+            )
     return deleted

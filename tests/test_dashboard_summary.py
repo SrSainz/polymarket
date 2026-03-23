@@ -1035,13 +1035,16 @@ def test_summary_payload_filters_strategy_variant_and_exposes_incubation(tmp_pat
     assert summary["strategy_setup_performance"][0]["price_mode"] == "underround"
 
 
-def test_reset_runtime_state_clears_strategy_runtime_keys(tmp_path: Path) -> None:
+def test_reset_runtime_state_keeps_current_strategy_snapshot_and_clears_ledger(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.db"
     db = Database(db_path)
     db.init_schema()
     db.set_bot_state("strategy_market_slug", "btc-updown-5m-stale")
+    db.set_bot_state("strategy_official_price_to_beat", "68123.45")
+    db.set_bot_state("strategy_runtime_mode", "shadow")
     db.set_bot_state("runtime_guard_state", "active")
     db.set_bot_state("live_control_state", "paused")
+    db.set_bot_state("position_ledger_mode", "shadow")
     now_ts = int(time.time())
     with db.conn:
         db.conn.execute(
@@ -1057,12 +1060,15 @@ def test_reset_runtime_state_clears_strategy_runtime_keys(tmp_path: Path) -> Non
 
     result = _reset_runtime_state(db_path)
 
-    assert result["deleted"]["bot_state_runtime"] >= 2
+    assert result["deleted"]["bot_state_runtime_reset"] >= 2
     assert result["deleted"]["strategy_windows"] == 1
     assert result["deleted"]["daily_pnl"] == 1
     db = Database(db_path)
-    assert db.get_bot_state("strategy_market_slug") is None
+    assert db.get_bot_state("strategy_market_slug") == "btc-updown-5m-stale"
+    assert db.get_bot_state("strategy_official_price_to_beat") == "68123.45"
+    assert db.get_bot_state("strategy_runtime_mode") == "shadow"
     assert db.get_bot_state("runtime_guard_state") is None
+    assert db.get_bot_state("position_ledger_mode") is None
     assert db.get_bot_state("live_control_state") == "paused"
     strategy_window_count = db.conn.execute("SELECT COUNT(*) AS value FROM strategy_windows").fetchone()["value"]
     daily_pnl_count = db.conn.execute("SELECT COUNT(*) AS value FROM daily_pnl").fetchone()["value"]
@@ -1118,7 +1124,7 @@ def test_reset_compare_state_clears_paper_shadow_and_compare_db(tmp_path: Path) 
         strategy_window_count = db.conn.execute("SELECT COUNT(*) AS value FROM strategy_windows").fetchone()["value"]
         assert execution_count == 0
         assert strategy_window_count == 0
-        assert db.get_bot_state("strategy_market_slug") is None
+        assert db.get_bot_state("strategy_market_slug") in {"paper-slug", "shadow-slug"}
         assert db.get_bot_state("runtime_guard_state") is None
         db.close()
 
