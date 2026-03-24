@@ -5258,7 +5258,10 @@ class BTC5mStrategyService:
                 and has_chainlink
                 and self.settings.config.btc5m_allow_rtds_anchor_fallback
                 and has_local_anchor
-                and anchor_source_text.startswith("polymarket")
+                and (
+                    anchor_source_text.startswith("polymarket")
+                    or has_captured_chainlink_anchor
+                )
             ):
                 if official_required_live_like and has_captured_chainlink_anchor:
                     return ArbReferenceState(

@@ -4489,6 +4489,40 @@ def test_arb_reference_state_live_like_accepts_captured_chainlink_when_official_
     db.close()
 
 
+def test_arb_reference_state_live_like_accepts_soft_stale_captured_chainlink_when_official_missing(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", btc5m_reference_soft_budget_scale=0.55),
+        logger=logging.getLogger("test-btc5m-live-soft-stale-captured-chainlink"),
+        spot_feed=None,
+    )
+
+    shadow_state = service._arb_reference_state(  # noqa: SLF001
+        mode="shadow",
+        source="polymarket-rtds+binance",
+        age_ms=1281,
+        chainlink_price=70280.98,
+        official_price_to_beat=0.0,
+        local_anchor_price=70280.98,
+        anchor_source="captured-chainlink",
+    )
+
+    assert shadow_state.comparable is True
+    assert shadow_state.quality == "soft-stale-captured-chainlink"
+    assert "captura Chainlink" in shadow_state.note
+    assert round(shadow_state.budget_scale, 2) == 0.85
+    db.close()
+
+
 def test_arb_reference_state_allows_shadow_fallback_without_labeled_source(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
