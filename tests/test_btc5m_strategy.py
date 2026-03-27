@@ -2272,6 +2272,75 @@ def test_arb_micro_opens_cheap_side_on_soft_positive_delta_with_net_edge(tmp_pat
     db.close()
 
 
+def test_shadow_live_like_blocks_flat_cheap_side_open(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-shadow-cheap-block"
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=85)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Shadow Cheap Block",
+        "slug": slug,
+        "conditionId": "cond-arb-shadow-cheap-block",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.48"}],
+                "asks": [{"price": "0.49", "size": "150"}, {"price": "0.50", "size": "150"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.45"}],
+                "asks": [{"price": "0.52", "size": "150"}, {"price": "0.53", "size": "150"}],
+            },
+        },
+        balance=1000.0,
+    )
+    db.set_bot_state(f"arb_spot_anchor:{slug}", "70000.00000000")
+    spot_feed = _FakeSpotFeed(
+        SpotSnapshot(
+            reference_price=70012.6,
+            lead_price=70012.6,
+            binance_price=70012.6,
+            chainlink_price=None,
+            basis=0.0,
+            source="binance-direct",
+            age_ms=6,
+            connected=True,
+        )
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=1000.0,
+            strategy_trade_allocation_pct=0.05,
+            shadow_live_like_mode=True,
+        ),
+        logger=logging.getLogger("test-btc5m-shadow-cheap-block"),
+        spot_feed=spot_feed,
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="shadow")
+
+    assert stats["filled"] == 0
+    assert db.list_copy_positions() == []
+    assert "cheap-side bloqueado en live-like" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
 def test_arb_micro_skips_soft_delta_when_net_edge_is_too_thin(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

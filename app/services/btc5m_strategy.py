@@ -1925,6 +1925,7 @@ class BTC5mStrategyService:
             return self._with_arb_reference_state(bracket_plan, reference_state)
 
         cheap_side = None
+        cheap_side_block_reason = ""
         if _ARB_ENABLE_CHEAP_SIDE:
             cheap_side = self._select_cheap_side_target(
                 up_outcome=up_outcome,
@@ -1934,6 +1935,15 @@ class BTC5mStrategyService:
                 desired_up_ratio=desired_up_ratio,
                 current_up_ratio=current_up_ratio,
             )
+        if cheap_side is not None:
+            if self._arb_should_block_flat_single_side_open(
+                mode=mode,
+                bracket_phase=bracket_phase,
+                current_up_notional=current_up_notional,
+                current_down_notional=current_down_notional,
+            ):
+                cheap_side_block_reason = "cheap-side bloqueado en live-like: apertura plana requiere dos patas"
+                cheap_side = None
         if cheap_side is not None:
             target = cheap_side.target
             fair_value = cheap_side.fair_value
@@ -2091,6 +2101,7 @@ class BTC5mStrategyService:
         if unwind_plan is not None:
             return self._with_arb_reference_state(unwind_plan, reference_state)
         delta_note = f" | delta {spot_context.delta_bps:+.1f}bps" if spot_context is not None else ""
+        block_note = f" | {cheap_side_block_reason}" if cheap_side_block_reason else ""
         self._record_strategy_snapshot(
             market=market,
             note=(
@@ -2099,7 +2110,7 @@ class BTC5mStrategyService:
                 f"Down edge {edge_down * 100:.2f}% net {self._arb_estimated_single_side_net_edge(target=down_outcome, fair_value=fair_down, pair_sum=pair_sum, delta_bps=spot_context.delta_bps if spot_context is not None else 0.0) * 100:.2f}% | "
                 f"{delta_note.lstrip()}"
                 f"{' | ' if delta_note else ''}objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
-                f"actual {self._arb_ratio_label(up_ratio=current_up_ratio, down_ratio=max(1.0 - current_up_ratio, 0.0))} | fase {bracket_phase}{carry_note}"
+                f"actual {self._arb_ratio_label(up_ratio=current_up_ratio, down_ratio=max(1.0 - current_up_ratio, 0.0))} | fase {bracket_phase}{carry_note}{block_note}"
             ),
             extra_state=self._arb_state_defaults(
                 market=market,
@@ -2803,6 +2814,28 @@ class BTC5mStrategyService:
         if plan.price_mode == "biased-bracket":
             return f"bracket:{plan.primary_target.label}"
         return f"cheap:{plan.primary_target.label}"
+
+    def _arb_is_live_like_mode(self, *, mode: str) -> bool:
+        mode_text = str(mode or "").strip().lower()
+        if mode_text == "live":
+            return True
+        if mode_text == "shadow":
+            return bool(self.settings.config.shadow_live_like_mode)
+        return False
+
+    def _arb_should_block_flat_single_side_open(
+        self,
+        *,
+        mode: str,
+        bracket_phase: str,
+        current_up_notional: float,
+        current_down_notional: float,
+    ) -> bool:
+        if not self._arb_is_live_like_mode(mode=mode):
+            return False
+        if bracket_phase != "abrir":
+            return False
+        return current_up_notional <= 0 and current_down_notional <= 0
 
     def _arb_pair_net_edge(
         self,
