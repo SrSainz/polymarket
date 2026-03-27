@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-27-live-gate4";
+const UI_BUILD = "2026-03-27-live-gate5";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -351,6 +351,8 @@ function comparePriceMeta(snapshot) {
   let beatText = "sin beat oficial";
   if (beat > 0 && beatSource === "public-gamma") {
     beatText = `beat ${fmtBtcPrice(beat)} (Gamma publica)`;
+  } else if (beat > 0 && beatSource === "public-web") {
+    beatText = `beat ${fmtBtcPrice(beat)} (web publica Polymarket)`;
   } else if (beat > 0 && beatSource.startsWith("captured-chainlink")) {
     beatText = `beat ${fmtBtcPrice(beat)} (captura Chainlink)`;
   } else if (beat > 0 && beatSource === "bot-state-current-slug") {
@@ -2010,7 +2012,13 @@ function paintLabOverview(summary) {
       : "Ancla propia (sin oficial)";
   const beatMeta =
     spotInfo.beatKind === "official"
-      ? `beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}${spotInfo.officialSource === "public-gamma" ? " (Gamma publica)" : " (snapshot del bot)"}`
+      ? `beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}${
+          spotInfo.officialSource === "public-gamma"
+            ? " (Gamma publica)"
+            : spotInfo.officialSource === "public-web"
+            ? " (web publica Polymarket)"
+            : " (snapshot del bot)"
+        }`
       : spotInfo.beatKind === "captured-chainlink"
       ? `captura Chainlink propia ${fmtBtcPrice(spotInfo.capturedBeat || spotInfo.effectiveBeat)}`
       : spotInfo.beatKind === "rtds-derived"

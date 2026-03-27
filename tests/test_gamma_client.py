@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -10,6 +11,7 @@ class _FakeResponse:
     def __init__(self, payload: Any, *, status_code: int = 200) -> None:
         self._payload = payload
         self.status_code = status_code
+        self.text = payload if isinstance(payload, str) else json.dumps(payload)
 
     def json(self) -> Any:
         return self._payload
@@ -27,7 +29,13 @@ class _FakeSession:
     def mount(self, *_args, **_kwargs) -> None:
         return
 
-    def get(self, url: str, params: dict[str, Any] | None = None, timeout: int | None = None) -> _FakeResponse:  # noqa: ARG002
+    def get(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        timeout: int | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> _FakeResponse:  # noqa: ARG002
         normalized_params = tuple(sorted((str(key), str(value)) for key, value in (params or {}).items()))
         key = (url, normalized_params)
         self.calls.append(key)
@@ -45,7 +53,13 @@ class _SequencedSession:
     def mount(self, *_args, **_kwargs) -> None:
         return
 
-    def get(self, url: str, params: dict[str, Any] | None = None, timeout: int | None = None) -> _FakeResponse:  # noqa: ARG002
+    def get(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        timeout: int | None = None,
+        headers: dict[str, Any] | None = None,
+    ) -> _FakeResponse:  # noqa: ARG002
         normalized_params = tuple(sorted((str(key), str(value)) for key, value in (params or {}).items()))
         key = (url, normalized_params)
         self.calls.append(key)
@@ -53,6 +67,25 @@ class _SequencedSession:
         if not queue:
             raise AssertionError(f"unexpected request: {key}")
         return queue.pop(0)
+
+
+def _event_page_html(slug: str, open_price: float) -> str:
+    payload = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {
+                    "queries": [
+                        {
+                            "queryKey": ["crypto-prices", "price", "BTC", "2026-03-27T20:25:00Z", "fiveminute", "2026-03-27T20:30:00Z"],
+                            "state": {"data": {"openPrice": open_price, "closePrice": None}},
+                        }
+                    ]
+                }
+            }
+        },
+        "query": {"slug": slug},
+    }
+    return f'<html><body><script id="__NEXT_DATA__" type="application/json">{json.dumps(payload)}</script></body></html>'
 
 
 def test_get_market_by_slug_uses_slug_endpoint_and_hydrates_event_metadata() -> None:
@@ -185,3 +218,30 @@ def test_prefetch_next_btc5m_window_ignores_non_matching_slug() -> None:
     client = GammaClient("https://gamma-api.polymarket.com")
 
     assert client.prefetch_next_btc5m_window("some-other-market") is None
+
+
+def test_get_public_price_to_beat_falls_back_to_public_web_when_gamma_is_incomplete() -> None:
+    slug = "btc-updown-5m-1774642200"
+    base_url = "https://gamma-api.polymarket.com"
+    session = _FakeSession(
+        {
+            (f"{base_url}/markets/slug/{slug}", ()): _FakeResponse(
+                {
+                    "slug": slug,
+                    "question": "Bitcoin Up or Down",
+                    "events": [{"id": "evt-web-fallback", "eventMetadata": {}}],
+                }
+            ),
+            (f"{base_url}/events/evt-web-fallback", ()): _FakeResponse(
+                {"id": "evt-web-fallback", "eventMetadata": {}}
+            ),
+            (f"https://polymarket.com/event/{slug}", ()): _FakeResponse(_event_page_html(slug, 66010.0)),
+        }
+    )
+    client = GammaClient(base_url)
+    client.session = session
+
+    official, source = client.get_public_price_to_beat(slug)
+
+    assert official == 66010.0
+    assert source == "public-web"

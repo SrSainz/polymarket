@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -10,6 +11,7 @@ from urllib3.util.retry import Retry
 
 _EVENT_CACHE_TTL_SECONDS = 300.0
 _INCOMPLETE_EVENT_CACHE_TTL_SECONDS = 2.0
+_PUBLIC_WEB_PRICE_CACHE_TTL_SECONDS = 20.0
 
 
 class GammaClient:
@@ -19,6 +21,7 @@ class GammaClient:
         self.session = requests.Session()
         self._category_cache: dict[str, str] = {}
         self._event_cache: dict[str, tuple[dict[str, Any], float]] = {}
+        self._public_price_cache: dict[str, tuple[float, str, float]] = {}
 
         retries = Retry(
             total=3,
@@ -85,6 +88,31 @@ class GammaClient:
 
         self._category_cache[slug] = category
         return category
+
+    def get_public_price_to_beat(self, slug: str) -> tuple[float, str]:
+        safe_slug = str(slug or "").strip()
+        if not safe_slug:
+            return 0.0, "public-gamma-missing"
+        cached_entry = self._public_price_cache.get(safe_slug)
+        if cached_entry is not None:
+            cached_price, cached_source, cached_expires_at = cached_entry
+            if cached_expires_at > time.time():
+                return cached_price, cached_source
+
+        market = self.get_market_by_slug(safe_slug)
+        official = self._extract_price_to_beat(market)
+        if official > 0:
+            source = "public-gamma"
+            self._public_price_cache[safe_slug] = (official, source, time.time() + _PUBLIC_WEB_PRICE_CACHE_TTL_SECONDS)
+            return official, source
+
+        official = self._get_event_page_open_price(safe_slug)
+        if official > 0:
+            source = "public-web"
+            self._public_price_cache[safe_slug] = (official, source, time.time() + _PUBLIC_WEB_PRICE_CACHE_TTL_SECONDS)
+            return official, source
+
+        return 0.0, "public-gamma-missing"
 
     def get_tags(self, slug: str) -> list[str]:
         category = self.get_category(slug)
@@ -187,3 +215,76 @@ class GammaClient:
             return float(metadata.get("priceToBeat") or 0.0) > 0
         except (TypeError, ValueError):
             return False
+
+    def _extract_price_to_beat(self, payload: object) -> float:
+        if isinstance(payload, str):
+            text = payload.strip()
+            if not text:
+                return 0.0
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                return 0.0
+        if isinstance(payload, dict):
+            for key in ("priceToBeat", "price_to_beat"):
+                try:
+                    value = float(payload.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    value = 0.0
+                if value > 0:
+                    return value
+            for nested_key in ("eventMetadata", "metadata", "marketMetadata", "event"):
+                value = self._extract_price_to_beat(payload.get(nested_key))
+                if value > 0:
+                    return value
+            for list_key in ("events", "markets"):
+                raw_items = payload.get(list_key)
+                if not isinstance(raw_items, list):
+                    continue
+                for item in raw_items:
+                    value = self._extract_price_to_beat(item)
+                    if value > 0:
+                        return value
+        return 0.0
+
+    def _get_event_page_open_price(self, slug: str) -> float:
+        safe_slug = str(slug or "").strip()
+        if not safe_slug:
+            return 0.0
+        try:
+            response = self.session.get(
+                f"https://polymarket.com/event/{safe_slug}",
+                timeout=self.timeout,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            return 0.0
+        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', response.text)
+        if match is None:
+            return 0.0
+        try:
+            payload = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            return 0.0
+        queries = (((payload.get("props") or {}).get("pageProps") or {}).get("dehydratedState") or {}).get("queries") or []
+        for query in queries:
+            if not isinstance(query, dict):
+                continue
+            query_key = query.get("queryKey")
+            if not isinstance(query_key, list) or len(query_key) < 6:
+                continue
+            if query_key[:3] != ["crypto-prices", "price", "BTC"]:
+                continue
+            if str(query_key[4] or "").strip().lower() != "fiveminute":
+                continue
+            data = ((query.get("state") or {}).get("data") or {})
+            if not isinstance(data, dict):
+                continue
+            try:
+                open_price = float(data.get("openPrice") or 0.0)
+            except (TypeError, ValueError):
+                open_price = 0.0
+            if open_price > 0:
+                return open_price
+        return 0.0

@@ -365,7 +365,7 @@ class BTC5mStrategyService:
         )
         self._cached_market: dict | None = None
         self._cached_market_expires_at = 0.0
-        self._official_price_cache: dict[str, tuple[float, float]] = {}
+        self._official_price_cache: dict[str, tuple[float, float, str]] = {}
         gamma_base_url = str(getattr(self.gamma_client, "base_url", "") or "").rstrip("/")
         if gamma_base_url and gamma_base_url != _PUBLIC_GAMMA_API_HOST:
             self._public_gamma_client: GammaClient | None = GammaClient(_PUBLIC_GAMMA_API_HOST)
@@ -3875,7 +3875,9 @@ class BTC5mStrategyService:
             local_anchor_price = current_price
             local_anchor_source = "shadow-current-price"
 
-        official_price_to_beat = self._market_official_price_to_beat(market) if isinstance(market, dict) else 0.0
+        official_price_to_beat, official_price_source = (
+            self._market_official_price_to_beat_with_source(market) if isinstance(market, dict) else (0.0, "public-gamma-missing")
+        )
         captured_price_to_beat = (
             local_anchor_price if local_anchor_price > 0 and self._is_captured_chainlink_anchor_source(source=local_anchor_source) else 0.0
         )
@@ -3896,7 +3898,7 @@ class BTC5mStrategyService:
             official_price_to_beat if official_price_to_beat > 0 else captured_price_to_beat if captured_price_to_beat > 0 else local_anchor_price
         )
         if official_price_to_beat > 0:
-            effective_price_source = "public-gamma"
+            effective_price_source = official_price_source
             anchor_source = "polymarket-official"
         elif captured_price_to_beat > 0:
             effective_price_source = captured_price_source
@@ -3908,6 +3910,7 @@ class BTC5mStrategyService:
             "local_anchor_price": float(local_anchor_price),
             "local_anchor_source": local_anchor_source,
             "official_price_to_beat": float(official_price_to_beat),
+            "official_price_source": official_price_source,
             "captured_price_to_beat": float(captured_price_to_beat),
             "captured_price_source": captured_price_source,
             "captured_vs_official_bps": float(captured_vs_official_bps),
@@ -3941,6 +3944,7 @@ class BTC5mStrategyService:
         )
         local_anchor_price = float(beat_state["local_anchor_price"])
         official_price_to_beat = float(beat_state["official_price_to_beat"])
+        official_price_source = str(beat_state.get("official_price_source") or "public-gamma-missing")
         captured_price_to_beat = float(beat_state["captured_price_to_beat"])
         anchor_price = float(beat_state["effective_price_to_beat"])
         anchor_source = str(beat_state["anchor_source"])
@@ -4756,7 +4760,9 @@ class BTC5mStrategyService:
         extra_state: dict[str, str] | None = None,
     ) -> None:
         snapshot_state = dict(extra_state or {})
-        official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
+        official_price_to_beat, _official_price_source = (
+            self._market_official_price_to_beat_with_source(market) if market is not None else (0.0, "public-gamma-missing")
+        )
         previous_market_slug = str(self.db.get_bot_state("strategy_market_slug") or "").strip()
         previous_official_slug = str(
             self.db.get_bot_state("strategy_official_price_slug") or previous_market_slug
@@ -5067,22 +5073,26 @@ class BTC5mStrategyService:
         return self._btc5m_slug_start_ts(str(market.get("slug") or ""))
 
     def _market_official_price_to_beat(self, market: dict | None) -> float:
+        official, _source = self._market_official_price_to_beat_with_source(market)
+        return official
+
+    def _market_official_price_to_beat_with_source(self, market: dict | None) -> tuple[float, str]:
         if not isinstance(market, dict):
-            return 0.0
+            return 0.0, "public-gamma-missing"
 
         slug = str(market.get("slug") or "").strip()
         if slug:
             cached = self._official_price_cache.get(slug)
             if cached is not None:
-                cached_price, cached_expires_at = cached
+                cached_price, cached_expires_at, cached_source = cached
                 if time.monotonic() < cached_expires_at and cached_price > 0:
-                    return cached_price
+                    return cached_price, cached_source
 
         official = self._market_official_price_to_beat_from_payload(market)
         if official > 0:
             if slug:
-                self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
-            return official
+                self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS, "public-gamma")
+            return official, "public-gamma"
 
         refreshed_market: dict | None = None
         official = self._market_official_price_to_beat_from_client(
@@ -5092,8 +5102,8 @@ class BTC5mStrategyService:
         )
         if official > 0:
             if slug:
-                self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
-            return official
+                self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS, "public-gamma")
+            return official, "public-gamma"
 
         public_gamma_client = self._public_gamma_client
         if public_gamma_client is not None:
@@ -5104,9 +5114,22 @@ class BTC5mStrategyService:
             )
             if official > 0:
                 if slug:
-                    self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS)
-                return official
-        return 0.0
+                    self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS, "public-gamma")
+                return official, "public-gamma"
+            if slug and hasattr(public_gamma_client, "get_public_price_to_beat"):
+                try:
+                    public_official, public_source = public_gamma_client.get_public_price_to_beat(slug)
+                except Exception:  # noqa: BLE001
+                    public_official, public_source = 0.0, "public-gamma-missing"
+                if public_official > 0:
+                    if slug:
+                        self._official_price_cache[slug] = (
+                            public_official,
+                            time.monotonic() + _MARKET_METADATA_CACHE_SECONDS,
+                            public_source,
+                        )
+                    return public_official, public_source
+        return 0.0, "public-gamma-missing"
 
     def _market_official_price_to_beat_from_client(
         self,
@@ -5552,7 +5575,9 @@ class BTC5mStrategyService:
         up_exposure, down_exposure = self._current_market_exposure_split(market)
         seconds_into_window = self._seconds_into_window(market) if market is not None else 0
         spot_snapshot = self.spot_feed.get_snapshot() if self.spot_feed is not None else None
-        official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
+        official_price_to_beat, official_price_source = (
+            self._market_official_price_to_beat_with_source(market) if market is not None else (0.0, "public-gamma-missing")
+        )
         taker_fee_bps_estimate = self._microstructure_taker_fee_bps_estimate(market)
         self.db.set_bot_state("strategy_taker_fee_bps", f"{taker_fee_bps_estimate:.4f}")
         self.telemetry.snapshot_market(
@@ -6138,6 +6163,7 @@ class BTC5mStrategyService:
         )
         local_anchor_price = float(beat_state["local_anchor_price"])
         official_price_to_beat = float(beat_state["official_price_to_beat"])
+        official_price_source = str(beat_state.get("official_price_source") or "public-gamma-missing")
         captured_price_to_beat = float(beat_state["captured_price_to_beat"])
         captured_price_source = str(beat_state["captured_price_source"])
         captured_vs_official_bps = float(beat_state["captured_vs_official_bps"])
@@ -6173,7 +6199,7 @@ class BTC5mStrategyService:
                 "strategy_spot_local_anchor": f"{local_anchor_price:.6f}",
                 "strategy_official_price_to_beat": f"{official_price_to_beat:.6f}",
                 "strategy_official_price_slug": market_slug,
-                "strategy_official_price_source": "public-gamma" if official_price_to_beat > 0 else "public-gamma-missing",
+                "strategy_official_price_source": official_price_source if official_price_to_beat > 0 else "public-gamma-missing",
                 "strategy_captured_price_to_beat": f"{captured_price_to_beat:.6f}",
                 "strategy_captured_price_slug": market_slug,
                 "strategy_captured_price_source": captured_price_source,

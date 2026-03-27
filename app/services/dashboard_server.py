@@ -34,10 +34,10 @@ from app.services.runtime_compare_db import build_runtime_compare_payload
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
 _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
-_PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, float]] = {}
+_PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, str, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-27-live-gate4"
+_DASHBOARD_BUILD = "2026-03-27-live-gate5"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -116,24 +116,23 @@ def _extract_price_to_beat(payload: object) -> float:
     return 0.0
 
 
-def _public_market_official_price_to_beat(slug: str) -> float:
+def _public_market_official_price_to_beat(slug: str) -> tuple[float, str]:
     safe_slug = str(slug or "").strip()
     if not safe_slug:
-        return 0.0
+        return 0.0, "public-gamma-missing"
     cached = _PUBLIC_GAMMA_BEAT_CACHE.get(safe_slug)
     now = time.monotonic()
     if cached is not None:
-        cached_value, cached_expires_at = cached
+        cached_value, cached_source, cached_expires_at = cached
         if now < cached_expires_at:
-            return cached_value
+            return cached_value, cached_source
     try:
-        market = _PUBLIC_GAMMA_CLIENT.get_market_by_slug(safe_slug)
+        official, source = _PUBLIC_GAMMA_CLIENT.get_public_price_to_beat(safe_slug)
     except Exception:  # noqa: BLE001
-        return 0.0
-    official = _extract_price_to_beat(market)
+        return 0.0, "public-gamma-missing"
     if official > 0:
-        _PUBLIC_GAMMA_BEAT_CACHE[safe_slug] = (official, now + _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS)
-    return official
+        _PUBLIC_GAMMA_BEAT_CACHE[safe_slug] = (official, source, now + _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS)
+    return official, source
 
 
 def _with_public_official_price(snapshot: dict | None) -> dict:
@@ -167,13 +166,13 @@ def _with_public_official_price(snapshot: dict | None) -> dict:
     if effective_slug and slug and effective_slug != slug:
         bot_state_effective = 0.0
     bot_state_effective_source = str(enriched.get("effective_price_source") or "").strip()
-    public_official = _public_market_official_price_to_beat(slug) if slug else 0.0
+    public_official, public_official_source = _public_market_official_price_to_beat(slug) if slug else (0.0, "public-gamma-missing")
     if public_official > 0:
         enriched["official_price_to_beat"] = round(public_official, 4)
-        enriched["official_price_source"] = "public-gamma"
+        enriched["official_price_source"] = public_official_source
         enriched["official_price_available"] = True
         enriched["effective_price_to_beat"] = round(public_official, 4)
-        enriched["effective_price_source"] = "public-gamma"
+        enriched["effective_price_source"] = public_official_source
         enriched["effective_price_available"] = True
         enriched["captured_price_to_beat"] = round(bot_state_captured, 4)
         enriched["captured_price_source"] = bot_state_captured_source
@@ -959,12 +958,12 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_official_price_source = (
             "bot-state-current-slug" if strategy_official_price_to_beat > 0 else "public-gamma-missing"
         )
-        public_official_price_to_beat = _public_market_official_price_to_beat(strategy_market_slug)
+        public_official_price_to_beat, public_official_price_source = _public_market_official_price_to_beat(strategy_market_slug)
         if public_official_price_to_beat > 0:
             strategy_official_price_to_beat = public_official_price_to_beat
-            strategy_official_price_source = "public-gamma"
+            strategy_official_price_source = public_official_price_source
             strategy_effective_price_to_beat = public_official_price_to_beat
-            strategy_effective_price_source = "public-gamma"
+            strategy_effective_price_source = public_official_price_source
         elif strategy_effective_price_to_beat <= 0 and strategy_captured_price_to_beat > 0:
             strategy_effective_price_to_beat = strategy_captured_price_to_beat
             strategy_effective_price_source = strategy_captured_price_source or "captured-chainlink"
@@ -1408,7 +1407,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "realized_pnl": "SUM(daily_pnl.pnl)",
             "unrealized_pnl": "mark-to-market de copy_positions usando midpoint del libro; si no hay midpoint usa avg_price",
             "pnl_total": "realized_pnl + unrealized_pnl",
-            "strategy_official_price_to_beat": "Gamma publica de Polymarket si la API devuelve priceToBeat; si no, 0 para el slug actual",
+            "strategy_official_price_to_beat": "Gamma publica de Polymarket si la API devuelve priceToBeat; si no, openPrice de la web publica del evento actual; si no, 0",
             "strategy_captured_price_to_beat": "captura propia Chainlink RTDS al inicio de la ventana actual",
             "strategy_effective_price_to_beat": "Gamma publica si existe; si no, captura propia Chainlink RTDS ligada al slug actual",
             "strategy_market_event_lag_ms": "edad local del libro mas viejo entre las patas activas del mercado actual",
