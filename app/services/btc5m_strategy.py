@@ -1941,8 +1941,17 @@ class BTC5mStrategyService:
                 bracket_phase=bracket_phase,
                 current_up_notional=current_up_notional,
                 current_down_notional=current_down_notional,
+                signal=cheap_side,
+                pair_sum=pair_sum,
+                cycle_budget=cycle_budget,
+                seconds_into_window=seconds_into_window,
+                up_outcome=up_outcome,
+                down_outcome=down_outcome,
+                delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
             ):
-                cheap_side_block_reason = "cheap-side bloqueado en live-like: apertura plana requiere dos patas"
+                cheap_side_block_reason = (
+                    "cheap-side bloqueado en live-like: apertura plana solo con edge fuerte, ventana temprana y presupuesto de pareja"
+                )
                 cheap_side = None
         if cheap_side is not None:
             target = cheap_side.target
@@ -2830,12 +2839,36 @@ class BTC5mStrategyService:
         bracket_phase: str,
         current_up_notional: float,
         current_down_notional: float,
+        signal: ArbSingleSideSignal,
+        pair_sum: float,
+        cycle_budget: float,
+        seconds_into_window: int,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        delta_bps: float,
     ) -> bool:
         if not self._arb_is_live_like_mode(mode=mode):
             return False
         if bracket_phase != "abrir":
             return False
-        return current_up_notional <= 0 and current_down_notional <= 0
+        if current_up_notional > 0 or current_down_notional > 0:
+            return False
+
+        if seconds_into_window > _ARB_EARLY_MID_END:
+            return True
+        if pair_sum > _ARB_CHEAP_SIDE_BASE_PAIR_MAX:
+            return True
+        if cycle_budget < self._arb_pair_min_operable_budget(up_outcome=up_outcome, down_outcome=down_outcome):
+            return True
+
+        strong_flat_signal = (
+            signal.net_edge >= max(_ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN, 0.05)
+            and (
+                abs(delta_bps) >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                or signal.raw_edge >= _ARB_CHEAP_SIDE_STRONG_EDGE_MIN
+            )
+        )
+        return not strong_flat_signal
 
     def _arb_pair_net_edge(
         self,
