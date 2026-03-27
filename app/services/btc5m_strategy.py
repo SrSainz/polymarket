@@ -5384,6 +5384,18 @@ class BTC5mStrategyService:
                 note=f"referencia vieja: {age_ms}ms > {age_limit}ms",
             )
         if not has_rtds:
+            if (
+                is_live_like
+                and source_text == "rest-coinbase"
+                and has_official
+                and has_captured_chainlink_anchor
+            ):
+                return ArbReferenceState(
+                    comparable=True,
+                    quality="rest-coinbase-official",
+                    note="spot Coinbase REST con beat oficial publico; operando reducido",
+                    budget_scale=max(soft_budget_scale, 0.65),
+                )
             if shadow_relaxed_reference and has_any_anchor:
                 return ArbReferenceState(
                     comparable=True,
