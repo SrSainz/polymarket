@@ -250,6 +250,17 @@ class SpotFeed:
         except json.JSONDecodeError:
             return
 
+        history_points = _iter_spot_history_points(payload)
+        if history_points:
+            with self._lock:
+                for item in history_points:
+                    symbol = str(item.get("symbol") or "").strip().lower()
+                    price = _coerce_price(item.get("price"))
+                    if not symbol or price is None:
+                        continue
+                    sample_ts = _sample_ts_seconds(item=item, received_at=time.time())
+                    self._append_history_locked(symbol=symbol, price=price, sample_ts=sample_ts)
+
         updated = False
         for item in _iter_spot_events(payload):
             symbol = str(item.get("symbol") or "").strip().lower()
@@ -257,9 +268,10 @@ class SpotFeed:
             if not symbol or price is None:
                 continue
             now = time.time()
+            sample_ts = _sample_ts_seconds(item=item, received_at=now)
             with self._lock:
                 self._prices[symbol] = (price, now)
-                self._history.setdefault(symbol, deque(maxlen=512)).append((price, now))
+                self._append_history_locked(symbol=symbol, price=price, sample_ts=sample_ts)
                 if symbol == "btcusdt":
                     chainlink = self._fresh_price_locked("btc/usd", now)
                     if chainlink is not None:
@@ -324,6 +336,14 @@ class SpotFeed:
         if abs(ts - target_ts) <= tolerance_seconds:
             return price
         return None
+
+    def _append_history_locked(self, *, symbol: str, price: float, sample_ts: float) -> None:
+        history = self._history.setdefault(symbol, deque(maxlen=512))
+        if history:
+            last_price, last_ts = history[-1]
+            if abs(last_price - price) <= 1e-9 and abs(last_ts - sample_ts) <= 1e-6:
+                return
+        history.append((price, sample_ts))
 
     def _emit_event(
         self,
@@ -427,6 +447,20 @@ def _iter_price_points(payload: Any) -> list[tuple[str, float]]:
     return list(deduped.items())
 
 
+def _iter_spot_history_points(payload: Any) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    _walk_spot_history_points(payload, events)
+    deduped: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for item in events:
+        key = (
+            str(item.get("symbol") or ""),
+            int(item.get("timestamp_ms") or 0),
+            str(item.get("source_kind") or ""),
+        )
+        deduped[key] = item
+    return list(deduped.values())
+
+
 def _iter_spot_events(payload: Any) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     _walk_spot_events(payload, events)
@@ -500,6 +534,47 @@ def _walk_spot_events(payload: Any, sink: list[dict[str, Any]]) -> None:
 
     for value in payload.values():
         _walk_spot_events(value, sink)
+
+
+def _walk_spot_history_points(payload: Any, sink: list[dict[str, Any]]) -> None:
+    if isinstance(payload, list):
+        for item in payload:
+            _walk_spot_history_points(item, sink)
+        return
+
+    if not isinstance(payload, dict):
+        return
+
+    symbol = _normalize_symbol(payload.get("symbol") or payload.get("pair") or payload.get("ticker") or payload.get("s"))
+    if symbol:
+        historical_points = payload.get("data")
+        if isinstance(historical_points, list):
+            for item in historical_points:
+                if not isinstance(item, dict):
+                    continue
+                historical_price = _extract_price(item)
+                if historical_price is None:
+                    continue
+                sink.append(
+                    {
+                        "symbol": symbol,
+                        "price": historical_price,
+                        "quantity": _coerce_quantity(item.get("q") or item.get("size") or item.get("v")),
+                        "side": _extract_side(item),
+                        "timestamp_ms": int(_coerce_quantity(item.get("timestamp") or item.get("T") or item.get("E") or 0)),
+                        "source_kind": _extract_source_kind(item),
+                    }
+                )
+
+    for value in payload.values():
+        _walk_spot_history_points(value, sink)
+
+
+def _sample_ts_seconds(*, item: dict[str, Any], received_at: float) -> float:
+    timestamp_ms = int(_coerce_quantity(item.get("timestamp_ms") or 0))
+    if timestamp_ms > 0:
+        return float(timestamp_ms) / 1000.0
+    return float(received_at)
 
 
 def _normalize_symbol(raw_symbol: object) -> str:

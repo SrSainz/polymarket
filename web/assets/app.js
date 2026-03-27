@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-27-live-gate3";
+const UI_BUILD = "2026-03-27-live-gate4";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -1114,7 +1114,7 @@ function currentSpotInfo(summary) {
   const priceMode = String(summary?.strategy_spot_price_mode || "").trim();
   const binance = Number(summary?.strategy_spot_binance || 0);
   const beatKind =
-    effectiveBeat > 0 && effectiveSource === "public-gamma"
+    officialBeat > 0
       ? "official"
       : effectiveBeat > 0 && effectiveSource.startsWith("captured-chainlink")
       ? "captured-chainlink"
@@ -1123,7 +1123,7 @@ function currentSpotInfo(summary) {
       : effectiveBeat > 0
       ? "fallback"
       : "missing";
-  const beatReference = effectiveBeat > 0 ? effectiveBeat : anchor;
+  const beatReference = officialBeat > 0 ? officialBeat : effectiveBeat > 0 ? effectiveBeat : anchor;
   const polymarketCurrent = chainlink > 0 ? chainlink : 0;
   const fallbackCurrent = current > 0 && chainlink <= 0 ? current : 0;
   const deltaUsd = current > 0 && beatReference > 0 ? current - beatReference : 0;
@@ -1976,19 +1976,19 @@ function paintLabOverview(summary) {
   const fastSpotPrice = spotInfo.hasBinance ? spotInfo.binance : spotInfo.fallbackCurrent;
   const beatLabel =
     spotInfo.beatKind === "official"
-      ? "Price to beat oficial"
+      ? "Price to beat de Polymarket"
       : spotInfo.beatKind === "captured-chainlink"
-      ? "Price to beat capturado (Chainlink)"
+      ? "Beat estimado (captura Chainlink)"
       : spotInfo.beatKind === "rtds-derived"
-      ? "Price to beat RTDS derivado"
+      ? "Beat derivado RTDS"
       : spotInfo.hasAnchor
-      ? "Beat efectivo sin oficial"
-      : "Price to beat";
+      ? "Beat efectivo del bot"
+      : "Beat";
   const beatDeltaLabel =
     spotInfo.beatKind === "official"
       ? "Polymarket vs beat oficial"
       : spotInfo.beatKind === "captured-chainlink"
-      ? "Polymarket vs beat capturado"
+      ? "Polymarket vs beat estimado"
       : spotInfo.beatKind === "rtds-derived"
       ? "Polymarket vs beat RTDS"
       : "Polymarket vs beat usado";
@@ -1996,7 +1996,7 @@ function paintLabOverview(summary) {
     spotInfo.beatKind === "official"
       ? "Spot rapido vs beat oficial"
       : spotInfo.beatKind === "captured-chainlink"
-      ? "Spot rapido vs beat capturado"
+      ? "Spot rapido vs beat estimado"
       : spotInfo.beatKind === "rtds-derived"
       ? "Spot rapido vs beat RTDS"
       : "Spot rapido vs beat usado";
@@ -2010,9 +2010,9 @@ function paintLabOverview(summary) {
       : "Ancla propia (sin oficial)";
   const beatMeta =
     spotInfo.beatKind === "official"
-      ? `beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}${spotInfo.officialSource === "public-gamma" ? " (Gamma publica)" : " (snapshot slug actual)"}`
+      ? `beat oficial ${fmtBtcPrice(spotInfo.officialBeat)}${spotInfo.officialSource === "public-gamma" ? " (Gamma publica)" : " (snapshot del bot)"}`
       : spotInfo.beatKind === "captured-chainlink"
-      ? `captura Chainlink ${fmtBtcPrice(spotInfo.effectiveBeat)}`
+      ? `captura Chainlink propia ${fmtBtcPrice(spotInfo.capturedBeat || spotInfo.effectiveBeat)}`
       : spotInfo.beatKind === "rtds-derived"
       ? `beat RTDS ${fmtBtcPrice(spotInfo.anchor)}`
       : spotInfo.hasAnchor

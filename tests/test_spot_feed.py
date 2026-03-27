@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -91,6 +92,30 @@ def test_spot_feed_anchor_price_prefers_chainlink_sample_near_window_start() -> 
     anchor = feed.get_anchor_price(symbol="btc/usd", target_ts=target)
 
     assert anchor == 71852.76
+
+
+def test_spot_feed_anchor_price_uses_chainlink_event_timestamp_not_local_receive_time() -> None:
+    feed = SpotFeed("wss://ws-live-data.polymarket.com", logging.getLogger("test-spot-feed"))
+    target = 1773577195.0
+
+    payload = {
+        "payload": {
+            "symbol": "btc/usd",
+            "data": [
+                {"timestamp": int((target - 1.0) * 1000), "value": 71744.11},
+                {"timestamp": int(target * 1000), "value": 71744.84},
+                {"timestamp": int((target + 1.0) * 1000), "value": 71745.33},
+            ],
+        },
+        "topic": "crypto_prices_chainlink",
+        "type": "subscribe",
+    }
+
+    feed._handle_message(json.dumps(payload))
+
+    anchor = feed.get_anchor_price(symbol="btc/usd", target_ts=target)
+
+    assert anchor == 71744.84
 
 
 def test_spot_feed_emits_listener_events_for_binance_trade() -> None:
