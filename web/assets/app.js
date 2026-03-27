@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-23-chainlink-beat1";
+const UI_BUILD = "2026-03-27-live-gate1";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -535,6 +535,44 @@ function compareFocusMeta(paper, shadow, sampleSummary = {}) {
   return parts.join(" | ");
 }
 
+function compareReadinessMeta(readiness) {
+  const score = Number(readiness?.score || 0);
+  const passedChecks = Number(readiness?.passed_checks || 0);
+  const totalChecks = Number(readiness?.total_checks || 0);
+  const metrics = readiness?.metrics || {};
+  const thresholds = readiness?.thresholds || {};
+  const shared = Number(metrics?.shared_window_count || 0);
+  const targetShared = Number(thresholds?.min_shared_windows || 0);
+  const cadenceRatio = Number(metrics?.cadence_ratio || 0);
+  const drawdown = Math.abs(Number(metrics?.max_drawdown || 0));
+  const drawdownLimit = Math.abs(Number(metrics?.max_drawdown_limit || 0));
+  return `score ${score}/100 | ${passedChecks}/${totalChecks} checks | ${shared}/${targetShared} compartidas | cadencia ${cadenceRatio > 0 ? `${cadenceRatio.toFixed(2)}x` : "-"} | dd ${fmtUsdPlain(drawdown, 2)} / ${fmtUsdPlain(drawdownLimit, 2)}`;
+}
+
+function renderCompareReadinessItems(readiness) {
+  const blockers = Array.isArray(readiness?.blockers) ? readiness.blockers.filter(Boolean) : [];
+  const strengths = Array.isArray(readiness?.strengths) ? readiness.strengths.filter(Boolean) : [];
+  const items = blockers.length ? blockers : strengths;
+  if (!items.length) {
+    return `
+      <li class="compare-readiness-item">
+        <strong>Sin conclusiones</strong>
+        <span>Necesitamos algo mas de historial comparable para emitir un gate util.</span>
+      </li>
+    `;
+  }
+  return items
+    .map(
+      (item, index) => `
+        <li class="compare-readiness-item">
+          <strong>${escapeHtml(blockers.length ? `Bloqueo ${index + 1}` : `Fortaleza ${index + 1}`)}</strong>
+          <span>${escapeHtml(String(item || "-"))}</span>
+        </li>
+      `
+    )
+    .join("");
+}
+
 function shortCompareWindow(point) {
   const slug = String(point?.slug || "").trim();
   const title = String(point?.title || "").trim();
@@ -649,6 +687,11 @@ function paintRuntimeCompare(summary) {
   const ratioNowMeta = document.getElementById("compareRatioNowMeta");
   const focusHeadline = document.getElementById("compareFocusHeadline");
   const focusMeta = document.getElementById("compareFocusMeta");
+  const readinessCard = document.getElementById("compareReadinessCard");
+  const readinessBadge = document.getElementById("compareReadinessBadge");
+  const readinessHeadline = document.getElementById("compareReadinessHeadline");
+  const readinessMeta = document.getElementById("compareReadinessMeta");
+  const readinessList = document.getElementById("compareReadinessList");
   const twoSided = document.getElementById("compareTwoSided");
   const twoSidedMeta = document.getElementById("compareTwoSidedMeta");
   const oneSided = document.getElementById("compareOneSided");
@@ -693,6 +736,11 @@ function paintRuntimeCompare(summary) {
     !ratioNowMeta ||
     !focusHeadline ||
     !focusMeta ||
+    !readinessCard ||
+    !readinessBadge ||
+    !readinessHeadline ||
+    !readinessMeta ||
+    !readinessList ||
     !twoSided ||
     !twoSidedMeta ||
     !oneSided ||
@@ -743,6 +791,7 @@ function paintRuntimeCompare(summary) {
 
   const history = compareHistory(summary);
   const historySummary = history.summary || {};
+  const readiness = summary?.strategy_live_readiness || {};
   const historyPoints = Array.isArray(history?.points) ? history.points : [];
   const paperSeries = Array.isArray(history?.series?.paper) ? history.series.paper : [];
   const shadowSeries = Array.isArray(history?.series?.shadow) ? history.series.shadow : [];
@@ -776,6 +825,15 @@ function paintRuntimeCompare(summary) {
   ratioNowMeta.textContent = `shadow ${compareRatioLabel(shadow?.current_up_ratio)} | objetivo ${compareRatioLabel(shadow?.desired_up_ratio)}`;
   focusHeadline.textContent = compareFocusHeadline(paper, shadow, sampleSummary);
   focusMeta.textContent = compareFocusMeta(paper, shadow, sampleSummary);
+  const readinessStatus = String(readiness?.status || "warming").trim().toLowerCase();
+  readinessCard.classList.remove("is-ready", "is-warming", "is-blocked");
+  readinessCard.classList.add(
+    readinessStatus === "ready" ? "is-ready" : readinessStatus === "blocked" ? "is-blocked" : "is-warming"
+  );
+  readinessBadge.textContent = String(readiness?.label || readinessStatus || "warming");
+  readinessHeadline.textContent = String(readiness?.headline || "Gate live pendiente");
+  readinessMeta.textContent = compareReadinessMeta(readiness);
+  readinessList.innerHTML = renderCompareReadinessItems(readiness);
 
   const lifecycleHistoryAvailable =
     Number(historySummary?.paper_active_window_count || 0) > 0 ||

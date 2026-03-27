@@ -1131,6 +1131,169 @@ def test_summary_payload_runtime_compare_exposes_lifecycle_metrics(tmp_path: Pat
     assert history["points"][0]["shadow_settlement_visible"] is False
 
 
+def test_summary_payload_exposes_live_readiness_gate_blocked(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.close()
+
+    fake_compare = {
+        "available": True,
+        "history": {
+            "available": True,
+            "summary": {
+                "shared_window_count": 24,
+                "shadow_participation_pct": 87.5,
+                "shadow_two_sided_window_pct": 76.0,
+                "shadow_active_window_count": 21,
+                "shadow_one_sided_window_count": 5,
+                "shadow_settlement_window_pct": 90.0,
+                "paper_avg_open_cadence_seconds": 2.2,
+                "shadow_avg_open_cadence_seconds": 20.5,
+            },
+            "sample_summary": {
+                "shadow_dominant_operability_state": "budget_limited",
+                "shadow_dominant_operability_pct": 62.0,
+            },
+        },
+    }
+    fake_incubation = {
+        "stage": "incubating",
+        "stage_label": "Incubando",
+        "min_days": 3,
+        "min_resolutions": 100,
+        "max_drawdown_limit": 40.0,
+        "days_observed": 3.37,
+        "resolutions": 815,
+        "wins": 525,
+        "losses": 290,
+        "win_rate_pct": 64.42,
+        "pnl_total": 5828.3206,
+        "avg_pnl": 7.1513,
+        "deployed_total": 125000.0,
+        "avg_deployed": 153.37,
+        "max_drawdown": -43.4089,
+        "best_resolution": 70.653,
+        "worst_resolution": -55.0,
+        "progress_pct": 100.0,
+        "ready_to_scale": False,
+        "drawdown_breached": True,
+        "recommendation": "review",
+        "recommendation_label": "Pausar y revisar",
+        "first_closed_at": 1774300000,
+        "last_closed_at": 1774600000,
+    }
+    fake_transition = {
+        "next_stage": "incubating",
+        "transition_ready": False,
+        "label": "Pausar y revisar",
+        "reason": "drawdown en rojo",
+        "auto_apply_ready": False,
+    }
+
+    with (
+        patch("app.services.dashboard_server._runtime_compare_payload", return_value=fake_compare),
+        patch("app.services.dashboard_server.build_incubation_summary", return_value=fake_incubation),
+        patch("app.services.dashboard_server.evaluate_incubation_progress", return_value=fake_transition),
+    ):
+        summary = _summary_payload(
+            db_path,
+            clob_host="https://clob.polymarket.com",
+            execution_mode="paper",
+            live_trading_enabled=False,
+        )
+
+    readiness = summary["strategy_live_readiness"]
+    assert readiness["status"] == "blocked"
+    assert readiness["ready"] is False
+    assert readiness["score"] < 90
+    assert any("Drawdown max" in item for item in readiness["blockers"])
+    assert any("Participacion shadow" in item for item in readiness["blockers"])
+    assert any("Bloqueo dominante" in item for item in readiness["blockers"])
+    assert "runtime_compare + incubacion" in summary["dashboard_metric_sources"]["strategy_live_readiness"]
+
+
+def test_summary_payload_exposes_live_readiness_gate_ready(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.close()
+
+    fake_compare = {
+        "available": True,
+        "history": {
+            "available": True,
+            "summary": {
+                "shared_window_count": 120,
+                "shadow_participation_pct": 94.0,
+                "shadow_two_sided_window_pct": 98.0,
+                "shadow_active_window_count": 110,
+                "shadow_one_sided_window_count": 2,
+                "shadow_settlement_window_pct": 95.0,
+                "paper_avg_open_cadence_seconds": 3.0,
+                "shadow_avg_open_cadence_seconds": 6.0,
+            },
+            "sample_summary": {
+                "shadow_dominant_operability_state": "waiting_edge",
+                "shadow_dominant_operability_pct": 18.0,
+            },
+        },
+    }
+    fake_incubation = {
+        "stage": "ready",
+        "stage_label": "Listo",
+        "min_days": 3,
+        "min_resolutions": 100,
+        "max_drawdown_limit": 40.0,
+        "days_observed": 6.0,
+        "resolutions": 220,
+        "wins": 150,
+        "losses": 70,
+        "win_rate_pct": 68.18,
+        "pnl_total": 9200.0,
+        "avg_pnl": 41.82,
+        "deployed_total": 55000.0,
+        "avg_deployed": 250.0,
+        "max_drawdown": -18.25,
+        "best_resolution": 88.2,
+        "worst_resolution": -22.0,
+        "progress_pct": 100.0,
+        "ready_to_scale": True,
+        "drawdown_breached": False,
+        "recommendation": "scale",
+        "recommendation_label": "Escalar",
+        "first_closed_at": 1774300000,
+        "last_closed_at": 1774700000,
+    }
+    fake_transition = {
+        "next_stage": "live",
+        "transition_ready": True,
+        "label": "Escalar",
+        "reason": "todo en verde",
+        "auto_apply_ready": False,
+    }
+
+    with (
+        patch("app.services.dashboard_server._runtime_compare_payload", return_value=fake_compare),
+        patch("app.services.dashboard_server.build_incubation_summary", return_value=fake_incubation),
+        patch("app.services.dashboard_server.evaluate_incubation_progress", return_value=fake_transition),
+    ):
+        summary = _summary_payload(
+            db_path,
+            clob_host="https://clob.polymarket.com",
+            execution_mode="paper",
+            live_trading_enabled=False,
+        )
+
+    readiness = summary["strategy_live_readiness"]
+    assert readiness["status"] == "ready"
+    assert readiness["ready"] is True
+    assert readiness["label"] == "GO"
+    assert readiness["blockers"] == []
+    assert readiness["score"] >= 90
+    assert readiness["metrics"]["cadence_ratio"] == 2.0
+
+
 def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.db"
     db = Database(db_path)
