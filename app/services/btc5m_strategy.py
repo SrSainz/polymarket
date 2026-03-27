@@ -99,6 +99,8 @@ _ARB_SPOT_ANCHOR_GRACE_SECONDS = 20
 _ARB_SPOT_ANCHOR_CAPTURE_WINDOW_SECONDS = 2.0
 _ARB_MAX_MARKET_EXPOSURE_FRACTION = 0.05
 _ARB_MAX_TOTAL_EXPOSURE_FRACTION = 0.20
+_ARB_LIVE_TOTAL_EXPOSURE_OVERLAP_MULTIPLIER = 1.25
+_ARB_LIVE_TOTAL_EXPOSURE_CAPITAL_FRACTION = 0.65
 _ARB_CHEAP_SIDE_BASE_PAIR_MAX = 1.02
 _ARB_CHEAP_SIDE_MID_PAIR_MAX = 1.025
 _ARB_CHEAP_SIDE_HIGH_PAIR_MAX = 1.03
@@ -2670,7 +2672,12 @@ class BTC5mStrategyService:
         if mode in {"live", "shadow"}:
             live_cycle_budget = self._live_cycle_budget_target(mode=mode, live_total_capital=effective_bankroll)
             if live_cycle_budget > 0:
-                cap = live_cycle_budget
+                overlap_cap = live_cycle_budget * _ARB_LIVE_TOTAL_EXPOSURE_OVERLAP_MULTIPLIER
+                capital_guard_cap = max(
+                    live_cycle_budget,
+                    effective_bankroll * _ARB_LIVE_TOTAL_EXPOSURE_CAPITAL_FRACTION,
+                )
+                cap = min(overlap_cap, capital_guard_cap)
         return cap
 
     def _get_condition_outcome_exposures(

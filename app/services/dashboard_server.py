@@ -37,7 +37,7 @@ _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-27-live-gate2"
+_DASHBOARD_BUILD = "2026-03-27-live-gate3"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -517,6 +517,7 @@ def _strategy_user_intel(
     strategy_expected_edge_bps: float,
     strategy_maker_ev_bps: float,
     strategy_taker_ev_bps: float,
+    strategy_taker_fee_bps: float,
     strategy_selected_execution: str,
     strategy_market_event_lag_ms: float,
     strategy_spot_age_ms: int,
@@ -528,6 +529,7 @@ def _strategy_user_intel(
     selected_execution = str(strategy_selected_execution or "").strip().lower()
     maker_ev = float(strategy_maker_ev_bps or 0.0)
     taker_ev = float(strategy_taker_ev_bps or 0.0)
+    taker_fee_bps = max(float(strategy_taker_fee_bps or 0.0), 0.0)
     gross_edge_bps = float(strategy_expected_edge_bps or 0.0)
 
     if selected_execution.startswith("maker"):
@@ -540,7 +542,8 @@ def _strategy_user_intel(
         selected_ev_bps = maker_ev if maker_ev >= taker_ev else taker_ev
         execution_flavor = "maker" if maker_ev >= taker_ev else "taker"
 
-    estimated_cost_bps = max(gross_edge_bps - selected_ev_bps, 0.0)
+    estimated_cost_bps = max(gross_edge_bps - selected_ev_bps, 0.0) if gross_edge_bps > 0 else 0.0
+    break_even_gap_bps = max(-selected_ev_bps, 0.0)
     edge_surplus_bps = selected_ev_bps
     now_ts = int(time.time())
     decision_age_ms = max((now_ts - int(strategy_last_updated_at or 0)) * 1000, 0) if strategy_last_updated_at else 0
@@ -578,10 +581,12 @@ def _strategy_user_intel(
             "gross_edge_bps": round(gross_edge_bps, 4),
             "maker_ev_bps": round(maker_ev, 4),
             "taker_ev_bps": round(taker_ev, 4),
+            "taker_fee_bps": round(taker_fee_bps, 4),
             "selected_execution": selected_execution,
             "execution_flavor": execution_flavor,
             "selected_ev_bps": round(selected_ev_bps, 4),
             "estimated_cost_bps": round(estimated_cost_bps, 4),
+            "break_even_gap_bps": round(break_even_gap_bps, 4),
             "edge_surplus_bps": round(edge_surplus_bps, 4),
             "edge_status": edge_status,
         },
@@ -1013,6 +1018,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_expected_edge_bps = _bot_state_float(conn, "strategy_expected_edge_bps")
         strategy_maker_ev_bps = _bot_state_float(conn, "strategy_maker_ev_bps")
         strategy_taker_ev_bps = _bot_state_float(conn, "strategy_taker_ev_bps")
+        strategy_taker_fee_bps = _bot_state_float(conn, "strategy_taker_fee_bps")
         strategy_selected_execution = _bot_state_text(conn, "strategy_selected_execution")
         strategy_best_bid_up = _bot_state_float(conn, "strategy_best_bid_up")
         strategy_best_ask_up = _bot_state_float(conn, "strategy_best_ask_up")
@@ -1200,6 +1206,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_expected_edge_bps=strategy_expected_edge_bps,
         strategy_maker_ev_bps=strategy_maker_ev_bps,
         strategy_taker_ev_bps=strategy_taker_ev_bps,
+        strategy_taker_fee_bps=strategy_taker_fee_bps,
         strategy_selected_execution=strategy_selected_execution,
         strategy_market_event_lag_ms=strategy_market_event_lag_ms,
         strategy_spot_age_ms=strategy_spot_age_ms,
@@ -1362,6 +1369,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_expected_edge_bps": round(strategy_expected_edge_bps, 4),
         "strategy_maker_ev_bps": round(strategy_maker_ev_bps, 4),
         "strategy_taker_ev_bps": round(strategy_taker_ev_bps, 4),
+        "strategy_taker_fee_bps": round(strategy_taker_fee_bps, 4),
         "strategy_selected_execution": strategy_selected_execution,
         "strategy_best_bid_up": round(strategy_best_bid_up, 4),
         "strategy_best_ask_up": round(strategy_best_ask_up, 4),
@@ -1403,6 +1411,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "strategy_official_price_to_beat": "Gamma publica de Polymarket si la API devuelve priceToBeat; si no, 0 para el slug actual",
             "strategy_captured_price_to_beat": "captura propia Chainlink RTDS al inicio de la ventana actual",
             "strategy_effective_price_to_beat": "Gamma publica si existe; si no, captura propia Chainlink RTDS ligada al slug actual",
+            "strategy_market_event_lag_ms": "edad local del libro mas viejo entre las patas activas del mercado actual",
+            "strategy_taker_fee_bps": "fee-rate oficial del CLOB convertido a bps para la ventana actual",
             "strategy_current_market_total_exposure": "exposicion del slug actual agregada desde copy_positions",
             "strategy_current_market_live_pnl": "unrealized_pnl del slug actual",
             "compare_realized_pnl": "SUM(strategy_windows.realized_pnl) por runtime",
@@ -1412,7 +1422,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "compare_settlement": "ejecuciones close con notes strategy_resolution:*",
             "compare_cadence": "media entre timestamps de fills open dentro de cada ventana",
             "strategy_live_readiness": "gate derivado de runtime_compare + incubacion: muestra, participacion, dos patas, settlement, cadencia, drawdown y bloqueos dominantes",
-            "strategy_user_intel": "latencia desde feed/mercado/decision y edge neto estimado desde expected_edge_bps + maker/taker EV",
+            "strategy_user_intel": "latencia desde libro/spot/feed/decision y edge neto estimado desde expected_edge_bps + maker/taker EV + fee-rate oficial",
         },
         "strategy_recent_resolutions": recent_resolution_windows,
         "strategy_setup_performance": setup_performance,

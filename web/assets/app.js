@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-27-live-gate1";
+const UI_BUILD = "2026-03-27-live-gate3";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -583,7 +583,7 @@ function compareLatencyHeadline(intel) {
 
 function compareLatencyMeta(intel) {
   const latency = intel?.latency || {};
-  return `mercado ${fmt(Number(latency?.market_event_lag_ms || 0), 0)} ms | spot ${fmt(Number(latency?.spot_age_ms || 0), 0)} ms | feed ${fmt(Number(latency?.feed_age_ms || 0), 0)} ms | decision ${fmt(Number(latency?.decision_age_ms || 0), 0)} ms`;
+  return `libro ${fmt(Number(latency?.market_event_lag_ms || 0), 0)} ms | spot ${fmt(Number(latency?.spot_age_ms || 0), 0)} ms | feed ${fmt(Number(latency?.feed_age_ms || 0), 0)} ms | decision ${fmt(Number(latency?.decision_age_ms || 0), 0)} ms`;
 }
 
 function compareEdgeHeadline(intel) {
@@ -596,20 +596,27 @@ function compareEdgeHeadline(intel) {
 
 function compareEdgeMeta(intel) {
   const edge = intel?.edge || {};
-  return `bruto ${fmtBps(Number(edge?.gross_edge_bps || 0), 1)} | maker ${fmtBps(Number(edge?.maker_ev_bps || 0), 1)} | taker ${fmtBps(Number(edge?.taker_ev_bps || 0), 1)} | ${String(edge?.selected_execution || edge?.execution_flavor || "-")}`;
+  return `bruto ${fmtBps(Number(edge?.gross_edge_bps || 0), 1)} | maker ${fmtBps(Number(edge?.maker_ev_bps || 0), 1)} | taker ${fmtBps(Number(edge?.taker_ev_bps || 0), 1)} | fee ${fmtBps(Number(edge?.taker_fee_bps || 0), 1)} | ${String(edge?.selected_execution || edge?.execution_flavor || "-")}`;
 }
 
 function compareBreakevenHeadline(intel) {
   const edge = intel?.edge || {};
   const cost = Number(edge?.estimated_cost_bps || 0);
+  const gap = Number(edge?.break_even_gap_bps || 0);
   const gross = Number(edge?.gross_edge_bps || 0);
+  if (gap > 0) return `${fmtBps(gap, 1)} | faltan para break-even`;
   if (!gross && !cost) return "-";
   return `${fmtBps(cost, 1)} | coste estimado`;
 }
 
 function compareBreakevenMeta(intel) {
   const edge = intel?.edge || {};
-  return `edge bruto ${fmtBps(Number(edge?.gross_edge_bps || 0), 1)} -> neto ${fmtBps(Number(edge?.selected_ev_bps || 0), 1)} | colchon ${fmtBps(Number(edge?.edge_surplus_bps || 0), 1)}`;
+  const gap = Number(edge?.break_even_gap_bps || 0);
+  const tail =
+    gap > 0
+      ? `faltan ${fmtBps(gap, 1)} para 0`
+      : `colchon ${fmtBps(Number(edge?.edge_surplus_bps || 0), 1)}`;
+  return `edge bruto ${fmtBps(Number(edge?.gross_edge_bps || 0), 1)} -> neto ${fmtBps(Number(edge?.selected_ev_bps || 0), 1)} | fee taker ${fmtBps(Number(edge?.taker_fee_bps || 0), 1)} | ${tail}`;
 }
 
 function compareReferenceHeadline(intel) {

@@ -110,6 +110,13 @@ class FeatureEngine:
         best_bid_down, best_ask_down = _best_bid(down_book), _best_ask(down_book)
         if best_bid_up <= 0 or best_ask_up <= 0 or best_bid_down <= 0 or best_ask_down <= 0:
             return None
+        # Use the age of the current local book snapshot for the compared legs.
+        # The last generic bus event can be a stale trade/spot/liquidation event and
+        # would otherwise overstate "market lag" in the UI and readiness gate.
+        market_book_age_ms = max(
+            max((now_ns - int(up_book.updated_ns)) / 1_000_000, 0.0),
+            max((now_ns - int(down_book.updated_ns)) / 1_000_000, 0.0),
+        )
 
         spread_bps_up = _spread_bps(best_bid_up, best_ask_up)
         spread_bps_down = _spread_bps(best_bid_down, best_ask_down)
@@ -231,7 +238,7 @@ class FeatureEngine:
             seconds_left=seconds_left,
             window_third=_window_third(seconds_into_window),
             inventory_skew=inventory_skew,
-            market_event_lag_ms=state_store.latest_event_lag_ms(),
+            market_event_lag_ms=market_book_age_ms,
             spot_age_ms=int(spot_snapshot.age_ms if spot_snapshot is not None else 0),
             taker_fee_bps_estimate=max(float(taker_fee_bps_estimate), 0.0),
         )

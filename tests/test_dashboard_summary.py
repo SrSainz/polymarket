@@ -1302,6 +1302,7 @@ def test_summary_payload_exposes_user_intel_latency_and_break_even(tmp_path: Pat
     db.set_bot_state("strategy_expected_edge_bps", "12.5")
     db.set_bot_state("strategy_maker_ev_bps", "9.2")
     db.set_bot_state("strategy_taker_ev_bps", "5.4")
+    db.set_bot_state("strategy_taker_fee_bps", "1.7")
     db.set_bot_state("strategy_selected_execution", "taker_fak")
     db.set_bot_state("strategy_market_event_lag_ms", "88.5")
     db.set_bot_state("strategy_spot_age_ms", "143")
@@ -1319,10 +1320,13 @@ def test_summary_payload_exposes_user_intel_latency_and_break_even(tmp_path: Pat
     )
 
     intel = summary["strategy_user_intel"]
+    assert summary["strategy_taker_fee_bps"] == 1.7
     assert intel["edge"]["gross_edge_bps"] == 12.5
     assert intel["edge"]["selected_execution"] == "taker_fak"
     assert intel["edge"]["selected_ev_bps"] == 5.4
     assert intel["edge"]["estimated_cost_bps"] == 7.1
+    assert intel["edge"]["taker_fee_bps"] == 1.7
+    assert intel["edge"]["break_even_gap_bps"] == 0.0
     assert intel["edge"]["edge_status"] == "neto positivo"
     assert intel["latency"]["market_event_lag_ms"] == 88.5
     assert intel["latency"]["spot_age_ms"] == 143
@@ -1330,6 +1334,35 @@ def test_summary_payload_exposes_user_intel_latency_and_break_even(tmp_path: Pat
     assert intel["latency"]["decision_age_ms"] >= 1000
     assert intel["reference"]["effective_price_source"] == "captured-chainlink"
     assert intel["reference"]["reference_quality"] == "captured-chainlink"
+
+
+def test_summary_payload_exposes_break_even_gap_when_selected_edge_is_negative(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_expected_edge_bps", "-149.2")
+    db.set_bot_state("strategy_maker_ev_bps", "-10.7")
+    db.set_bot_state("strategy_taker_ev_bps", "-203.0")
+    db.set_bot_state("strategy_taker_fee_bps", "144.0")
+    db.set_bot_state("strategy_selected_execution", "maker_post_only_gtc")
+    db.set_bot_state("strategy_market_event_lag_ms", "125.0")
+    db.set_bot_state("strategy_spot_age_ms", "80")
+    db.set_bot_state("strategy_feed_age_ms", "15")
+    db.set_bot_state("strategy_last_updated_at", str(int(time.time()) - 1))
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    intel = summary["strategy_user_intel"]
+    assert intel["edge"]["selected_ev_bps"] == -10.7
+    assert intel["edge"]["estimated_cost_bps"] == 0.0
+    assert intel["edge"]["break_even_gap_bps"] == 10.7
+    assert intel["edge"]["edge_status"] == "sin edge neto"
 
 
 def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:

@@ -2014,7 +2014,7 @@ def test_live_cycle_budget_target_uses_absolute_usdc_cap_when_configured(tmp_pat
 
     assert round(budget, 2) == 25.00
     assert round(market_cap, 2) == 25.00
-    assert round(total_cap, 2) == 25.00
+    assert round(total_cap, 2) == 31.25
     db.close()
 
 
