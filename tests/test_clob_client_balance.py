@@ -128,3 +128,33 @@ def test_cancel_order_and_list_open_orders_normalize_payload(_patch_py_clob: _Fa
             "order_type": "GTC",
         }
     ]
+
+
+def test_get_fee_rate_bps_uses_public_fee_rate_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = CLOBClient("https://clob.polymarket.com", EnvSettings(live_trading=False))
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, int]:
+            return {"base_fee": 2500}
+
+    captured: list[dict[str, object]] = []
+
+    def _fake_get(url: str, *, params=None, timeout=None):  # noqa: ANN001
+        captured.append({"url": url, "params": params, "timeout": timeout})
+        return _Response()
+
+    monkeypatch.setattr(client.session, "get", _fake_get)
+
+    fee_bps = client.get_fee_rate_bps("asset-1")
+
+    assert fee_bps == 2500.0
+    assert captured == [
+        {
+            "url": "https://clob.polymarket.com/fee-rate",
+            "params": {"token_id": "asset-1"},
+            "timeout": 15,
+        }
+    ]

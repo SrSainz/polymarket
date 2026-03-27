@@ -31,6 +31,8 @@ class CLOBClient:
         self.session.mount("http://", adapter)
         self._book_summary_cache_seconds = 30.0
         self._min_order_size_cache: dict[str, tuple[float, float]] = {}
+        self._fee_rate_cache_seconds = 30.0
+        self._fee_rate_cache: dict[str, tuple[float, float]] = {}
 
     def track_assets(self, token_ids: list[str] | tuple[str, ...]) -> None:
         if self.market_feed is None:
@@ -96,6 +98,33 @@ class CLOBClient:
 
         self._min_order_size_cache[token_id] = (min_order_size, now + self._book_summary_cache_seconds)
         return min_order_size if min_order_size > 0 else None
+
+    def get_fee_rate_bps(self, token_id: str) -> float | None:
+        token_key = str(token_id or "").strip()
+        if not token_key:
+            return None
+
+        cached = self._fee_rate_cache.get(token_key)
+        now = time.time()
+        if cached is not None and now < cached[1]:
+            return cached[0] if cached[0] > 0 else None
+
+        fee_bps = 0.0
+        try:
+            response = self.session.get(
+                f"{self.base_url}/fee-rate",
+                params={"token_id": token_key},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict):
+                fee_bps = _safe_float(payload.get("base_fee") or payload.get("fee_rate_bps") or payload.get("feeRateBps"))
+        except requests.RequestException:
+            fee_bps = 0.0
+
+        self._fee_rate_cache[token_key] = (fee_bps, now + self._fee_rate_cache_seconds)
+        return fee_bps if fee_bps > 0 else None
 
     def _fetch_book_payload(self, token_id: str) -> dict[str, Any]:
         response = self.session.get(

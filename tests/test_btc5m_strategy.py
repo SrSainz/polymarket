@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -85,6 +86,15 @@ class _FakeCLOBClient:
         if not asks:
             return None
         return float(asks[0]["price"])
+
+
+class _FeeAwareCLOBClient(_FakeCLOBClient):
+    def __init__(self, books: dict[str, dict], fee_bps: float) -> None:
+        super().__init__(books=books, balance=100.0)
+        self.fee_bps = fee_bps
+
+    def get_fee_rate_bps(self, token_id: str) -> float | None:  # noqa: ARG002
+        return self.fee_bps
 
 
 class _FakeBroker:
@@ -286,7 +296,288 @@ def test_execute_instruction_uses_latest_microstructure_execution_profile_for_li
     )
 
     assert live_broker.instructions
-    assert live_broker.instructions[0].execution_profile == "maker_post_only_gtc"
+    assert live_broker.instructions[0].execution_profile == "taker_fak"
+    assert "live_maker_disabled:maker_post_only_gtc->taker_fak" in live_broker.instructions[0].reason
+    db.close()
+
+
+def test_execute_instruction_keeps_latest_microstructure_execution_profile_for_shadow(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    shadow_broker = _FakeBroker()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=shadow_broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-shadow-profile"),
+    )
+    service.telemetry._latest_decision = DecisionTrace(
+        window_id="btc-updown-5m-test",
+        market_slug="btc-updown-5m-test",
+        market_title="Bitcoin Up or Down - Test",
+        readiness_score=82.0,
+        regime="directional_pressure",
+        signal_side="up",
+        expected_edge_bps=12.0,
+        maker_ev_bps=9.0,
+        taker_ev_bps=11.0,
+        maker_fill_prob=0.55,
+        selected_execution="maker_post_only_gtc",
+        blocked_by=(),
+        latency_penalty_bps=1.0,
+        spread_penalty_bps=2.0,
+        adverse_selection_penalty_bps=1.5,
+    )
+
+    service._execute_instruction(
+        mode="shadow",
+        instruction=CopyInstruction(
+            action=SignalAction.OPEN,
+            side=TradeSide.BUY,
+            asset="asset-up",
+            condition_id="cond-1",
+            size=10.0,
+            price=0.42,
+            notional=4.2,
+            source_wallet="strategy:test",
+            source_signal_id=1,
+            title="Bitcoin Up or Down - Test",
+            slug="btc-updown-5m-test",
+            outcome="Up",
+            category="crypto",
+            reason="unit-test",
+        ),
+    )
+
+    assert shadow_broker.instructions
+    assert shadow_broker.instructions[0].execution_profile == "maker_post_only_gtc"
+    db.close()
+
+
+def test_microstructure_taker_fee_estimate_uses_public_fee_rate(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "feesEnabled": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    books = {
+        "asset-up": {"asks": [{"price": 0.40, "size": 50}], "bids": [{"price": 0.39, "size": 50}]},
+        "asset-down": {"asks": [{"price": 0.60, "size": 50}], "bids": [{"price": 0.59, "size": 50}]},
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FeeAwareCLOBClient(books=books, fee_bps=2500.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-fee"),
+    )
+
+    fee_bps = service._microstructure_taker_fee_bps_estimate(market)  # noqa: SLF001
+
+    assert round(fee_bps, 2) == 144.0
+    db.close()
+
+
+def test_live_user_trade_reconciliation_updates_live_position_from_pending_order(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={"asset-up": {"asks": [{"price": 0.42, "size": 50}], "bids": [{"price": 0.41, "size": 50}]}, "asset-down": {"asks": [{"price": 0.58, "size": 50}], "bids": [{"price": 0.57, "size": 50}]}}),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-live-reconcile"),
+    )
+    db.set_bot_state(
+        "live_pending_order:order-1",
+        json.dumps(
+            {
+                "order_id": "order-1",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-up",
+                "condition_id": "cond-1",
+                "size": 10.0,
+                "price": 0.42,
+                "notional": 4.2,
+                "source_wallet": "strategy:test",
+                "source_signal_id": 1,
+                "title": "Bitcoin Up or Down - Test",
+                "slug": "btc-updown-5m-test",
+                "outcome": "Up",
+                "category": "crypto",
+                "reason": "pending-live-order",
+                "execution_profile": "maker_post_only_gtc",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+    service._handle_user_payload(  # noqa: SLF001
+        {
+            "event_type": "trade",
+            "status": "MATCHED",
+            "id": "trade-1",
+            "maker_orders": [
+                {
+                    "order_id": "order-1",
+                    "matched_amount": "10",
+                    "price": "0.43",
+                }
+            ],
+        }
+    )
+
+    assert db.get_copy_position("asset-up") is None
+    assert db.get_recent_executions(limit=5) == []
+    assert db.get_bot_state("live_pending_order:order-1") is not None
+
+    service._handle_user_payload(  # noqa: SLF001
+        {
+            "event_type": "trade",
+            "status": "CONFIRMED",
+            "id": "trade-1",
+            "maker_orders": [
+                {
+                    "order_id": "order-1",
+                    "matched_amount": "10",
+                    "price": "0.43",
+                }
+            ],
+        }
+    )
+
+    position = db.get_copy_position("asset-up")
+    executions = db.get_recent_executions(limit=5)
+
+    assert position is not None
+    assert float(position["size"]) == 10.0
+    assert abs(float(position["avg_price"]) - 0.43) < 1e-9
+    assert executions[0]["mode"] == "live"
+    assert "live_user_feed_reconciled" in str(executions[0]["notes"])
+    assert db.get_bot_state("live_pending_order:order-1") is None
+    db.close()
+
+
+def test_live_user_trade_failure_clears_pending_order_without_mutating_position(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={"asset-up": {"asks": [{"price": 0.42, "size": 50}], "bids": [{"price": 0.41, "size": 50}]}, "asset-down": {"asks": [{"price": 0.58, "size": 50}], "bids": [{"price": 0.57, "size": 50}]}}),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-live-failed-reconcile"),
+    )
+    db.set_bot_state(
+        "live_pending_order:order-2",
+        json.dumps(
+            {
+                "order_id": "order-2",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-up",
+                "condition_id": "cond-1",
+                "size": 10.0,
+                "price": 0.42,
+                "notional": 4.2,
+                "source_wallet": "strategy:test",
+                "source_signal_id": 1,
+                "title": "Bitcoin Up or Down - Test",
+                "slug": "btc-updown-5m-test",
+                "outcome": "Up",
+                "category": "crypto",
+                "reason": "pending-live-order",
+                "execution_profile": "maker_post_only_gtc",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+    service._handle_user_payload(  # noqa: SLF001
+        {
+            "event_type": "trade",
+            "status": "FAILED",
+            "id": "trade-2",
+            "maker_orders": [
+                {
+                    "order_id": "order-2",
+                    "matched_amount": "10",
+                    "price": "0.43",
+                }
+            ],
+        }
+    )
+
+    assert db.get_copy_position("asset-up") is None
+    assert db.get_recent_executions(limit=5) == []
+    assert db.get_bot_state("live_pending_order:order-2") is None
+    assert db.get_bot_state("live_last_failed_order_id") == "order-2"
     db.close()
 
 

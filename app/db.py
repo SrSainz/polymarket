@@ -541,6 +541,10 @@ class Database:
                 (key, value),
             )
 
+    def delete_bot_state(self, key: str) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM bot_state WHERE key = ?", (key,))
+
     def insert_signal(self, signal: NormalizedSignal) -> bool:
         try:
             with self.conn:

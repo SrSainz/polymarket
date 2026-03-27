@@ -12,7 +12,7 @@ from app.core.autonomous_decider import AutonomousDecider
 from app.core.bankroll import calculate_effective_bankroll, calculate_reserved_profit
 from app.core.decision_engine import ReadinessScorer, RegimeDetector, StrategyEngine
 from app.core.event_bus import EventBus
-from app.core.execution_engine import ExecutionEngine
+from app.core.execution_engine import ExecutionEngine, apply_fill_to_database
 from app.core.feature_engine import FeatureEngine
 from app.core.live_broker import LiveBroker
 from app.core.paper_broker import PaperBroker
@@ -5529,6 +5529,10 @@ class BTC5mStrategyService:
             market_id=str(payload.get("market") or payload.get("condition_id") or ""),
             ts_exchange_ms=int(_safe_float(payload.get("timestamp") or payload.get("match_time") or payload.get("created_at"))),
         )
+        try:
+            self._reconcile_live_user_payload(payload=payload)
+        except Exception as error:  # noqa: BLE001
+            self.logger.warning("live user feed reconciliation failed: %s", error)
 
     def _snapshot_microstructure_state(
         self,
@@ -5542,6 +5546,8 @@ class BTC5mStrategyService:
         seconds_into_window = self._seconds_into_window(market) if market is not None else 0
         spot_snapshot = self.spot_feed.get_snapshot() if self.spot_feed is not None else None
         official_price_to_beat = self._market_official_price_to_beat(market) if market is not None else 0.0
+        taker_fee_bps_estimate = self._microstructure_taker_fee_bps_estimate(market)
+        self.db.set_bot_state("strategy_taker_fee_bps", f"{taker_fee_bps_estimate:.4f}")
         self.telemetry.snapshot_market(
             market=market,
             official_price_to_beat=official_price_to_beat,
@@ -5550,6 +5556,201 @@ class BTC5mStrategyService:
             current_up_exposure=up_exposure,
             current_down_exposure=down_exposure,
             note=note,
+            taker_fee_bps_estimate=taker_fee_bps_estimate,
+        )
+
+    def _microstructure_taker_fee_bps_estimate(self, market: dict | None) -> float:
+        if not isinstance(market, dict):
+            return 0.0
+        if not bool(market.get("feesEnabled")):
+            return 0.0
+        token_ids = _parse_json_list(market.get("clobTokenIds"))
+        if len(token_ids) != 2:
+            return 0.0
+        fee_lookup = getattr(self.clob_client, "get_fee_rate_bps", None)
+        if not callable(fee_lookup):
+            return 0.0
+
+        effective_bps: list[float] = []
+        for token_id in token_ids:
+            fee_rate_bps = _safe_float(fee_lookup(str(token_id)))
+            if fee_rate_bps <= 0:
+                continue
+            book = self._safe_book(str(token_id)) or {}
+            best_ask = _best_ask(book)
+            if best_ask is None or best_ask <= 0 or best_ask >= 1:
+                continue
+            fee_rate = fee_rate_bps / 10_000
+            effective_rate = fee_rate * max(best_ask * (1.0 - best_ask), 0.0) ** 2
+            effective_bps.append(effective_rate * 10_000)
+        if not effective_bps:
+            return 0.0
+        return sum(effective_bps) / len(effective_bps)
+
+    def _reconcile_live_user_payload(self, *, payload: dict[str, object]) -> None:
+        event_type = str(payload.get("event_type") or payload.get("type") or "").strip().lower()
+        if event_type in {"trade", "matched"}:
+            self._reconcile_live_trade_payload(payload=payload)
+            return
+        if event_type in {"order", "placement", "update", "cancellation"}:
+            self._reconcile_live_order_payload(payload=payload)
+
+    def _reconcile_live_order_payload(self, *, payload: dict[str, object]) -> None:
+        status = str(payload.get("status") or payload.get("order_status") or payload.get("state") or "").strip().lower()
+        if status not in {"cancelled", "canceled", "failed", "rejected", "expired", "filled", "confirmed"}:
+            return
+        for order_id in self._live_user_payload_order_ids(payload):
+            if not order_id:
+                continue
+            self.db.delete_bot_state(self._pending_live_order_key(order_id))
+
+    def _reconcile_live_trade_payload(self, *, payload: dict[str, object]) -> None:
+        for trade in self._iter_live_trade_payloads(payload):
+            order_id = str(trade.get("order_id") or "").strip()
+            trade_id = str(trade.get("trade_id") or "").strip()
+            status = str(trade.get("status") or "").strip().lower()
+            size = float(trade.get("size") or 0.0)
+            price = float(trade.get("price") or 0.0)
+            if not order_id:
+                continue
+            pending = self._load_pending_live_order(order_id)
+            if pending is None:
+                continue
+            if status in {"failed", "rejected", "cancelled", "canceled", "expired"}:
+                self.db.delete_bot_state(self._pending_live_order_key(order_id))
+                self.db.set_bot_state("live_last_failed_order_id", order_id)
+                continue
+            if status not in {"confirmed"}:
+                continue
+            if size <= 0 or price <= 0:
+                continue
+            dedupe_key = self._processed_live_trade_key(order_id=order_id, trade_id=trade_id or f"{size:.8f}:{price:.8f}")
+            if self.db.get_bot_state(dedupe_key) == "1":
+                continue
+            instruction = self._instruction_from_pending_live_order(pending)
+            result = apply_fill_to_database(
+                db=self.db,
+                instruction=instruction,
+                mode="live",
+                filled_size=size,
+                fill_price=price,
+                fill_notional=size * price,
+                message=json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                status="filled",
+                notes=f"live_user_feed_reconciled order_id={order_id} trade_id={trade_id or '-'}",
+            )
+            if result.status == "filled":
+                new_reconciled_size = float(pending.get("reconciled_size") or 0.0) + size
+                self.db.set_bot_state(dedupe_key, "1")
+                self.db.set_bot_state("live_last_reconciled_order_id", order_id)
+                if new_reconciled_size >= float(pending.get("size") or 0.0) - 1e-9:
+                    self.db.delete_bot_state(self._pending_live_order_key(order_id))
+                else:
+                    pending["reconciled_size"] = new_reconciled_size
+                    self.db.set_bot_state(
+                        self._pending_live_order_key(order_id),
+                        json.dumps(pending, separators=(",", ":"), sort_keys=True),
+                    )
+
+    def _iter_live_trade_payloads(self, payload: dict[str, object]) -> list[dict[str, object]]:
+        trade_id = str(
+            payload.get("id")
+            or payload.get("trade_id")
+            or payload.get("tradeID")
+            or payload.get("match_id")
+            or ""
+        ).strip()
+        status = str(payload.get("status") or payload.get("trade_status") or payload.get("state") or "").strip().lower()
+        rows: list[dict[str, object]] = []
+        maker_orders = payload.get("maker_orders")
+        if isinstance(maker_orders, list):
+            for row in maker_orders:
+                if not isinstance(row, dict):
+                    continue
+                rows.append(
+                    {
+                        "order_id": str(row.get("order_id") or row.get("orderID") or row.get("id") or "").strip(),
+                        "trade_id": trade_id,
+                        "size": _safe_float(
+                            row.get("matched_amount")
+                            or row.get("size_matched")
+                            or row.get("filled_size")
+                            or row.get("size")
+                        ),
+                        "price": _safe_float(row.get("price") or row.get("avg_price") or payload.get("price")),
+                        "status": status,
+                    }
+                )
+        if rows:
+            return rows
+        order_ids = self._live_user_payload_order_ids(payload)
+        size = _safe_float(
+            payload.get("matched_amount")
+            or payload.get("size_matched")
+            or payload.get("filled_size")
+            or payload.get("filledSize")
+            or payload.get("size")
+        )
+        price = _safe_float(payload.get("price") or payload.get("avg_price") or payload.get("average_price"))
+        return [
+            {
+                "order_id": order_id,
+                "trade_id": trade_id,
+                "size": size,
+                "price": price,
+                "status": status,
+            }
+            for order_id in order_ids
+        ]
+
+    def _live_user_payload_order_ids(self, payload: dict[str, object]) -> list[str]:
+        values = [
+            payload.get("order_id"),
+            payload.get("orderID"),
+            payload.get("orderId"),
+            payload.get("maker_order_id"),
+            payload.get("taker_order_id"),
+        ]
+        order_ids: list[str] = []
+        for raw in values:
+            order_id = str(raw or "").strip()
+            if order_id and order_id not in order_ids:
+                order_ids.append(order_id)
+        return order_ids
+
+    def _pending_live_order_key(self, order_id: str) -> str:
+        return f"live_pending_order:{str(order_id or '').strip()}"
+
+    def _processed_live_trade_key(self, *, order_id: str, trade_id: str) -> str:
+        return f"live_processed_trade:{str(order_id or '').strip()}:{str(trade_id or '').strip()}"
+
+    def _load_pending_live_order(self, order_id: str) -> dict[str, object] | None:
+        raw = self.db.get_bot_state(self._pending_live_order_key(order_id))
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _instruction_from_pending_live_order(self, pending: dict[str, object]) -> CopyInstruction:
+        return CopyInstruction(
+            action=SignalAction(str(pending.get("action") or SignalAction.OPEN.value)),
+            side=TradeSide(str(pending.get("side") or TradeSide.BUY.value)),
+            asset=str(pending.get("asset") or ""),
+            condition_id=str(pending.get("condition_id") or ""),
+            size=float(pending.get("size") or 0.0),
+            price=float(pending.get("price") or 0.0),
+            notional=float(pending.get("notional") or 0.0),
+            source_wallet=str(pending.get("source_wallet") or ""),
+            source_signal_id=int(_safe_float(pending.get("source_signal_id"))),
+            title=str(pending.get("title") or ""),
+            slug=str(pending.get("slug") or ""),
+            outcome=str(pending.get("outcome") or ""),
+            category=str(pending.get("category") or ""),
+            reason=str(pending.get("reason") or ""),
+            execution_profile=str(pending.get("execution_profile") or ""),
         )
 
     def _current_market_exposure_split(self, market: dict | None) -> tuple[float, float]:
@@ -5766,8 +5967,19 @@ class BTC5mStrategyService:
         if mode in {"live", "shadow"} and not str(instruction.execution_profile or "").strip():
             decision = self.telemetry.latest_decision() if self.telemetry is not None else None
             selected_execution = str(getattr(decision, "selected_execution", "") or "").strip().lower()
+            original_execution = selected_execution
+            if mode == "live" and selected_execution.startswith("maker"):
+                selected_execution = str(self.settings.config.live_execution_profile or "").strip().lower()
+                if not selected_execution or selected_execution.startswith("maker"):
+                    selected_execution = "taker_fak"
             if selected_execution and selected_execution != "no_trade":
-                instruction = instruction.model_copy(update={"execution_profile": selected_execution})
+                updates: dict[str, str] = {"execution_profile": selected_execution}
+                if mode == "live" and original_execution.startswith("maker") and selected_execution != original_execution:
+                    live_guard_note = f"live_maker_disabled:{original_execution}->{selected_execution}"
+                    reason = str(instruction.reason or "").strip()
+                    updates["reason"] = f"{reason} | {live_guard_note}" if reason else live_guard_note
+                    self.db.set_bot_state("strategy_live_execution_guard", live_guard_note)
+                instruction = instruction.model_copy(update=updates)
         return self.execution_engine.execute(mode=mode, instruction=instruction)
 
     def _run_autonomous_exits(self, *, mode: str, stats: dict[str, int]) -> None:

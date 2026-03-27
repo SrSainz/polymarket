@@ -71,6 +71,7 @@ class FeatureFrame:
     spot_age_ms: int
     readiness_score: float = 0.0
     regime: str = ""
+    taker_fee_bps_estimate: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -88,6 +89,7 @@ class FeatureEngine:
         current_up_exposure: float = 0.0,
         current_down_exposure: float = 0.0,
         cadence: str = "tick",
+        taker_fee_bps_estimate: float = 0.0,
     ) -> FeatureFrame | None:
         outcomes = _parse_json_list(market.get("outcomes"))
         token_ids = _parse_json_list(market.get("clobTokenIds"))
@@ -231,6 +233,7 @@ class FeatureEngine:
             inventory_skew=inventory_skew,
             market_event_lag_ms=state_store.latest_event_lag_ms(),
             spot_age_ms=int(spot_snapshot.age_ms if spot_snapshot is not None else 0),
+            taker_fee_bps_estimate=max(float(taker_fee_bps_estimate), 0.0),
         )
 
 

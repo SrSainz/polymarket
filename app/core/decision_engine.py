@@ -117,7 +117,8 @@ class StrategyEngine:
         maker_fill_prob = min(max(0.20 + (frame.readiness_score / 120.0) - (spread_penalty_bps / 50.0), 0.05), 0.95)
         expected_edge_bps = frame.locked_edge_bps + directional_score - spread_penalty_bps - latency_penalty_bps
         maker_ev_bps = (frame.locked_edge_bps * maker_fill_prob) + (directional_score * 0.35) - adverse_selection_penalty_bps
-        taker_ev_bps = expected_edge_bps - max(frame.sweep_cost_50_bps, 0.0) - 2.5
+        taker_fee_bps = max(float(frame.taker_fee_bps_estimate or 0.0), 0.0)
+        taker_ev_bps = expected_edge_bps - max(frame.sweep_cost_50_bps, 0.0) - taker_fee_bps
 
         selected_execution = "no_trade"
         blocked = list(blockers)

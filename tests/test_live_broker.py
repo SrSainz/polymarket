@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.core.live_broker import LiveBroker
 from app.db import Database
 from app.models import CopyInstruction, SignalAction, TradeSide
@@ -103,15 +105,13 @@ def test_live_broker_buy_updates_position_and_execution_log(tmp_path: Path) -> N
     )
 
     position = db.get_copy_position("asset-1")
-    execution = db.get_recent_executions(limit=1)[0]
+    executions = db.get_recent_executions(limit=5)
 
-    assert result.status == "filled"
-    assert position is not None
-    assert float(position["size"]) == 10.0
-    assert abs(float(position["avg_price"]) - 0.42) < 1e-9
-    assert execution["mode"] == "live"
-    assert execution["status"] == "filled"
-    assert "order_id=live-123" in str(execution["notes"])
+    assert result.status == "submitted"
+    assert "awaiting_confirmation" in result.message
+    assert position is None
+    assert executions == []
+    assert db.get_bot_state("live_pending_order:live-123")
     assert clob.calls[0]["order_type"] == "FOK"
     assert abs(float(clob.calls[0]["limit_price"]) - 0.4121) < 1e-9
     db.close()
@@ -143,11 +143,11 @@ def test_live_broker_sell_updates_realized_pnl(tmp_path: Path) -> None:
 
     position = db.get_copy_position("asset-1")
 
-    assert result.status == "filled"
-    assert abs(result.pnl_delta - 0.6) < 1e-9
+    assert result.status == "submitted"
     assert position is not None
-    assert float(position["size"]) == 6.0
-    assert abs(float(position["realized_pnl"]) - 0.6) < 1e-9
+    assert float(position["size"]) == 10.0
+    assert abs(float(position["realized_pnl"]) - 0.0) < 1e-9
+    assert db.get_bot_state("live_pending_order:live-123")
     db.close()
 
 
@@ -221,3 +221,43 @@ def test_live_broker_maker_profile_submits_limit_order_without_mutating_position
     assert clob.calls == []
     assert clob.limit_calls[0]["order_type"] == "GTC"
     assert clob.limit_calls[0]["post_only"] is True
+
+
+def test_live_broker_accepts_ambiguous_matched_response_as_pending_confirmation(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    broker = LiveBroker(
+        db,
+        _FakeCLOBClient(response={"orderID": "live-789", "status": "matched", "tradeIDs": ["t-1"]}),
+        EnvSettings(live_trading=True),
+    )
+
+    result = broker.execute(
+        _instruction(side=TradeSide.BUY, action=SignalAction.OPEN, size=10.0, price=0.45)
+    )
+
+    assert result.status == "submitted"
+    assert db.get_copy_position("asset-1") is None
+    assert db.get_recent_executions(limit=5) == []
+    assert db.get_bot_state("live_pending_order:live-789")
+    db.close()
+
+
+def test_live_broker_respects_dry_run_flag(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    broker = LiveBroker(
+        db,
+        _FakeCLOBClient(response={"orderID": "live-999", "status": "matched", "makingAmount": "4.20", "takingAmount": "10.0"}),
+        EnvSettings(live_trading=True),
+        dry_run=True,
+    )
+
+    with pytest.raises(RuntimeError, match="dry_run=true"):
+        broker.execute(
+            _instruction(side=TradeSide.BUY, action=SignalAction.OPEN, size=10.0, price=0.42)
+        )
+
+    assert db.get_copy_position("asset-1") is None
+    assert db.get_recent_executions(limit=5) == []
+    db.close()

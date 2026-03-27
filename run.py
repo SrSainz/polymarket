@@ -123,6 +123,7 @@ def build_context(root_dir: Path, *, runtime_mode: str = "paper") -> tuple[AppSe
         settings.env,
         slippage_limit=settings.config.slippage_limit,
         execution_profile=settings.config.live_execution_profile,
+        dry_run=settings.config.dry_run,
     )
     autonomous_decider = AutonomousDecider(settings.config, db)
     daily_summary = TelegramDailySummaryService(db, settings.config, settings.env, logger)

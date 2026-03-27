@@ -81,6 +81,7 @@ def microstructure_bot_state_entries(
             "strategy_near_liq_cluster_distance_bps": "0.0000",
             "strategy_window_third": "",
             "strategy_market_event_lag_ms": "0.0000",
+            "strategy_taker_fee_bps": "0.0000",
             "strategy_decision_blocked_by": "",
         }
     entries = {
@@ -103,6 +104,7 @@ def microstructure_bot_state_entries(
         "strategy_near_liq_cluster_distance_bps": f"{frame.near_liq_cluster_distance_bps:.4f}",
         "strategy_window_third": frame.window_third,
         "strategy_market_event_lag_ms": f"{frame.market_event_lag_ms:.4f}",
+        "strategy_taker_fee_bps": f"{frame.taker_fee_bps_estimate:.4f}",
     }
     if decision is None:
         entries.update(

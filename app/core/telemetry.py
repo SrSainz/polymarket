@@ -71,6 +71,7 @@ class MicrostructureTelemetry:
         current_up_exposure: float = 0.0,
         current_down_exposure: float = 0.0,
         note: str = "",
+        taker_fee_bps_estimate: float = 0.0,
     ) -> tuple[FeatureFrame | None, DecisionTrace | None]:
         if market is None:
             self._latest_frame = None
@@ -84,11 +85,12 @@ class MicrostructureTelemetry:
             market=market,
             state_store=self.state_store,
             official_price_to_beat=official_price_to_beat,
-            spot_snapshot=spot_snapshot,
-            seconds_into_window=seconds_into_window,
-            current_up_exposure=current_up_exposure,
-            current_down_exposure=current_down_exposure,
-        )
+                spot_snapshot=spot_snapshot,
+                seconds_into_window=seconds_into_window,
+                current_up_exposure=current_up_exposure,
+                current_down_exposure=current_down_exposure,
+                taker_fee_bps_estimate=taker_fee_bps_estimate,
+            )
         feature_elapsed_ms = (time.perf_counter_ns() - start_ns) / 1_000_000
         decision: DecisionTrace | None = None
         if frame is not None:
