@@ -573,6 +573,58 @@ function renderCompareReadinessItems(readiness) {
     .join("");
 }
 
+function compareLatencyHeadline(intel) {
+  const latency = intel?.latency || {};
+  const maxMs = Number(latency?.latency_max_ms || 0);
+  const grade = String(latency?.latency_grade || "").trim();
+  if (maxMs <= 0) return "-";
+  return `${fmt(maxMs, 0)} ms | ${grade || "sin grado"}`;
+}
+
+function compareLatencyMeta(intel) {
+  const latency = intel?.latency || {};
+  return `mercado ${fmt(Number(latency?.market_event_lag_ms || 0), 0)} ms | spot ${fmt(Number(latency?.spot_age_ms || 0), 0)} ms | feed ${fmt(Number(latency?.feed_age_ms || 0), 0)} ms | decision ${fmt(Number(latency?.decision_age_ms || 0), 0)} ms`;
+}
+
+function compareEdgeHeadline(intel) {
+  const edge = intel?.edge || {};
+  const selectedEv = Number(edge?.selected_ev_bps || 0);
+  const status = String(edge?.edge_status || "").trim();
+  if (!selectedEv && !status) return "-";
+  return `${fmtBps(selectedEv, 1)} | ${status || "sin edge"}`;
+}
+
+function compareEdgeMeta(intel) {
+  const edge = intel?.edge || {};
+  return `bruto ${fmtBps(Number(edge?.gross_edge_bps || 0), 1)} | maker ${fmtBps(Number(edge?.maker_ev_bps || 0), 1)} | taker ${fmtBps(Number(edge?.taker_ev_bps || 0), 1)} | ${String(edge?.selected_execution || edge?.execution_flavor || "-")}`;
+}
+
+function compareBreakevenHeadline(intel) {
+  const edge = intel?.edge || {};
+  const cost = Number(edge?.estimated_cost_bps || 0);
+  const gross = Number(edge?.gross_edge_bps || 0);
+  if (!gross && !cost) return "-";
+  return `${fmtBps(cost, 1)} | coste estimado`;
+}
+
+function compareBreakevenMeta(intel) {
+  const edge = intel?.edge || {};
+  return `edge bruto ${fmtBps(Number(edge?.gross_edge_bps || 0), 1)} -> neto ${fmtBps(Number(edge?.selected_ev_bps || 0), 1)} | colchon ${fmtBps(Number(edge?.edge_surplus_bps || 0), 1)}`;
+}
+
+function compareReferenceHeadline(intel) {
+  const reference = intel?.reference || {};
+  const source = String(reference?.effective_price_source || "").trim();
+  if (!source) return "-";
+  return source.replaceAll("-", " ");
+}
+
+function compareReferenceMeta(intel) {
+  const reference = intel?.reference || {};
+  const quality = String(reference?.reference_quality || "").trim();
+  return quality || "sin calidad";
+}
+
 function shortCompareWindow(point) {
   const slug = String(point?.slug || "").trim();
   const title = String(point?.title || "").trim();
@@ -692,6 +744,14 @@ function paintRuntimeCompare(summary) {
   const readinessHeadline = document.getElementById("compareReadinessHeadline");
   const readinessMeta = document.getElementById("compareReadinessMeta");
   const readinessList = document.getElementById("compareReadinessList");
+  const latencyValue = document.getElementById("compareLatencyValue");
+  const latencyMeta = document.getElementById("compareLatencyMeta");
+  const edgeValue = document.getElementById("compareEdgeValue");
+  const edgeMeta = document.getElementById("compareEdgeMeta");
+  const breakevenValue = document.getElementById("compareBreakevenValue");
+  const breakevenMeta = document.getElementById("compareBreakevenMeta");
+  const referenceValue = document.getElementById("compareReferenceValue");
+  const referenceMeta = document.getElementById("compareReferenceMeta");
   const twoSided = document.getElementById("compareTwoSided");
   const twoSidedMeta = document.getElementById("compareTwoSidedMeta");
   const oneSided = document.getElementById("compareOneSided");
@@ -741,6 +801,14 @@ function paintRuntimeCompare(summary) {
     !readinessHeadline ||
     !readinessMeta ||
     !readinessList ||
+    !latencyValue ||
+    !latencyMeta ||
+    !edgeValue ||
+    !edgeMeta ||
+    !breakevenValue ||
+    !breakevenMeta ||
+    !referenceValue ||
+    !referenceMeta ||
     !twoSided ||
     !twoSidedMeta ||
     !oneSided ||
@@ -792,6 +860,7 @@ function paintRuntimeCompare(summary) {
   const history = compareHistory(summary);
   const historySummary = history.summary || {};
   const readiness = summary?.strategy_live_readiness || {};
+  const userIntel = summary?.strategy_user_intel || {};
   const historyPoints = Array.isArray(history?.points) ? history.points : [];
   const paperSeries = Array.isArray(history?.series?.paper) ? history.series.paper : [];
   const shadowSeries = Array.isArray(history?.series?.shadow) ? history.series.shadow : [];
@@ -834,6 +903,14 @@ function paintRuntimeCompare(summary) {
   readinessHeadline.textContent = String(readiness?.headline || "Gate live pendiente");
   readinessMeta.textContent = compareReadinessMeta(readiness);
   readinessList.innerHTML = renderCompareReadinessItems(readiness);
+  latencyValue.textContent = compareLatencyHeadline(userIntel);
+  latencyMeta.textContent = compareLatencyMeta(userIntel);
+  edgeValue.textContent = compareEdgeHeadline(userIntel);
+  edgeMeta.textContent = compareEdgeMeta(userIntel);
+  breakevenValue.textContent = compareBreakevenHeadline(userIntel);
+  breakevenMeta.textContent = compareBreakevenMeta(userIntel);
+  referenceValue.textContent = compareReferenceHeadline(userIntel);
+  referenceMeta.textContent = compareReferenceMeta(userIntel);
 
   const lifecycleHistoryAvailable =
     Number(historySummary?.paper_active_window_count || 0) > 0 ||

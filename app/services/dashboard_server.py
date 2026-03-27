@@ -512,6 +512,86 @@ def _strategy_live_readiness(*, runtime_window_compare: dict | None, incubation:
     }
 
 
+def _strategy_user_intel(
+    *,
+    strategy_expected_edge_bps: float,
+    strategy_maker_ev_bps: float,
+    strategy_taker_ev_bps: float,
+    strategy_selected_execution: str,
+    strategy_market_event_lag_ms: float,
+    strategy_spot_age_ms: int,
+    strategy_feed_age_ms: int,
+    strategy_last_updated_at: int,
+    strategy_effective_price_source: str,
+    strategy_reference_quality: str,
+) -> dict:
+    selected_execution = str(strategy_selected_execution or "").strip().lower()
+    maker_ev = float(strategy_maker_ev_bps or 0.0)
+    taker_ev = float(strategy_taker_ev_bps or 0.0)
+    gross_edge_bps = float(strategy_expected_edge_bps or 0.0)
+
+    if selected_execution.startswith("maker"):
+        selected_ev_bps = maker_ev
+        execution_flavor = "maker"
+    elif selected_execution.startswith("taker"):
+        selected_ev_bps = taker_ev
+        execution_flavor = "taker"
+    else:
+        selected_ev_bps = maker_ev if maker_ev >= taker_ev else taker_ev
+        execution_flavor = "maker" if maker_ev >= taker_ev else "taker"
+
+    estimated_cost_bps = max(gross_edge_bps - selected_ev_bps, 0.0)
+    edge_surplus_bps = selected_ev_bps
+    now_ts = int(time.time())
+    decision_age_ms = max((now_ts - int(strategy_last_updated_at or 0)) * 1000, 0) if strategy_last_updated_at else 0
+    market_lag_ms = max(float(strategy_market_event_lag_ms or 0.0), 0.0)
+    spot_age_ms = max(int(strategy_spot_age_ms or 0), 0)
+    feed_age_ms = max(int(strategy_feed_age_ms or 0), 0)
+    latency_max_ms = max(market_lag_ms, float(spot_age_ms), float(feed_age_ms), float(decision_age_ms))
+
+    if latency_max_ms <= 250:
+        latency_grade = "muy fresca"
+    elif latency_max_ms <= 750:
+        latency_grade = "fresca"
+    elif latency_max_ms <= 1500:
+        latency_grade = "usable"
+    else:
+        latency_grade = "lenta"
+
+    if selected_ev_bps > 0:
+        edge_status = "neto positivo"
+    elif gross_edge_bps > 0:
+        edge_status = "edge bruto sin colchón"
+    else:
+        edge_status = "sin edge neto"
+
+    return {
+        "latency": {
+            "market_event_lag_ms": round(market_lag_ms, 2),
+            "spot_age_ms": int(spot_age_ms),
+            "feed_age_ms": int(feed_age_ms),
+            "decision_age_ms": int(decision_age_ms),
+            "latency_max_ms": round(latency_max_ms, 2),
+            "latency_grade": latency_grade,
+        },
+        "edge": {
+            "gross_edge_bps": round(gross_edge_bps, 4),
+            "maker_ev_bps": round(maker_ev, 4),
+            "taker_ev_bps": round(taker_ev, 4),
+            "selected_execution": selected_execution,
+            "execution_flavor": execution_flavor,
+            "selected_ev_bps": round(selected_ev_bps, 4),
+            "estimated_cost_bps": round(estimated_cost_bps, 4),
+            "edge_surplus_bps": round(edge_surplus_bps, 4),
+            "edge_status": edge_status,
+        },
+        "reference": {
+            "effective_price_source": str(strategy_effective_price_source or "").strip(),
+            "reference_quality": str(strategy_reference_quality or "").strip(),
+        },
+    }
+
+
 def run_dashboard_server(
     db_path: Path,
     static_dir: Path,
@@ -1116,6 +1196,18 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         runtime_window_compare=runtime_window_compare,
         incubation=incubation,
     )
+    strategy_user_intel = _strategy_user_intel(
+        strategy_expected_edge_bps=strategy_expected_edge_bps,
+        strategy_maker_ev_bps=strategy_maker_ev_bps,
+        strategy_taker_ev_bps=strategy_taker_ev_bps,
+        strategy_selected_execution=strategy_selected_execution,
+        strategy_market_event_lag_ms=strategy_market_event_lag_ms,
+        strategy_spot_age_ms=strategy_spot_age_ms,
+        strategy_feed_age_ms=strategy_feed_age_ms,
+        strategy_last_updated_at=strategy_last_updated_at,
+        strategy_effective_price_source=strategy_effective_price_source,
+        strategy_reference_quality=strategy_reference_quality,
+    )
     strategy_cycle_budget_remaining = max(strategy_cycle_budget - current_market_total_exposure, 0.0)
     strategy_cycle_budget_shortfall = max(strategy_effective_min_notional - strategy_cycle_budget_remaining, 0.0)
 
@@ -1298,6 +1390,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_runtime_window_compare": runtime_window_compare,
         "strategy_runtime_compare_db_path": str(runtime_window_compare.get("db_path") or ""),
         "strategy_live_readiness": strategy_live_readiness,
+        "strategy_user_intel": strategy_user_intel,
         "dashboard_build": _DASHBOARD_BUILD,
         "dashboard_metric_sources": {
             "live_cash_balance": "bot_state.live_cash_balance",
@@ -1319,6 +1412,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "compare_settlement": "ejecuciones close con notes strategy_resolution:*",
             "compare_cadence": "media entre timestamps de fills open dentro de cada ventana",
             "strategy_live_readiness": "gate derivado de runtime_compare + incubacion: muestra, participacion, dos patas, settlement, cadencia, drawdown y bloqueos dominantes",
+            "strategy_user_intel": "latencia desde feed/mercado/decision y edge neto estimado desde expected_edge_bps + maker/taker EV",
         },
         "strategy_recent_resolutions": recent_resolution_windows,
         "strategy_setup_performance": setup_performance,

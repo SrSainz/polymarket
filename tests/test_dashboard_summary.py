@@ -386,6 +386,7 @@ def test_summary_payload_metric_sources_match_computed_balance_fields(tmp_path: 
     assert "Gamma publica de Polymarket" in sources["strategy_official_price_to_beat"]
     assert "captura propia Chainlink RTDS" in sources["strategy_captured_price_to_beat"]
     assert "captura propia Chainlink RTDS" in sources["strategy_effective_price_to_beat"]
+    assert "expected_edge_bps + maker/taker EV" in sources["strategy_user_intel"]
 
 
 def test_summary_payload_exposes_setup_performance(tmp_path: Path) -> None:
@@ -1292,6 +1293,43 @@ def test_summary_payload_exposes_live_readiness_gate_ready(tmp_path: Path) -> No
     assert readiness["blockers"] == []
     assert readiness["score"] >= 90
     assert readiness["metrics"]["cadence_ratio"] == 2.0
+
+
+def test_summary_payload_exposes_user_intel_latency_and_break_even(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_expected_edge_bps", "12.5")
+    db.set_bot_state("strategy_maker_ev_bps", "9.2")
+    db.set_bot_state("strategy_taker_ev_bps", "5.4")
+    db.set_bot_state("strategy_selected_execution", "taker_fak")
+    db.set_bot_state("strategy_market_event_lag_ms", "88.5")
+    db.set_bot_state("strategy_spot_age_ms", "143")
+    db.set_bot_state("strategy_feed_age_ms", "21")
+    db.set_bot_state("strategy_last_updated_at", str(int(time.time()) - 1))
+    db.set_bot_state("strategy_effective_price_source", "captured-chainlink")
+    db.set_bot_state("strategy_reference_quality", "captured-chainlink")
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="paper",
+        live_trading_enabled=False,
+    )
+
+    intel = summary["strategy_user_intel"]
+    assert intel["edge"]["gross_edge_bps"] == 12.5
+    assert intel["edge"]["selected_execution"] == "taker_fak"
+    assert intel["edge"]["selected_ev_bps"] == 5.4
+    assert intel["edge"]["estimated_cost_bps"] == 7.1
+    assert intel["edge"]["edge_status"] == "neto positivo"
+    assert intel["latency"]["market_event_lag_ms"] == 88.5
+    assert intel["latency"]["spot_age_ms"] == 143
+    assert intel["latency"]["feed_age_ms"] == 21
+    assert intel["latency"]["decision_age_ms"] >= 1000
+    assert intel["reference"]["effective_price_source"] == "captured-chainlink"
+    assert intel["reference"]["reference_quality"] == "captured-chainlink"
 
 
 def test_summary_payload_exposes_live_control_state(tmp_path: Path) -> None:
