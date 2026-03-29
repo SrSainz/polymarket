@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260327-live-gate5" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260329-shadow-home2" />
   </head>
   <body>
     <div class="app-shell">
@@ -67,6 +67,108 @@
       </header>
 
       <main class="layout">
+        <section class="shadow-simple-grid" id="shadowSimpleOverview">
+          <article class="panel shadow-main-panel" id="shadowMainPanel">
+            <div class="shadow-main-head">
+              <div class="shadow-main-copy">
+                <p class="hero-kicker">Solo shadow</p>
+                <div class="shadow-main-title-row">
+                  <h2 id="shadowHeroStatus" class="shadow-main-title">Cargando shadow...</h2>
+                  <span id="shadowStateBadge" class="shadow-state-badge">sin datos</span>
+                </div>
+                <p id="shadowHeroMarket" class="shadow-main-market">Sin mercado activo.</p>
+                <p id="shadowHeroReason" class="shadow-main-text">
+                  Estamos leyendo el estado actual del bot para enseñarte solo lo importante.
+                </p>
+              </div>
+              <div class="shadow-chip-row">
+                <span id="shadowWindowTime" class="soft-badge">Ventana -</span>
+                <span id="shadowReferenceBadge" class="soft-badge">Referencia -</span>
+                <span id="shadowActionBadge" class="soft-badge">Accion -</span>
+              </div>
+            </div>
+
+            <div class="shadow-hero-grid">
+              <article class="shadow-pnl-card shadow-window-card" id="shadowWindowPnlCard">
+                <p class="shadow-card-kicker">Estos 5 minutos</p>
+                <strong id="shadowWindowPnl" class="shadow-pnl-value">-</strong>
+                <p id="shadowWindowHeadline" class="shadow-card-headline">Leyendo la ventana actual.</p>
+                <div class="shadow-meter" aria-hidden="true">
+                  <span id="shadowWindowMeterNegative" class="shadow-meter-fill shadow-meter-fill-negative"></span>
+                  <span id="shadowWindowMeterPositive" class="shadow-meter-fill shadow-meter-fill-positive"></span>
+                  <span class="shadow-meter-center"></span>
+                </div>
+                <p id="shadowWindowMeta" class="shadow-card-meta">Sin posicion abierta todavia.</p>
+                <p id="shadowWindowBreakdown" class="shadow-card-meta shadow-card-meta-strong">-</p>
+              </article>
+
+              <article class="shadow-pnl-card shadow-total-card" id="shadowTotalPnlCard">
+                <p class="shadow-card-kicker">PnL total</p>
+                <strong id="shadowTotalPnl" class="shadow-pnl-value">-</strong>
+                <p id="shadowTotalHeadline" class="shadow-card-headline">Resultado total del simulador.</p>
+                <div id="shadowTotalChart" class="shadow-trend-chart"></div>
+                <p id="shadowTotalMeta" class="shadow-card-meta">Sin historial reciente todavia.</p>
+                <div class="shadow-total-split">
+                  <span id="shadowTodayPnl">Hoy -</span>
+                  <span id="shadowClosedPnl">Cerrado -</span>
+                  <span id="shadowLivePnl">En vivo -</span>
+                </div>
+              </article>
+            </div>
+          </article>
+
+          <div class="shadow-side-grid">
+            <article class="panel shadow-mini-card" id="shadowMoneyCard">
+              <div class="subpanel-head">
+                <h3>Dinero</h3>
+                <span class="badge">caja</span>
+              </div>
+              <strong id="shadowEquityValue" class="shadow-mini-value">-</strong>
+              <ul class="shadow-mini-list">
+                <li><span>Cash libre</span><strong id="shadowCashFreeValue">-</strong></li>
+                <li><span>Disponible para comprar</span><strong id="shadowOperableValue">-</strong></li>
+                <li><span>Dinero metido ahora</span><strong id="shadowExposureNowValue">-</strong></li>
+              </ul>
+              <p id="shadowMoneyMeta" class="mini-meta">Sin snapshot de balance todavia.</p>
+            </article>
+
+            <article class="panel shadow-mini-card" id="shadowPositionCard">
+              <div class="subpanel-head">
+                <h3>Posicion actual</h3>
+                <span class="badge">ventana</span>
+              </div>
+              <strong id="shadowPositionStateValue" class="shadow-mini-value">-</strong>
+              <ul id="shadowPositionList" class="shadow-mini-list shadow-position-list"></ul>
+              <p id="shadowPositionMeta" class="mini-meta">Sin patas abiertas.</p>
+            </article>
+
+            <article class="panel shadow-mini-card" id="shadowHealthCard">
+              <div class="subpanel-head">
+                <h3>Salud del bot</h3>
+                <span class="badge">runtime</span>
+              </div>
+              <strong id="shadowHealthStatusValue" class="shadow-mini-value">-</strong>
+              <ul class="shadow-mini-list">
+                <li><span>Latencia</span><strong id="shadowHealthLatencyValue">-</strong></li>
+                <li><span>Edge neto</span><strong id="shadowHealthEdgeValue">-</strong></li>
+                <li><span>Referencia</span><strong id="shadowHealthReferenceValue">-</strong></li>
+                <li><span>Fee taker</span><strong id="shadowHealthFeeValue">-</strong></li>
+              </ul>
+              <p id="shadowHealthMeta" class="mini-meta">Esperando diagnostico.</p>
+            </article>
+
+            <article class="panel shadow-mini-card" id="shadowRecentCard">
+              <div class="subpanel-head">
+                <h3>Ultimas ventanas</h3>
+                <span class="badge">reciente</span>
+              </div>
+              <strong id="shadowRecentStatusValue" class="shadow-mini-value">-</strong>
+              <div id="shadowRecentBars" class="shadow-recent-bars"></div>
+              <p id="shadowRecentMeta" class="mini-meta">Aun no hay suficientes cierres recientes.</p>
+            </article>
+          </div>
+        </section>
+
         <section class="cards metrics-strip">
           <article class="card metric-card card-primary">
             <p class="card-label" id="liveCashLabel">Capital total del simulador</p>
@@ -538,13 +640,13 @@
           </article>
         </section>
 
-        <details class="panel panel-details details-drawer" id="deepDiveSection" open>
+        <details class="panel panel-details details-drawer" id="deepDiveSection">
           <summary class="panel-head">
             <div>
-              <h2>Posiciones y actividad</h2>
-              <p class="panel-copy">Lo esencial para seguir la ventana y revisar lo que ha hecho el bot.</p>
+              <h2>Diagnostico avanzado</h2>
+              <p class="panel-copy">Posiciones, ejecuciones y tablas para revisar el motor por debajo.</p>
             </div>
-            <span class="badge">historial</span>
+            <span class="badge">abrir</span>
           </summary>
 
           <div class="details-stack">
@@ -701,6 +803,6 @@
         <p id="lastUpdated">Ultima actualizacion: -</p>
       </footer>
     </div>
-    <script src="/assets/app.js?v=20260327-live-gate5"></script>
+    <script src="/assets/app.js?v=20260329-shadow-home2"></script>
   </body>
 </html>

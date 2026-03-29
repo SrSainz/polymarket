@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-27-live-gate5";
+const UI_BUILD = "2026-03-29-shadow-home2";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -632,6 +632,311 @@ function compareReferenceMeta(intel) {
   const reference = intel?.reference || {};
   const quality = String(reference?.reference_quality || "").trim();
   return quality || "sin calidad";
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(Number(value), min), max);
+}
+
+function toneFromNumber(value, epsilon = 0.01) {
+  const safe = Number(value);
+  if (Number.isNaN(safe)) return "neutral";
+  if (safe > epsilon) return "positive";
+  if (safe < -epsilon) return "negative";
+  return "neutral";
+}
+
+function applyToneClass(node, tone) {
+  if (!node) return;
+  node.classList.remove("is-positive", "is-negative", "is-warning", "is-neutral");
+  node.classList.add(`is-${tone || "neutral"}`);
+}
+
+function mmssLabel(seconds) {
+  const safe = Math.max(Number(seconds || 0), 0);
+  const minutes = Math.floor(safe / 60);
+  const secs = Math.floor(safe % 60);
+  return `${minutes}:${String(secs).padStart(2, "0")}`;
+}
+
+function windowCountdownLabel(timingInfo) {
+  if (!timingInfo || Number.isNaN(Number(timingInfo.remaining))) return "Ventana -";
+  if (timingInfo.remaining <= 0) return "Ventana cerrando";
+  return `Restan ${mmssLabel(timingInfo.remaining)}`;
+}
+
+function shadowPrimaryStatus(summary, operability, currentExposure, currentWindowPnl) {
+  const state = String(operability?.state || "").trim().toLowerCase();
+  if (currentExposure > 0 && currentWindowPnl > 0.01) return { label: "ganando", tone: "positive" };
+  if (currentExposure > 0 && currentWindowPnl < -0.01) return { label: "perdiendo", tone: "negative" };
+  if (currentExposure > 0) return { label: "dentro", tone: "warning" };
+  if (operability?.blocking) return { label: "bloqueado", tone: "negative" };
+  if (state === "ready") return { label: "listo", tone: "positive" };
+  if (state === "cooldown") return { label: "en cooldown", tone: "warning" };
+  if (state.startsWith("waiting") || state === "late_window") return { label: "esperando", tone: "warning" };
+  if (String(summary?.strategy_runtime_mode || "").trim().toLowerCase() === "shadow") {
+    return { label: "activo", tone: "neutral" };
+  }
+  return { label: "sin datos", tone: "neutral" };
+}
+
+function shadowWindowHeadline(currentExposure, currentWindowPnl) {
+  if (currentExposure <= 0) return "Sin posicion abierta en esta ventana";
+  if (currentWindowPnl > 0.01) return "Ganando dinero en estos 5 minutos";
+  if (currentWindowPnl < -0.01) return "Perdiendo dinero en estos 5 minutos";
+  return "Plano por ahora en esta ventana";
+}
+
+function shadowTotalHeadline(totalPnl) {
+  if (totalPnl > 0.01) return "El total va en verde";
+  if (totalPnl < -0.01) return "El total sigue en rojo";
+  return "El total sigue plano";
+}
+
+function shadowRecentResolutionRows(summary) {
+  return Array.isArray(summary?.strategy_recent_resolutions) ? summary.strategy_recent_resolutions : [];
+}
+
+function renderShadowTrendChart(rows, liveWindowPnl = 0) {
+  const baseSeries = rows
+    .slice(0, 12)
+    .reverse()
+    .map((item) => Number(item?.pnl || 0))
+    .filter((value) => !Number.isNaN(value));
+  let running = 0;
+  const values = [0];
+  baseSeries.forEach((value) => {
+    running += value;
+    values.push(running);
+  });
+  if (Math.abs(Number(liveWindowPnl || 0)) > 0.005) {
+    values.push(running + Number(liveWindowPnl || 0));
+  }
+  if (values.length <= 1) {
+    return `<div class="shadow-chart-empty">Sin ventanas recientes para dibujar todavia.</div>`;
+  }
+  const width = 100;
+  const height = 100;
+  const padding = 8;
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const range = max - min || 1;
+  const points = values.map((value, index) => {
+    const x = padding + (index / Math.max(values.length - 1, 1)) * (width - padding * 2);
+    const y = height - padding - ((value - min) / range) * (height - padding * 2);
+    return { x, y };
+  });
+  const baselineY = height - padding - ((0 - min) / range) * (height - padding * 2);
+  const linePoints = points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(" ");
+  const areaPoints = [
+    `${points[0].x.toFixed(2)},${baselineY.toFixed(2)}`,
+    ...points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`),
+    `${points[points.length - 1].x.toFixed(2)},${baselineY.toFixed(2)}`,
+  ].join(" ");
+  const lastValue = values[values.length - 1] || 0;
+  const tone = toneFromNumber(lastValue);
+  const stroke = tone === "negative" ? "#df6965" : tone === "positive" ? "#3cb26d" : "#51a6ff";
+  const fill = tone === "negative" ? "rgba(223, 105, 101, 0.18)" : tone === "positive" ? "rgba(60, 178, 109, 0.18)" : "rgba(81, 166, 255, 0.18)";
+  return `
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="PnL total reciente">
+      <line x1="${padding}" y1="${baselineY.toFixed(2)}" x2="${width - padding}" y2="${baselineY.toFixed(2)}" stroke="rgba(255,255,255,0.14)" stroke-width="1" stroke-dasharray="3 3"></line>
+      <polygon points="${areaPoints}" fill="${fill}"></polygon>
+      <polyline points="${linePoints}" fill="none" stroke="${stroke}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      <circle cx="${points[points.length - 1].x.toFixed(2)}" cy="${points[points.length - 1].y.toFixed(2)}" r="3.5" fill="${stroke}"></circle>
+    </svg>
+  `;
+}
+
+function renderShadowRecentBars(rows) {
+  const items = rows.slice(0, 8).reverse();
+  if (!items.length) {
+    return `<div class="shadow-card-meta">Sin cierres recientes.</div>`;
+  }
+  const maxAbs = Math.max(...items.map((item) => Math.abs(Number(item?.pnl || 0))), 1);
+  return items
+    .map((item) => {
+      const pnl = Number(item?.pnl || 0);
+      const tone = pnl > 0.01 ? "is-positive" : pnl < -0.01 ? "is-negative" : "is-flat";
+      const heightPct = clamp((Math.abs(pnl) / maxAbs) * 100, 14, 100);
+      const title = `${shortSlug(item?.slug)} | ${fmtUsd(pnl, 2)}`;
+      return `<div class="shadow-recent-bar ${tone}" style="--bar-height:${heightPct}%" title="${escapeHtml(title)}"></div>`;
+    })
+    .join("");
+}
+
+function renderShadowPositionRows(breakdown) {
+  if (!breakdown.length) {
+    return `<li><strong>Sin patas abiertas</strong><span>Cuando el bot entre veremos aqui el reparto, la exposicion y el PnL vivo.</span></li>`;
+  }
+  return breakdown
+    .map((item) => {
+      const outcome = friendlyOutcomeName(item?.outcome || "-");
+      const share = Number(item?.money_share_pct ?? item?.share_pct ?? 0);
+      const exposure = Number(item?.exposure || 0);
+      const unrealized = Number(item?.unrealized_pnl || 0);
+      const shares = Number(item?.shares || 0);
+      return `
+        <li>
+          <strong>${escapeHtml(outcome)} · ${fmtPct(share, 0)}</strong>
+          <span>${fmtUsdPlain(exposure, 2)} metidos | ${fmtUsd(unrealized, 2)} vivo | ${fmt(shares, 2)} shares</span>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+function renderShadowPositionMarkup(breakdown) {
+  if (!breakdown.length) {
+    return `<li><strong>Sin patas abiertas</strong><span>Cuando el bot entre veremos aqui el reparto, la exposicion y el PnL vivo.</span></li>`;
+  }
+  return breakdown
+    .map((item) => {
+      const outcome = friendlyOutcomeName(item?.outcome || "-");
+      const share = Number(item?.money_share_pct ?? item?.share_pct ?? 0);
+      const exposure = Number(item?.exposure || 0);
+      const unrealized = Number(item?.unrealized_pnl || 0);
+      const shares = Number(item?.shares || 0);
+      return `
+        <li>
+          <strong>${escapeHtml(outcome)} | ${fmtPct(share, 0)}</strong>
+          <span>${fmtUsdPlain(exposure, 2)} metidos | ${fmtUsd(unrealized, 2)} vivo | ${fmt(shares, 2)} shares</span>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+function paintShadowOverview(summary, items = lastPositions) {
+  const section = document.getElementById("shadowSimpleOverview");
+  if (!section) return;
+
+  const buckets = splitPositionBuckets(summary, items);
+  const windowState = friendlyWindowState(summary);
+  const snapshotInfo = snapshotTiming(summary);
+  const liveBalanceStale = !isPublicRuntime() && isMetricSnapshotStale(
+    snapshotInfo.liveBalanceAgeSeconds,
+    snapshotInfo.hasLiveBalanceSnapshot,
+    LIVE_BALANCE_STALE_SECONDS
+  );
+  const timingInfo = windowTiming(summary);
+  const feedInfo = feedModeInfo(summary);
+  const spotInfo = currentSpotInfo(summary);
+  const operability = operabilityInfo(summary);
+  const userIntel = summary?.strategy_user_intel || {};
+  const edge = userIntel?.edge || {};
+  const reference = userIntel?.reference || {};
+  const breakdown = currentBreakdown(summary);
+  const recentRows = shadowRecentResolutionRows(summary);
+
+  const currentWindowPnl = Number(summary?.strategy_current_market_live_pnl || buckets.currentSummary.unrealized || 0);
+  const currentWindowExposure = Number(summary?.strategy_current_market_total_exposure ?? buckets.currentSummary.exposure ?? 0);
+  const pnlTotal = Number(summary?.pnl_total ?? summary?.cumulative_pnl ?? 0);
+  const realized = Number(summary?.realized_pnl ?? summary?.cumulative_pnl ?? 0);
+  const unrealized = Number(summary?.unrealized_pnl ?? 0);
+  const todayPnl = Number(summary?.live_realized_pnl_today ?? summary?.strategy_resolution_pnl_today ?? 0);
+  const liveCashBalance = Number(summary?.live_cash_balance ?? 0);
+  const liveAvailableToTrade = Number(summary?.live_available_to_trade ?? liveCashBalance);
+  const liveEquityEstimate = Number(summary?.live_equity_estimate ?? summary?.live_total_capital ?? liveCashBalance);
+  const strategyMode = String(summary?.strategy_runtime_mode || "").trim().toLowerCase();
+  const marketTitle = String(summary?.strategy_market_title || summary?.strategy_market_slug || "Sin mercado activo");
+  const primaryStatus = shadowPrimaryStatus(summary, operability, currentWindowExposure, currentWindowPnl);
+  const positionCount = breakdown.length || Number(buckets.currentSummary.count || 0);
+  const netEdgeBps = Number(edge?.selected_ev_bps ?? summary?.strategy_taker_ev_bps ?? 0);
+  const feeBps = Number(edge?.taker_fee_bps ?? summary?.strategy_taker_fee_bps ?? 0);
+  const latencyHeadline = compareLatencyHeadline(userIntel);
+  const referenceHeadline = compareReferenceHeadline(userIntel) || String(spotInfo?.effectiveSource || "-").replaceAll("-", " ");
+  const referenceMeta = compareReferenceMeta(userIntel);
+  const recentPositiveCount = recentRows.filter((item) => Number(item?.pnl || 0) > 0).length;
+  const recentVisibleCount = recentRows.slice(0, 8).length;
+  const effectiveBeat = Number(summary?.strategy_effective_price_to_beat || spotInfo?.effectiveBeat || spotInfo?.officialBeat || 0);
+  const positionState =
+    currentWindowExposure <= 0
+      ? "Sin posicion"
+      : positionCount >= 2
+      ? "Dos patas abiertas"
+      : `${positionCount || 1} pata abierta`;
+  document.getElementById("shadowHeroStatus").textContent = strategyMode === "shadow" ? `Shadow ${windowState.label.toLowerCase()}` : windowState.label;
+  document.getElementById("shadowHeroMarket").textContent = effectiveBeat > 0 ? `${marketTitle} | beat ${fmtBtcPrice(effectiveBeat)}` : marketTitle;
+  document.getElementById("shadowHeroReason").textContent = operability.reason || windowState.detail;
+  applyToneClass(document.getElementById("shadowMainPanel"), primaryStatus.tone === "negative" ? "negative" : currentWindowExposure > 0 ? toneFromNumber(currentWindowPnl) : "neutral");
+
+  const stateBadge = document.getElementById("shadowStateBadge");
+  stateBadge.textContent = primaryStatus.label;
+  applyToneClass(stateBadge, primaryStatus.tone);
+
+  document.getElementById("shadowWindowTime").textContent = windowCountdownLabel(timingInfo);
+  document.getElementById("shadowReferenceBadge").textContent = effectiveBeat > 0 ? `Beat ${fmtBtcPrice(effectiveBeat)}` : "Beat -";
+  document.getElementById("shadowActionBadge").textContent =
+    currentWindowExposure > 0 ? `${positionCount} patas abiertas` : `Fuente ${referenceHeadline || "-"}`;
+
+  const windowCard = document.getElementById("shadowWindowPnlCard");
+  applyToneClass(windowCard, currentWindowExposure > 0 ? toneFromNumber(currentWindowPnl) : primaryStatus.tone);
+  document.getElementById("shadowWindowPnl").textContent = fmtUsd(currentWindowPnl, 2);
+  document.getElementById("shadowWindowHeadline").textContent = shadowWindowHeadline(currentWindowExposure, currentWindowPnl);
+  const meterScale = Math.max(Math.abs(currentWindowPnl), currentWindowExposure * 0.2, 5);
+  const meterWidthPct = clamp((Math.abs(currentWindowPnl) / meterScale) * 50, 0, 50);
+  document.getElementById("shadowWindowMeterNegative").style.width = currentWindowPnl < 0 ? `${meterWidthPct}%` : "0%";
+  document.getElementById("shadowWindowMeterPositive").style.width = currentWindowPnl > 0 ? `${meterWidthPct}%` : "0%";
+  document.getElementById("shadowWindowMeta").textContent =
+    currentWindowExposure > 0
+      ? `${fmtUsdPlain(currentWindowExposure, 2)} metidos | ${positionState.toLowerCase()} | restan ${mmssLabel(timingInfo.remaining)}`
+      : `${operability.label} | restan ${mmssLabel(timingInfo.remaining)} | sin dinero metido`;
+  document.getElementById("shadowWindowBreakdown").textContent =
+    currentWindowExposure > 0 ? currentWindowDirection(summary) : operability.reason || "Esperando una entrada valida.";
+
+  const totalCard = document.getElementById("shadowTotalPnlCard");
+  applyToneClass(totalCard, toneFromNumber(pnlTotal));
+  document.getElementById("shadowTotalPnl").textContent = fmtUsd(pnlTotal, 2);
+  document.getElementById("shadowTotalHeadline").textContent = shadowTotalHeadline(pnlTotal);
+  document.getElementById("shadowTotalChart").innerHTML = renderShadowTrendChart(recentRows, currentWindowExposure > 0 ? currentWindowPnl : 0);
+  document.getElementById("shadowTotalMeta").textContent =
+    recentRows.length > 0
+      ? `Ultimas ${recentRows.length} ventanas resueltas | ${recentPositiveCount}/${recentRows.length} positivas`
+      : "Todavia no hay suficiente historial de cierres recientes.";
+  document.getElementById("shadowTodayPnl").textContent = `Hoy ${fmtUsd(todayPnl, 2)}`;
+  document.getElementById("shadowClosedPnl").textContent = `Cerrado ${fmtUsd(realized, 2)}`;
+  document.getElementById("shadowLivePnl").textContent = `En vivo ${fmtUsd(unrealized, 2)}`;
+
+  const moneyCard = document.getElementById("shadowMoneyCard");
+  applyToneClass(moneyCard, liveBalanceStale ? "warning" : toneFromNumber(todayPnl));
+  document.getElementById("shadowEquityValue").textContent = liveBalanceStale ? "-" : fmtUsdPlain(liveEquityEstimate, 2);
+  document.getElementById("shadowCashFreeValue").textContent = liveBalanceStale ? "-" : fmtUsdPlain(liveCashBalance, 2);
+  document.getElementById("shadowOperableValue").textContent = liveBalanceStale ? "-" : fmtUsdPlain(liveAvailableToTrade, 2);
+  document.getElementById("shadowExposureNowValue").textContent = fmtUsdPlain(currentWindowExposure, 2);
+  document.getElementById("shadowMoneyMeta").textContent = liveBalanceStale
+    ? `Snapshot de balance viejo (${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}). Ocultamos equity y caja hasta que refresque.`
+    : `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy.`;
+
+  const positionCard = document.getElementById("shadowPositionCard");
+  applyToneClass(positionCard, currentWindowExposure > 0 ? toneFromNumber(currentWindowPnl) : "neutral");
+  document.getElementById("shadowPositionStateValue").textContent = positionState;
+  document.getElementById("shadowPositionList").innerHTML = renderShadowPositionMarkup(breakdown);
+  document.getElementById("shadowPositionMeta").textContent =
+    currentWindowExposure > 0
+      ? `${currentWindowDirection(summary)} | ${fmtUsdPlain(currentWindowExposure, 2)} expuestos`
+      : "Cuando el bot entre veremos aqui el reparto por pata y su PnL vivo.";
+
+  const healthCard = document.getElementById("shadowHealthCard");
+  applyToneClass(healthCard, primaryStatus.tone === "positive" && netEdgeBps > 0 ? "positive" : operability.blocking ? "negative" : "warning");
+  document.getElementById("shadowHealthStatusValue").textContent = operability.label || "Observando";
+  document.getElementById("shadowHealthLatencyValue").textContent = latencyHeadline;
+  document.getElementById("shadowHealthEdgeValue").textContent = compareEdgeHeadline(userIntel);
+  document.getElementById("shadowHealthReferenceValue").textContent = `${referenceHeadline} | ${referenceMeta}`;
+  document.getElementById("shadowHealthFeeValue").textContent = feeBps > 0 ? fmtBps(feeBps, 1) : "-";
+  document.getElementById("shadowHealthMeta").textContent =
+    operability.reason ||
+    `${feedInfo.label} | ${String(reference?.reference_quality || spotInfo.referenceQuality || "").trim() || "sin calidad"} | ${String(edge?.edge_status || "sin edge")}`;
+
+  const recentCard = document.getElementById("shadowRecentCard");
+  const recentSum = recentRows.reduce((acc, item) => acc + Number(item?.pnl || 0), 0);
+  applyToneClass(recentCard, toneFromNumber(recentSum));
+  document.getElementById("shadowRecentStatusValue").textContent =
+    recentRows.length > 0 ? `${recentPositiveCount}/${recentRows.length} ventanas en verde` : "Sin cierres";
+  document.getElementById("shadowRecentBars").innerHTML = renderShadowRecentBars(recentRows);
+  document.getElementById("shadowRecentMeta").textContent =
+    recentRows.length > 0
+      ? `Ultimas ${recentVisibleCount} barras | suma reciente ${fmtUsd(recentSum, 2)}`
+      : "Aun no hay suficientes ventanas cerradas para ver una forma fiable.";
 }
 
 function shortCompareWindow(point) {
@@ -1713,6 +2018,7 @@ function paintSummary(summary, items = lastPositions) {
     applyLocalModeLabels();
   }
   paintRuntimeCompare(summary);
+  paintShadowOverview(summary, items);
   const buckets = splitPositionBuckets(summary, items);
   const windowState = friendlyWindowState(summary);
   const timingInfo = windowTiming(summary);
