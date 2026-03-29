@@ -26,6 +26,7 @@ from app.core.lab_artifacts import (
 from app.core.strategy_monitoring import (
     build_incubation_summary,
     build_recent_resolution_windows,
+    build_resolution_pnl_curve,
     build_setup_performance,
 )
 from app.polymarket.gamma_client import GammaClient
@@ -37,7 +38,7 @@ _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, str, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-27-live-gate5"
+_DASHBOARD_BUILD = "2026-03-30-shadow-home5"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -1059,7 +1060,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         positions = conn.execute(
             "SELECT asset, condition_id, size, avg_price, slug, title, outcome FROM copy_positions"
         ).fetchall()
-        recent_resolution_windows = build_recent_resolution_windows(conn, variant=strategy_variant, limit=6)
+        recent_resolution_windows = build_recent_resolution_windows(conn, variant=strategy_variant, limit=8)
+        resolution_pnl_curve = build_resolution_pnl_curve(conn, variant=strategy_variant, limit=24)
         setup_performance = build_setup_performance(conn, variant=strategy_variant, limit=8)
         incubation = build_incubation_summary(
             conn,
@@ -1422,8 +1424,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "compare_cadence": "media entre timestamps de fills open dentro de cada ventana",
             "strategy_live_readiness": "gate derivado de runtime_compare + incubacion: muestra, participacion, dos patas, settlement, cadencia, drawdown y bloqueos dominantes",
             "strategy_user_intel": "latencia desde libro/spot/feed/decision y edge neto estimado desde expected_edge_bps + maker/taker EV + fee-rate oficial",
+            "strategy_resolution_pnl_curve": "curva acumulada de pnl realizado por ventana cerrada; muestra un tramo reciente pero conserva el nivel real del total",
         },
         "strategy_recent_resolutions": recent_resolution_windows,
+        "strategy_resolution_pnl_curve": resolution_pnl_curve,
         "strategy_setup_performance": setup_performance,
         "strategy_variant_backtest_generated_at": str(experiment_payload.get("generated_at") or ""),
         "strategy_variant_backtest_status": str(active_experiment.get("status") or ""),

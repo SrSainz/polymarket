@@ -74,6 +74,82 @@ def build_recent_resolution_windows(
     ]
 
 
+def build_resolution_pnl_curve(
+    conn: sqlite3.Connection,
+    *,
+    variant: str,
+    limit: int,
+) -> dict:
+    strategy_rows = _closed_strategy_windows(conn, variant=variant)
+    if strategy_rows:
+        ordered = sorted(strategy_rows, key=lambda row: int(row["closed_at"] or row["opened_at"] or 0))
+        cumulative = 0.0
+        items: list[dict] = []
+        for row in ordered:
+            pnl = float(row["realized_pnl"] or 0.0)
+            cumulative += pnl
+            items.append(
+                {
+                    "slug": str(row["slug"] or ""),
+                    "resolved_at": int(row["closed_at"] or row["opened_at"] or 0),
+                    "pnl": round(pnl, 4),
+                    "cumulative_pnl": round(cumulative, 4),
+                }
+            )
+        visible_items = items[-limit:] if limit > 0 else items
+        baseline_pnl = 0.0
+        if visible_items:
+            baseline_pnl = float(visible_items[0]["cumulative_pnl"]) - float(visible_items[0]["pnl"])
+        return {
+            "items": visible_items,
+            "window_count": len(items),
+            "baseline_pnl": round(baseline_pnl, 4),
+            "total_realized_pnl": round(cumulative, 4),
+        }
+
+    rows = _resolution_execution_rows(conn, variant=variant, limit=400)
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        notes = str(row["notes"] or "")
+        parts = notes.split(":")
+        slug = parts[1] if len(parts) > 1 else "desconocido"
+        entry = grouped.setdefault(
+            slug,
+            {
+                "slug": slug,
+                "resolved_at": int(row["ts"] or 0),
+                "pnl": 0.0,
+            },
+        )
+        entry["resolved_at"] = max(int(row["ts"] or 0), int(entry["resolved_at"]))
+        entry["pnl"] += float(row["pnl_delta"] or 0.0)
+
+    ordered = sorted(grouped.values(), key=lambda item: int(item["resolved_at"]), reverse=False)
+    cumulative = 0.0
+    items = []
+    for item in ordered:
+        pnl = float(item["pnl"] or 0.0)
+        cumulative += pnl
+        items.append(
+            {
+                "slug": str(item["slug"]),
+                "resolved_at": int(item["resolved_at"]),
+                "pnl": round(pnl, 4),
+                "cumulative_pnl": round(cumulative, 4),
+            }
+        )
+    visible_items = items[-limit:] if limit > 0 else items
+    baseline_pnl = 0.0
+    if visible_items:
+        baseline_pnl = float(visible_items[0]["cumulative_pnl"]) - float(visible_items[0]["pnl"])
+    return {
+        "items": visible_items,
+        "window_count": len(items),
+        "baseline_pnl": round(baseline_pnl, 4),
+        "total_realized_pnl": round(cumulative, 4),
+    }
+
+
 def build_setup_performance(
     conn: sqlite3.Connection,
     *,

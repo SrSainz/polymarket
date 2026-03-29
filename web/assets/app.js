@@ -736,20 +736,33 @@ function shadowRecentResolutionRows(summary) {
   return Array.isArray(summary?.strategy_recent_resolutions) ? summary.strategy_recent_resolutions : [];
 }
 
-function renderShadowTrendChart(rows, liveWindowPnl = 0) {
-  const baseSeries = rows
-    .slice(0, 12)
-    .reverse()
-    .map((item) => Number(item?.pnl || 0))
-    .filter((value) => !Number.isNaN(value));
-  let running = 0;
-  const values = [0];
-  baseSeries.forEach((value) => {
-    running += value;
-    values.push(running);
-  });
+function shadowResolutionPnlCurve(summary) {
+  const curve = summary?.strategy_resolution_pnl_curve;
+  if (!curve || typeof curve !== "object") {
+    return { items: [], windowCount: 0, baselinePnl: 0, totalRealizedPnl: 0 };
+  }
+  return {
+    items: Array.isArray(curve.items) ? curve.items : [],
+    windowCount: Number(curve.window_count || 0),
+    baselinePnl: Number(curve.baseline_pnl || 0),
+    totalRealizedPnl: Number(curve.total_realized_pnl || 0),
+  };
+}
+
+function renderShadowTrendChart(curve, liveWindowPnl = 0) {
+  const baseSeries = Array.isArray(curve?.items)
+    ? curve.items.map((item) => Number(item?.cumulative_pnl || 0)).filter((value) => !Number.isNaN(value))
+    : [];
+  const values = [];
+  const baselineValue = Number(curve?.baselinePnl || 0);
+  if (baseSeries.length) {
+    values.push(...baseSeries);
+  } else {
+    values.push(baselineValue);
+  }
   if (Math.abs(Number(liveWindowPnl || 0)) > 0.005) {
-    values.push(running + Number(liveWindowPnl || 0));
+    const lastValue = values.length ? values[values.length - 1] : baselineValue;
+    values.push(lastValue + Number(liveWindowPnl || 0));
   }
   if (values.length <= 1) {
     return `<div class="shadow-chart-empty">Sin ventanas recientes para dibujar todavia.</div>`;
@@ -867,6 +880,7 @@ function paintShadowOverview(summary, items = lastPositions) {
   const reference = userIntel?.reference || {};
   const breakdown = currentBreakdown(summary);
   const recentRows = shadowRecentResolutionRows(summary);
+  const totalCurve = shadowResolutionPnlCurve(summary);
 
   const currentWindowPnl = Number(summary?.strategy_current_market_live_pnl || buckets.currentSummary.unrealized || 0);
   const currentWindowExposure = Number(summary?.strategy_current_market_total_exposure ?? buckets.currentSummary.exposure ?? 0);
@@ -935,10 +949,10 @@ function paintShadowOverview(summary, items = lastPositions) {
   applyToneClass(totalCard, toneFromNumber(pnlTotal));
   document.getElementById("shadowTotalPnl").textContent = fmtUsd(pnlTotal, 2);
   document.getElementById("shadowTotalHeadline").textContent = shadowTotalHeadline(pnlTotal);
-  document.getElementById("shadowTotalChart").innerHTML = renderShadowTrendChart(recentRows, currentWindowExposure > 0 ? currentWindowPnl : 0);
+  document.getElementById("shadowTotalChart").innerHTML = renderShadowTrendChart(totalCurve, currentWindowExposure > 0 ? currentWindowPnl : 0);
   document.getElementById("shadowTotalMeta").textContent =
-    recentRows.length > 0
-      ? `Ultimas ${recentRows.length} ventanas resueltas | ${recentPositiveCount}/${recentRows.length} positivas`
+    totalCurve.items.length > 0
+      ? `Curva total | ${totalCurve.items.length}/${Math.max(totalCurve.windowCount, totalCurve.items.length)} resoluciones visibles | total cerrado ${fmtUsd(totalCurve.totalRealizedPnl, 2)}`
       : "Todavia no hay suficiente historial de cierres recientes.";
   document.getElementById("shadowTodayPnl").textContent = `Hoy ${fmtUsd(todayPnl, 2)}`;
   document.getElementById("shadowClosedPnl").textContent = `Cerrado ${fmtUsd(realized, 2)}`;
@@ -998,7 +1012,7 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowRecentBars").innerHTML = renderShadowRecentBars(recentRows);
   document.getElementById("shadowRecentMeta").textContent =
     recentRows.length > 0
-      ? `Ultimas ${recentVisibleCount} barras | suma reciente ${fmtUsd(recentSum, 2)}`
+      ? `Ultimas ${recentVisibleCount} ventanas cerradas | suma reciente ${fmtUsd(recentSum, 2)}`
       : "Aun no hay suficientes ventanas cerradas para ver una forma fiable.";
 }
 

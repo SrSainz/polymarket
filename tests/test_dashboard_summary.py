@@ -1579,6 +1579,11 @@ def test_summary_payload_recent_windows_use_deployed_notional(tmp_path: Path) ->
     assert summary["strategy_recent_resolutions"][0]["notional"] == 28.75
     assert summary["strategy_recent_resolutions"][0]["deployed_notional"] == 28.75
     assert summary["strategy_recent_resolutions"][0]["planned_budget"] == 3.5
+    assert summary["strategy_resolution_pnl_curve"]["window_count"] == 1
+    assert summary["strategy_resolution_pnl_curve"]["baseline_pnl"] == 0.0
+    assert summary["strategy_resolution_pnl_curve"]["total_realized_pnl"] == 7.25
+    assert summary["strategy_resolution_pnl_curve"]["items"][0]["slug"] == "btc-updown-5m-100"
+    assert summary["strategy_resolution_pnl_curve"]["items"][0]["cumulative_pnl"] == 7.25
 
 
 def test_summary_payload_filters_strategy_variant_and_exposes_incubation(tmp_path: Path) -> None:
