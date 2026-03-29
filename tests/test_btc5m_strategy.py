@@ -1899,7 +1899,57 @@ def test_arb_micro_buys_both_sides_on_underround(tmp_path: Path) -> None:
     assert len(positions) == 2
     assert {str(row["outcome"]) for row in positions} == {"Up", "Down"}
     assert db.get_bot_state("strategy_price_mode") == "underround"
+    assert float(db.get_bot_state("strategy_terminal_ev_pct") or 0.0) > 0.0
     assert "underround" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
+def test_arb_micro_blocks_underround_when_terminal_ev_does_not_cover_fees(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Terminal EV Gate",
+        "slug": "btc-updown-5m-terminal-ev-gate",
+        "conditionId": "cond-arb-terminal-ev-gate",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FeeAwareCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.47"}],
+                "asks": [{"price": "0.49", "size": "200"}, {"price": "0.495", "size": "200"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.49"}],
+                "asks": [{"price": "0.499", "size": "200"}, {"price": "0.50", "size": "200"}],
+            },
+        },
+        fee_bps=10000.0,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-terminal-ev-gate"),
+    )
+    service._discover_market = lambda: market  # type: ignore[method-assign]
+
+    stats = service.run(mode="paper")
+
+    assert stats["filled"] == 0
+    assert db.list_copy_positions() == []
+    assert "EV terminal de pareja" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
