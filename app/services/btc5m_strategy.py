@@ -1938,8 +1938,17 @@ class BTC5mStrategyService:
                 desired_up_ratio=desired_up_ratio,
                 current_up_ratio=current_up_ratio,
             )
+        single_budget = 0.0
         if cheap_side is not None:
-            if self._arb_should_block_flat_single_side_open(
+            single_budget = self._arb_single_side_entry_budget(
+                cycle_budget=cycle_budget,
+                cash_balance=cash_balance,
+                target=cheap_side.target,
+                existing_market_notional=existing_market_notional,
+                desired_up_ratio=desired_up_ratio,
+                current_up_ratio=current_up_ratio,
+            )
+            should_block_cheap_side, cheap_side_block_reason = self._arb_should_block_flat_single_side_open(
                 mode=mode,
                 bracket_phase=bracket_phase,
                 current_up_notional=current_up_notional,
@@ -1947,14 +1956,16 @@ class BTC5mStrategyService:
                 signal=cheap_side,
                 pair_sum=pair_sum,
                 cycle_budget=cycle_budget,
+                cash_balance=cash_balance,
+                single_budget=single_budget,
                 seconds_into_window=seconds_into_window,
                 up_outcome=up_outcome,
                 down_outcome=down_outcome,
+                fair_up=fair_up,
+                fair_down=fair_down,
                 delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
-            ):
-                cheap_side_block_reason = (
-                    "cheap-side bloqueado en live-like: apertura plana solo con edge fuerte, ventana temprana y presupuesto de pareja"
-                )
+            )
+            if should_block_cheap_side:
                 cheap_side = None
         if cheap_side is not None:
             target = cheap_side.target
@@ -1963,11 +1974,6 @@ class BTC5mStrategyService:
             net_edge = cheap_side.net_edge
             edge_source = cheap_side.edge_source
             ratio_gap_abs = abs(desired_up_ratio - current_up_ratio)
-            single_budget_fraction = _ARB_SINGLE_SIDE_BUDGET_FRACTION
-            if existing_market_notional > 0:
-                single_budget_fraction *= 1.0 + min(ratio_gap_abs * 3.0, 0.75)
-            single_budget = _round_down(cycle_budget * single_budget_fraction, "0.01")
-            single_budget = min(max(single_budget, self._arb_min_operable_budget(target)), cash_balance)
             single_levels = self._build_arb_single_side_levels(
                 target=target,
                 budget=single_budget,
@@ -2553,6 +2559,37 @@ class BTC5mStrategyService:
 
         return levels
 
+    def _arb_estimated_single_side_net_edge_at_price(
+        self,
+        *,
+        target: MarketOutcome,
+        fair_value: float,
+        pair_sum: float,
+        delta_bps: float,
+        entry_price: float,
+    ) -> float:
+        raw_edge = fair_value - entry_price
+        overround_drag = max(pair_sum - 1.0, 0.0) * _ARB_CHEAP_SIDE_OVERROUND_DRAG_WEIGHT
+        spread = max(target.best_ask - target.best_bid, 0.0)
+        slippage_cap = max(float(self.settings.config.slippage_limit), 0.0)
+        effective_spread = min(spread, slippage_cap) if slippage_cap > 0 else spread
+        spread_drag = effective_spread * _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT
+        drift_shortfall = max(_ARB_CHEAP_SIDE_MIN_DELTA_BPS - abs(delta_bps), 0.0)
+        drift_drag = min(drift_shortfall / 400.0, 0.006)
+        fee_drag = float(_ARB_CHEAP_SIDE_FEE_ESTIMATE)
+        fee_lookup = getattr(self.clob_client, "get_fee_rate_bps", None)
+        if callable(fee_lookup) and 0 < entry_price < 1:
+            fee_rate_bps = _safe_float(fee_lookup(str(target.asset_id)))
+            if fee_rate_bps > 0:
+                effective_rate = fee_per_share(
+                    fee_rate_bps=fee_rate_bps,
+                    price=entry_price,
+                    category="crypto",
+                )
+                if effective_rate > 0:
+                    fee_drag = max(fee_drag, effective_rate)
+        return raw_edge - overround_drag - spread_drag - drift_drag - fee_drag
+
     def _arb_estimated_single_side_net_edge(
         self,
         *,
@@ -2561,16 +2598,13 @@ class BTC5mStrategyService:
         pair_sum: float,
         delta_bps: float,
     ) -> float:
-        raw_edge = fair_value - target.best_ask
-        overround_drag = max(pair_sum - 1.0, 0.0) * _ARB_CHEAP_SIDE_OVERROUND_DRAG_WEIGHT
-        spread = max(target.best_ask - target.best_bid, 0.0)
-        slippage_cap = max(float(self.settings.config.slippage_limit), 0.0)
-        effective_spread = min(spread, slippage_cap) if slippage_cap > 0 else spread
-        spread_drag = effective_spread * _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT
-        drift_shortfall = max(_ARB_CHEAP_SIDE_MIN_DELTA_BPS - abs(delta_bps), 0.0)
-        drift_drag = min(drift_shortfall / 400.0, 0.006)
-        fee_drag = self._arb_effective_taker_fee_fraction(target=target, category="crypto")
-        return raw_edge - overround_drag - spread_drag - drift_drag - fee_drag
+        return self._arb_estimated_single_side_net_edge_at_price(
+            target=target,
+            fair_value=fair_value,
+            pair_sum=pair_sum,
+            delta_bps=delta_bps,
+            entry_price=target.best_ask,
+        )
 
     def _arb_effective_taker_fee_fraction(self, *, target: MarketOutcome, category: str = "crypto") -> float:
         fee_drag = float(_ARB_CHEAP_SIDE_FEE_ESTIMATE)
@@ -2703,6 +2737,23 @@ class BTC5mStrategyService:
         if max_operable_budget < min_budget:
             return floored_budget
         return _round_down(min(min_budget, max_operable_budget), "0.01")
+
+    def _arb_single_side_entry_budget(
+        self,
+        *,
+        cycle_budget: float,
+        cash_balance: float,
+        target: MarketOutcome,
+        existing_market_notional: float,
+        desired_up_ratio: float,
+        current_up_ratio: float,
+    ) -> float:
+        ratio_gap_abs = abs(desired_up_ratio - current_up_ratio)
+        single_budget_fraction = _ARB_SINGLE_SIDE_BUDGET_FRACTION
+        if existing_market_notional > 0:
+            single_budget_fraction *= 1.0 + min(ratio_gap_abs * 3.0, 0.75)
+        single_budget = _round_down(cycle_budget * single_budget_fraction, "0.01")
+        return min(max(single_budget, self._arb_min_operable_budget(target)), cash_balance)
 
     def _arb_market_exposure_cap(self, *, mode: str, effective_bankroll: float) -> float:
         cap = max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
@@ -2857,6 +2908,69 @@ class BTC5mStrategyService:
             return bool(self.settings.config.shadow_live_like_mode)
         return False
 
+    def _arb_live_like_second_leg_viability(
+        self,
+        *,
+        signal: ArbSingleSideSignal,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        fair_up: float,
+        fair_down: float,
+        pair_sum: float,
+        delta_bps: float,
+        cycle_budget: float,
+        cash_balance: float,
+        single_budget: float,
+    ) -> tuple[bool, str]:
+        if signal.target.asset_id == up_outcome.asset_id:
+            hedge_target = down_outcome
+            hedge_fair = fair_down
+        else:
+            hedge_target = up_outcome
+            hedge_fair = fair_up
+
+        hedge_min_budget = self._arb_min_operable_budget(hedge_target)
+        remaining_cycle_budget = _round_down(max(cycle_budget - single_budget, 0.0), "0.01")
+        remaining_cash_balance = _round_down(max(cash_balance - single_budget, 0.0), "0.01")
+        remaining_budget = min(remaining_cycle_budget, remaining_cash_balance)
+        if remaining_budget + _ARB_MIN_OPERABLE_BUDGET_SLACK < hedge_min_budget:
+            return False, f"segunda pata {hedge_target.label} sin presupuesto minimo operable"
+        if hedge_fair <= 0:
+            return False, f"segunda pata {hedge_target.label} sin fair util"
+
+        probe_budget = min(max(hedge_min_budget, self._arb_min_notional(hedge_target)), remaining_budget)
+        hedge_levels = self._build_arb_repair_levels(
+            target=hedge_target,
+            budget=probe_budget,
+            fair_value=hedge_fair,
+        )
+        hedge_notional = sum(level.notional for level in hedge_levels)
+        hedge_shares = sum(level.shares for level in hedge_levels)
+        hedge_min_notional = self._arb_min_notional(hedge_target)
+        if hedge_notional < hedge_min_notional or hedge_shares <= 0:
+            return False, f"segunda pata {hedge_target.label} sin tamano minimo operable en libro"
+
+        hedge_avg_price = hedge_notional / hedge_shares
+        hedge_net_edge = self._arb_estimated_single_side_net_edge_at_price(
+            target=hedge_target,
+            fair_value=hedge_fair,
+            pair_sum=pair_sum,
+            delta_bps=delta_bps,
+            entry_price=hedge_avg_price,
+        )
+        combined_net_edge = (
+            (single_budget * signal.net_edge) + (hedge_notional * hedge_net_edge)
+        ) / max(single_budget + hedge_notional, 1e-9)
+        required_combined_edge = _ARB_BIASED_BRACKET_NET_EDGE_MIN * 0.25
+        if abs(delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
+            required_combined_edge = _ARB_BIASED_BRACKET_NET_EDGE_MIN * 0.5
+        if combined_net_edge < required_combined_edge:
+            return (
+                False,
+                f"segunda pata {hedge_target.label} con coste alto: net conjunto {combined_net_edge * 100:.2f}%",
+            )
+        return True, ""
+
     def _arb_should_block_flat_single_side_open(
         self,
         *,
@@ -2867,24 +2981,28 @@ class BTC5mStrategyService:
         signal: ArbSingleSideSignal,
         pair_sum: float,
         cycle_budget: float,
+        cash_balance: float,
+        single_budget: float,
         seconds_into_window: int,
         up_outcome: MarketOutcome,
         down_outcome: MarketOutcome,
+        fair_up: float,
+        fair_down: float,
         delta_bps: float,
-    ) -> bool:
+    ) -> tuple[bool, str]:
         if not self._arb_is_live_like_mode(mode=mode):
-            return False
+            return False, ""
         if bracket_phase != "abrir":
-            return False
+            return False, ""
         if current_up_notional > 0 or current_down_notional > 0:
-            return False
+            return False, ""
 
         if seconds_into_window > _ARB_EARLY_MID_END:
-            return True
+            return True, "cheap-side bloqueado en live-like: ventana demasiado avanzada para abrir solo una pata"
         if pair_sum > _ARB_CHEAP_SIDE_BASE_PAIR_MAX:
-            return True
+            return True, "cheap-side bloqueado en live-like: pair sum demasiado alto para abrir solo una pata"
         if cycle_budget < self._arb_pair_min_operable_budget(up_outcome=up_outcome, down_outcome=down_outcome):
-            return True
+            return True, "cheap-side bloqueado en live-like: presupuesto de pareja insuficiente"
 
         strong_flat_signal = (
             signal.net_edge >= max(_ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN, 0.05)
@@ -2893,7 +3011,27 @@ class BTC5mStrategyService:
                 or signal.raw_edge >= _ARB_CHEAP_SIDE_STRONG_EDGE_MIN
             )
         )
-        return not strong_flat_signal
+        if not strong_flat_signal:
+            return (
+                True,
+                "cheap-side bloqueado en live-like: apertura plana solo con edge fuerte, ventana temprana y presupuesto de pareja",
+            )
+
+        second_leg_viable, second_leg_reason = self._arb_live_like_second_leg_viability(
+            signal=signal,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            fair_up=fair_up,
+            fair_down=fair_down,
+            pair_sum=pair_sum,
+            delta_bps=delta_bps,
+            cycle_budget=cycle_budget,
+            cash_balance=cash_balance,
+            single_budget=single_budget,
+        )
+        if not second_leg_viable:
+            return True, f"cheap-side bloqueado en live-like: {second_leg_reason}"
+        return False, ""
 
     def _arb_pair_net_edge(
         self,
