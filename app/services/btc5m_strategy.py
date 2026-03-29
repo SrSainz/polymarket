@@ -6060,7 +6060,8 @@ class BTC5mStrategyService:
             self.db.set_bot_state("runtime_guard_recent_close_pnl", "0.000000")
             self.db.set_bot_state("runtime_guard_loss_streak", "0")
             return True, ""
-        if mode == "paper" and not self.settings.config.paper_runtime_guard_enabled:
+        normalized_mode = str(mode or "paper").strip().lower()
+        if normalized_mode == "paper" and not self.settings.config.paper_runtime_guard_enabled:
             self.db.set_bot_state("runtime_guard_profile", "paper-disabled")
             self.db.set_bot_state("runtime_guard_state", "disabled")
             self.db.set_bot_state("runtime_guard_until", "0")
@@ -6070,12 +6071,28 @@ class BTC5mStrategyService:
             self.db.set_bot_state("runtime_guard_recent_close_pnl", "0.000000")
             self.db.set_bot_state("runtime_guard_loss_streak", "0")
             return True, ""
-        if mode == "paper":
+        if normalized_mode == "shadow" and not self.settings.config.shadow_runtime_guard_enabled:
+            self.db.set_bot_state("runtime_guard_profile", "shadow-disabled")
+            self.db.set_bot_state("runtime_guard_state", "disabled")
+            self.db.set_bot_state("runtime_guard_until", "0")
+            self.db.set_bot_state("runtime_guard_reason", "")
+            self.db.set_bot_state("runtime_guard_remaining_minutes", "0")
+            self.db.set_bot_state("runtime_guard_recent_close_count", "0")
+            self.db.set_bot_state("runtime_guard_recent_close_pnl", "0.000000")
+            self.db.set_bot_state("runtime_guard_loss_streak", "0")
+            return True, ""
+        if normalized_mode == "paper":
             lookback_minutes = max(self.settings.config.paper_runtime_guard_lookback_minutes, 1)
             loss_streak_limit = max(self.settings.config.paper_runtime_guard_loss_streak, 0)
             max_recent_close_pnl = float(self.settings.config.paper_runtime_guard_max_recent_pnl)
             cooldown_minutes = max(self.settings.config.paper_runtime_guard_cooldown_minutes, 1)
             guard_profile = "paper"
+        elif normalized_mode == "shadow":
+            lookback_minutes = max(self.settings.config.shadow_runtime_guard_lookback_minutes, 1)
+            loss_streak_limit = max(self.settings.config.shadow_runtime_guard_loss_streak, 0)
+            max_recent_close_pnl = float(self.settings.config.shadow_runtime_guard_max_recent_pnl)
+            cooldown_minutes = max(self.settings.config.shadow_runtime_guard_cooldown_minutes, 1)
+            guard_profile = "shadow"
         else:
             lookback_minutes = max(self.settings.config.runtime_guard_lookback_minutes, 1)
             loss_streak_limit = max(self.settings.config.runtime_guard_loss_streak, 0)
@@ -6101,7 +6118,7 @@ class BTC5mStrategyService:
         recent_executions = self.db.get_recent_executions_since(
             cutoff_ts,
             limit=execution_limit,
-            mode=mode,
+            mode=normalized_mode,
         )
         decision = evaluate_runtime_guard(
             recent_executions,

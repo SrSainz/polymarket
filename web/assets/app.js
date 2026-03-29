@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-29-shadow-home3";
+const UI_BUILD = "2026-03-29-shadow-home4";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -706,6 +706,19 @@ function shadowPrimaryStatus(summary, operability, currentExposure, currentWindo
   return { label: "sin datos", tone: "neutral" };
 }
 
+function runtimeGuardInfo(summary) {
+  const state = String(summary?.runtime_guard_state || "").trim().toLowerCase();
+  const reason = String(summary?.runtime_guard_reason || "").trim();
+  const remainingMinutes = Math.max(Number(summary?.runtime_guard_remaining_minutes || 0), 0);
+  const active = state === "cooldown" && (remainingMinutes > 0 || Boolean(reason));
+  return {
+    state,
+    reason,
+    remainingMinutes,
+    active,
+  };
+}
+
 function shadowWindowHeadline(currentExposure, currentWindowPnl) {
   if (currentExposure <= 0) return "Sin posicion abierta en esta ventana";
   if (currentWindowPnl > 0.01) return "Ganando dinero en estos 5 minutos";
@@ -848,6 +861,7 @@ function paintShadowOverview(summary, items = lastPositions) {
   const feedInfo = feedModeInfo(summary);
   const spotInfo = currentSpotInfo(summary);
   const operability = operabilityInfo(summary);
+  const runtimeGuard = runtimeGuardInfo(summary);
   const userIntel = summary?.strategy_user_intel || {};
   const edge = userIntel?.edge || {};
   const reference = userIntel?.reference || {};
@@ -884,7 +898,9 @@ function paintShadowOverview(summary, items = lastPositions) {
       : `${positionCount || 1} pata abierta`;
   document.getElementById("shadowHeroStatus").textContent = strategyMode === "shadow" ? `Shadow ${windowState.label.toLowerCase()}` : windowState.label;
   document.getElementById("shadowHeroMarket").textContent = effectiveBeat > 0 ? `${marketTitle} | beat ${fmtBtcPrice(effectiveBeat)}` : marketTitle;
-  document.getElementById("shadowHeroReason").textContent = operability.reason || windowState.detail;
+  document.getElementById("shadowHeroReason").textContent = runtimeGuard.active
+    ? operability.reason
+    : operability.reason || windowState.detail;
   applyToneClass(document.getElementById("shadowMainPanel"), primaryStatus.tone === "negative" ? "negative" : currentWindowExposure > 0 ? toneFromNumber(currentWindowPnl) : "neutral");
 
   const stateBadge = document.getElementById("shadowStateBadge");
@@ -909,7 +925,11 @@ function paintShadowOverview(summary, items = lastPositions) {
       ? `${fmtUsdPlain(currentWindowExposure, 2)} metidos | ${positionState.toLowerCase()} | restan ${mmssLabel(timingInfo.remaining)}`
       : `${operability.label} | restan ${mmssLabel(timingInfo.remaining)} | sin dinero metido`;
   document.getElementById("shadowWindowBreakdown").textContent =
-    currentWindowExposure > 0 ? currentWindowDirection(summary) : operability.reason || "Esperando una entrada valida.";
+    currentWindowExposure > 0
+      ? currentWindowDirection(summary)
+      : runtimeGuard.active
+      ? operability.reason
+      : operability.reason || "Esperando una entrada valida.";
 
   const totalCard = document.getElementById("shadowTotalPnlCard");
   applyToneClass(totalCard, toneFromNumber(pnlTotal));
@@ -951,8 +971,10 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowHealthReferenceValue").textContent = `${referenceHeadline} | ${referenceMeta}`;
   document.getElementById("shadowHealthFeeValue").textContent = feeBps > 0 ? fmtBps(feeBps, 1) : "-";
   document.getElementById("shadowHealthMeta").textContent =
-    operability.reason ||
-    `${feedInfo.label} | ${String(reference?.reference_quality || spotInfo.referenceQuality || "").trim() || "sin calidad"} | ${String(edge?.edge_status || "sin edge")}`;
+    runtimeGuard.active
+      ? operability.reason
+      : operability.reason ||
+        `${feedInfo.label} | ${String(reference?.reference_quality || spotInfo.referenceQuality || "").trim() || "sin calidad"} | ${String(edge?.edge_status || "sin edge")}`;
 
   const edgeCard = document.getElementById("shadowEdgeCard");
   applyToneClass(edgeCard, edgeSnapshot.tone);
@@ -1681,10 +1703,23 @@ function simplifiedStrategyReason(summary) {
 }
 
 function operabilityInfo(summary) {
+  const runtimeGuard = runtimeGuardInfo(summary);
   const state = String(summary?.strategy_operability_state || "").trim();
   const label = String(summary?.strategy_operability_label || "").trim();
   const reason = String(summary?.strategy_operability_reason || "").trim();
   const blocking = Boolean(summary?.strategy_operability_blocking);
+  if (runtimeGuard.active) {
+    const cooldownText =
+      runtimeGuard.remainingMinutes > 0
+        ? `Quedan ${runtimeGuard.remainingMinutes} min de cooldown.`
+        : "Cooldown activo por riesgo reciente.";
+    return {
+      state: "runtime_guard",
+      label: "Guardado por riesgo",
+      reason: runtimeGuard.reason ? `${runtimeGuard.reason} | ${cooldownText}` : cooldownText,
+      blocking: true,
+    };
+  }
   if (label || reason || state) {
     return {
       state: state || "observing",

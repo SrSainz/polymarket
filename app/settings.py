@@ -167,6 +167,7 @@ class BotConfig(BaseModel):
     runtime_diagnostics_decision_limit: int = 1200
     runtime_guard_enabled: bool = True
     paper_runtime_guard_enabled: bool = False
+    shadow_runtime_guard_enabled: bool = True
     runtime_guard_lookback_minutes: int = 180
     runtime_guard_loss_streak: int = 0
     runtime_guard_max_recent_pnl: float = -35.0
@@ -175,6 +176,10 @@ class BotConfig(BaseModel):
     paper_runtime_guard_loss_streak: int = 4
     paper_runtime_guard_max_recent_pnl: float = -90.0
     paper_runtime_guard_cooldown_minutes: int = 15
+    shadow_runtime_guard_lookback_minutes: int = 180
+    shadow_runtime_guard_loss_streak: int = 0
+    shadow_runtime_guard_max_recent_pnl: float = -60.0
+    shadow_runtime_guard_cooldown_minutes: int = 20
 
     max_position_per_market: float = 75.0
     max_total_exposure: float = 250.0
@@ -310,6 +315,12 @@ class BotConfig(BaseModel):
             raise ValueError("paper_runtime_guard_loss_streak must be >= 0")
         if self.paper_runtime_guard_cooldown_minutes < 1:
             raise ValueError("paper_runtime_guard_cooldown_minutes must be >= 1")
+        if self.shadow_runtime_guard_lookback_minutes < 1:
+            raise ValueError("shadow_runtime_guard_lookback_minutes must be >= 1")
+        if self.shadow_runtime_guard_loss_streak < 0:
+            raise ValueError("shadow_runtime_guard_loss_streak must be >= 0")
+        if self.shadow_runtime_guard_cooldown_minutes < 1:
+            raise ValueError("shadow_runtime_guard_cooldown_minutes must be >= 1")
         if self.btc5m_reserved_notional < 0:
             raise ValueError("btc5m_reserved_notional must be >= 0")
         if self.btc5m_reserved_allocation_pct < 0 or self.btc5m_reserved_allocation_pct > 1:

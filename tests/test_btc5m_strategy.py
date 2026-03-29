@@ -4423,6 +4423,52 @@ def test_runtime_guard_uses_paper_profile_thresholds(tmp_path: Path) -> None:
     db.close()
 
 
+def test_runtime_guard_uses_shadow_profile_thresholds(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            shadow_runtime_guard_enabled=True,
+            shadow_runtime_guard_lookback_minutes=120,
+            shadow_runtime_guard_loss_streak=0,
+            shadow_runtime_guard_max_recent_pnl=-55.0,
+            shadow_runtime_guard_cooldown_minutes=18,
+        ),
+        logger=logging.getLogger("test-btc5m-shadow-runtime-guard"),
+        spot_feed=None,
+    )
+
+    with patch("app.services.btc5m_strategy.evaluate_runtime_guard") as evaluate_mock:
+        evaluate_mock.return_value = {
+            "blocked": False,
+            "recent_close_count": 0,
+            "recent_close_pnl": 0.0,
+            "consecutive_losses": 0,
+            "cooldown_until": 0,
+            "reason": "",
+        }
+        allowed, note = service._runtime_guard_can_open(mode="shadow")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.get_bot_state("runtime_guard_profile") == "shadow"
+    _, kwargs = evaluate_mock.call_args
+    assert kwargs["lookback_minutes"] == 120
+    assert kwargs["loss_streak_limit"] == 0
+    assert kwargs["max_recent_close_pnl"] == -55.0
+    assert kwargs["cooldown_minutes"] == 18
+    db.close()
+
+
 def test_runtime_guard_can_be_disabled_only_for_paper(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -4450,6 +4496,54 @@ def test_runtime_guard_can_be_disabled_only_for_paper(tmp_path: Path) -> None:
     assert allowed is True
     assert note == ""
     assert db.get_bot_state("runtime_guard_profile") == "paper-disabled"
+    assert db.get_bot_state("runtime_guard_state") == "disabled"
+    evaluate_mock.assert_not_called()
+
+    with patch("app.services.btc5m_strategy.evaluate_runtime_guard") as evaluate_mock:
+        evaluate_mock.return_value = {
+            "blocked": False,
+            "recent_close_count": 0,
+            "recent_close_pnl": 0.0,
+            "consecutive_losses": 0,
+            "cooldown_until": 0,
+            "reason": "",
+        }
+        allowed, note = service._runtime_guard_can_open(mode="live")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.get_bot_state("runtime_guard_profile") == "live"
+    evaluate_mock.assert_called_once()
+    db.close()
+
+
+def test_runtime_guard_can_be_disabled_for_shadow_without_touching_live(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            runtime_guard_enabled=True,
+            shadow_runtime_guard_enabled=False,
+        ),
+        logger=logging.getLogger("test-btc5m-shadow-runtime-guard-disabled"),
+        spot_feed=None,
+    )
+
+    with patch("app.services.btc5m_strategy.evaluate_runtime_guard") as evaluate_mock:
+        allowed, note = service._runtime_guard_can_open(mode="shadow")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.get_bot_state("runtime_guard_profile") == "shadow-disabled"
     assert db.get_bot_state("runtime_guard_state") == "disabled"
     evaluate_mock.assert_not_called()
 
