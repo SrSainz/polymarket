@@ -110,7 +110,7 @@ def build_context(root_dir: Path, *, runtime_mode: str = "paper") -> tuple[AppSe
     user_feed.start()
     clob_client = CLOBClient(settings.env.clob_host, settings.env, market_feed=market_feed)
 
-    paper_broker = PaperBroker(db)
+    paper_broker = PaperBroker(db, clob_client=clob_client)
     shadow_broker = ShadowBroker(
         db,
         clob_client,

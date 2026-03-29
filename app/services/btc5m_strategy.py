@@ -24,6 +24,7 @@ from app.core.telemetry import MicrostructureTelemetry
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.clob_client import CLOBClient
+from app.polymarket.fee_model import effective_taker_fee_rate, fee_cost_usdc, fee_per_share
 from app.polymarket.gamma_client import GammaClient
 from app.polymarket.spot_feed import SpotFeed, SpotSnapshot
 from app.polymarket.user_feed import UserFeed
@@ -2566,10 +2567,10 @@ class BTC5mStrategyService:
         spread_drag = effective_spread * _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT
         drift_shortfall = max(_ARB_CHEAP_SIDE_MIN_DELTA_BPS - abs(delta_bps), 0.0)
         drift_drag = min(drift_shortfall / 400.0, 0.006)
-        fee_drag = self._arb_effective_taker_fee_fraction(target=target)
+        fee_drag = self._arb_effective_taker_fee_fraction(target=target, category="crypto")
         return raw_edge - overround_drag - spread_drag - drift_drag - fee_drag
 
-    def _arb_effective_taker_fee_fraction(self, *, target: MarketOutcome) -> float:
+    def _arb_effective_taker_fee_fraction(self, *, target: MarketOutcome, category: str = "crypto") -> float:
         fee_drag = float(_ARB_CHEAP_SIDE_FEE_ESTIMATE)
         fee_lookup = getattr(self.clob_client, "get_fee_rate_bps", None)
         if not callable(fee_lookup):
@@ -2581,8 +2582,11 @@ class BTC5mStrategyService:
         if fee_rate_bps <= 0:
             return fee_drag
 
-        fee_rate = fee_rate_bps / 10_000
-        effective_rate = fee_rate * max(target.best_ask * (1.0 - target.best_ask), 0.0) ** 2
+        effective_rate = fee_per_share(
+            fee_rate_bps=fee_rate_bps,
+            price=target.best_ask,
+            category=category,
+        )
         if effective_rate <= 0:
             return fee_drag
         return max(fee_drag, effective_rate)
@@ -4744,7 +4748,8 @@ class BTC5mStrategyService:
             return max(paper_equity - self.db.get_total_exposure(), 0.0), 0.0
         if mode == "shadow":
             shadow_capital = self._configured_live_small_target_capital()
-            return max(shadow_capital - self.db.get_total_exposure(), 0.0), 0.0
+            shadow_equity = shadow_capital + self.db.get_cumulative_execution_pnl(mode="shadow")
+            return max(shadow_equity - self.db.get_total_exposure(), 0.0), 0.0
         try:
             balance = self.clob_client.get_collateral_balance()
             return float(balance.get("balance") or 0.0), float(balance.get("allowance") or 0.0)
@@ -5693,6 +5698,7 @@ class BTC5mStrategyService:
             return 0.0
         if not bool(market.get("feesEnabled")):
             return 0.0
+        category = str(market.get("category") or "crypto")
         token_ids = _parse_json_list(market.get("clobTokenIds"))
         if len(token_ids) != 2:
             return 0.0
@@ -5709,8 +5715,11 @@ class BTC5mStrategyService:
             best_ask = _best_ask(book)
             if best_ask is None or best_ask <= 0 or best_ask >= 1:
                 continue
-            fee_rate = fee_rate_bps / 10_000
-            effective_rate = fee_rate * max(best_ask * (1.0 - best_ask), 0.0) ** 2
+            effective_rate = effective_taker_fee_rate(
+                fee_rate_bps=fee_rate_bps,
+                price=best_ask,
+                category=category,
+            )
             effective_bps.append(effective_rate * 10_000)
         if not effective_bps:
             return 0.0
@@ -5764,6 +5773,12 @@ class BTC5mStrategyService:
                 filled_size=size,
                 fill_price=price,
                 fill_notional=size * price,
+                fee_paid=fee_cost_usdc(
+                    size=size,
+                    price=price,
+                    fee_rate_bps=_safe_float(pending.get("fee_rate_bps")),
+                    category=str(pending.get("category") or "crypto"),
+                ),
                 message=json.dumps(payload, separators=(",", ":"), sort_keys=True),
                 status="filled",
                 notes=f"live_user_feed_reconciled order_id={order_id} trade_id={trade_id or '-'}",

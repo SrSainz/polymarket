@@ -87,4 +87,5 @@ class ExecutionResult(BaseModel):
     price: float
     notional: float
     pnl_delta: float = 0.0
+    fee_paid: float = 0.0
     message: str = ""

@@ -13,6 +13,7 @@ from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.spot_feed import SpotSnapshot
+from app.polymarket.fee_model import effective_taker_fee_rate, fee_per_share
 from app.services.btc5m_strategy import ArbSpotContext, AskLevel, BTC5mStrategyService, MarketOutcome
 from app.settings import AppPaths, AppSettings, BotConfig, EnvSettings
 
@@ -405,7 +406,12 @@ def test_microstructure_taker_fee_estimate_uses_public_fee_rate(tmp_path: Path) 
 
     fee_bps = service._microstructure_taker_fee_bps_estimate(market)  # noqa: SLF001
 
-    assert round(fee_bps, 2) == 144.0
+    expected_bps = effective_taker_fee_rate(
+        fee_rate_bps=2500.0,
+        price=0.40,
+        category="crypto",
+    ) * 10_000
+    assert round(fee_bps, 2) == round(expected_bps, 2)
     db.close()
 
 
@@ -446,7 +452,77 @@ def test_arb_single_side_net_edge_uses_dynamic_fee_rate(tmp_path: Path) -> None:
         delta_bps=3.0,
     )
 
-    assert round(net_edge * 10_000, 2) == -29.0
+    expected_net_edge = 0.415 - 0.40 - ((0.40 - 0.39) * 0.35) - fee_per_share(
+        fee_rate_bps=2500.0,
+        price=0.40,
+        category="crypto",
+    )
+    assert round(net_edge * 10_000, 2) == round(expected_net_edge * 10_000, 2)
+    db.close()
+
+
+def test_shadow_cash_snapshot_uses_realized_execution_pnl(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    instruction_open = CopyInstruction(
+        action=SignalAction.OPEN,
+        side=TradeSide.BUY,
+        asset="asset-up",
+        condition_id="cond-1",
+        size=10.0,
+        price=0.40,
+        notional=4.0,
+        source_wallet="strategy:test",
+        source_signal_id=1,
+        title="Bitcoin Up or Down",
+        slug="btc-updown-5m-test",
+        outcome="Up",
+        category="crypto",
+        reason="unit-open",
+    )
+    apply_fill_to_database(
+        db=db,
+        instruction=instruction_open,
+        mode="shadow",
+        filled_size=10.0,
+        fill_price=0.40,
+        fill_notional=4.0,
+        fee_paid=0.20,
+        message="open",
+        status="filled",
+        notes="open",
+    )
+    instruction_close = instruction_open.model_copy(update={"action": SignalAction.CLOSE, "side": TradeSide.SELL, "price": 0.45, "notional": 4.5, "reason": "unit-close"})
+    apply_fill_to_database(
+        db=db,
+        instruction=instruction_close,
+        mode="shadow",
+        filled_size=10.0,
+        fill_price=0.45,
+        fill_notional=4.5,
+        fee_paid=0.10,
+        message="close",
+        status="filled",
+        notes="close",
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72),
+        logger=logging.getLogger("test-btc5m-shadow-cash"),
+    )
+
+    cash_balance, allowance = service._live_cash_snapshot(mode="shadow")  # noqa: SLF001
+
+    assert round(cash_balance, 2) == 97.92
+    assert allowance == 0.0
     db.close()
 
 

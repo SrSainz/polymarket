@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.core.execution_engine import apply_fill_to_database
+from app.core.execution_engine import apply_fill_to_database, estimate_fill_fee_paid
 from app.core.live_broker import _marketable_limit_price, _passive_limit_price, _resolve_execution_profile
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, TradeSide
@@ -162,6 +162,12 @@ class ShadowBroker:
             filled_size=filled_size,
             fill_price=fill_price,
             fill_notional=fill_notional,
+            fee_paid=estimate_fill_fee_paid(
+                instruction=instruction,
+                fill_size=filled_size,
+                fill_price=fill_price,
+                fee_lookup=getattr(self.clob_client, "get_fee_rate_bps", None),
+            ),
             message=message,
             status="filled",
             notes=notes,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.core.execution_engine import ExecutionEngine
+from app.core.execution_engine import ExecutionEngine, apply_fill_to_database
 from app.core.lab_artifacts import events_log_path, load_latency_snapshot
 from app.core.shadow_broker import ShadowBroker
 from app.db import Database
@@ -311,4 +311,56 @@ def test_shadow_broker_maker_returns_submitted_without_fill(tmp_path: Path) -> N
     assert result.size == 0.0
     assert db.get_copy_position("asset-up") is None
     assert "maker resting" in result.message.lower()
+    db.close()
+
+
+def test_apply_fill_to_database_tracks_fee_paid_in_position_and_realized_pnl(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    instruction = _instruction()
+
+    result_open = apply_fill_to_database(
+        db=db,
+        instruction=instruction,
+        mode="shadow",
+        filled_size=10.0,
+        fill_price=0.40,
+        fill_notional=4.0,
+        fee_paid=0.20,
+        message="open",
+        status="filled",
+        notes="open",
+    )
+
+    position = db.get_copy_position("asset-up")
+    assert result_open.fee_paid == 0.20
+    assert position is not None
+    assert abs(float(position["avg_price"]) - 0.42) < 1e-9
+
+    result_close = apply_fill_to_database(
+        db=db,
+        instruction=instruction.model_copy(
+            update={
+                "action": SignalAction.CLOSE,
+                "side": TradeSide.SELL,
+                "price": 0.45,
+                "notional": 4.5,
+                "reason": "unit-close",
+            }
+        ),
+        mode="shadow",
+        filled_size=10.0,
+        fill_price=0.45,
+        fill_notional=4.5,
+        fee_paid=0.10,
+        message="close",
+        status="filled",
+        notes="close",
+    )
+
+    assert db.get_copy_position("asset-up") is None
+    assert round(result_close.pnl_delta, 4) == 0.2
+    row = db.conn.execute("SELECT fee_paid, pnl_delta FROM executions ORDER BY id DESC LIMIT 1").fetchone()
+    assert round(float(row["fee_paid"]), 4) == 0.1
+    assert round(float(row["pnl_delta"]), 4) == 0.2
     db.close()

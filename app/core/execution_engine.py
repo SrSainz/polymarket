@@ -9,6 +9,7 @@ from typing import Protocol
 from app.core.lab_artifacts import append_jsonl, dump_json, events_log_path, latency_snapshot_path, load_latency_snapshot
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, TradeSide
+from app.polymarket.fee_model import fee_cost_usdc
 
 
 class BrokerAdapter(Protocol):
@@ -28,6 +29,7 @@ class ExecutionTrace:
     price: float
     notional: float
     pnl_delta: float
+    fee_paid: float
     source_wallet: str
     source_signal_id: int
     outcome: str
@@ -121,9 +123,10 @@ class ExecutionEngine:
                 action=instruction.action.value,
                 size=float(result.size or 0.0),
                 price=float(result.price or 0.0),
-                notional=float(result.notional or 0.0),
-                pnl_delta=float(result.pnl_delta or 0.0),
-                source_wallet=instruction.source_wallet,
+            notional=float(result.notional or 0.0),
+            pnl_delta=float(result.pnl_delta or 0.0),
+            fee_paid=float(result.fee_paid or 0.0),
+            source_wallet=instruction.source_wallet,
                 source_signal_id=int(instruction.source_signal_id or 0),
                 outcome=instruction.outcome,
                 slug=instruction.slug,
@@ -187,6 +190,7 @@ def apply_fill_to_database(
     filled_size: float,
     fill_price: float,
     fill_notional: float,
+    fee_paid: float = 0.0,
     message: str,
     status: str = "filled",
     notes: str = "",
@@ -195,6 +199,7 @@ def apply_fill_to_database(
     current_size = float(existing["size"]) if existing else 0.0
     current_avg = float(existing["avg_price"]) if existing else instruction.price
     current_realized = float(existing["realized_pnl"]) if existing else 0.0
+    effective_fee_paid = max(float(fee_paid or 0.0), 0.0)
 
     if instruction.side == TradeSide.BUY:
         new_size = current_size + filled_size
@@ -210,7 +215,7 @@ def apply_fill_to_database(
                 pnl_delta=0.0,
                 message="invalid resulting size",
             )
-        new_avg = ((current_size * current_avg) + (filled_size * fill_price)) / new_size
+        new_avg = ((current_size * current_avg) + (filled_size * fill_price) + effective_fee_paid) / new_size
         db.upsert_copy_position(
             asset=instruction.asset,
             condition_id=instruction.condition_id,
@@ -238,7 +243,8 @@ def apply_fill_to_database(
                 message="no position to reduce/close",
             )
         filled_size = min(filled_size, current_size)
-        pnl_delta = (fill_price - current_avg) * filled_size
+        gross_pnl_delta = (fill_price - current_avg) * filled_size
+        pnl_delta = gross_pnl_delta - effective_fee_paid
         remaining_size = current_size - filled_size
         new_realized = current_realized + pnl_delta
         if remaining_size <= 1e-9:
@@ -270,6 +276,7 @@ def apply_fill_to_database(
         price=fill_price,
         notional=fill_notional,
         pnl_delta=pnl_delta,
+        fee_paid=effective_fee_paid,
         message=message,
     )
     db.record_execution(
@@ -281,6 +288,31 @@ def apply_fill_to_database(
         notes=notes or instruction.reason,
     )
     return result
+
+
+def estimate_fill_fee_paid(
+    *,
+    instruction: CopyInstruction,
+    fill_size: float,
+    fill_price: float,
+    fee_lookup,
+) -> float:
+    if str(instruction.reason or "").strip().startswith("strategy_resolution:"):
+        return 0.0
+    if not callable(fee_lookup):
+        return 0.0
+    try:
+        fee_rate_bps = float(fee_lookup(str(instruction.asset)) or 0.0)
+    except (TypeError, ValueError):
+        fee_rate_bps = 0.0
+    if fee_rate_bps <= 0:
+        return 0.0
+    return fee_cost_usdc(
+        size=fill_size,
+        price=fill_price,
+        fee_rate_bps=fee_rate_bps,
+        category=instruction.category,
+    )
 
 
 def _signal_to_order_ms(db: Database, *, started_ns: int) -> float:

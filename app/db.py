@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS executions (
     source_signal_id INTEGER,
     strategy_variant TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
-    pnl_delta REAL NOT NULL DEFAULT 0
+    pnl_delta REAL NOT NULL DEFAULT 0,
+    fee_paid REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS daily_pnl (
@@ -234,6 +235,10 @@ class Database:
         if "strategy_variant" not in execution_columns:
             self.conn.execute(
                 "ALTER TABLE executions ADD COLUMN strategy_variant TEXT NOT NULL DEFAULT ''"
+            )
+        if "fee_paid" not in execution_columns:
+            self.conn.execute(
+                "ALTER TABLE executions ADD COLUMN fee_paid REAL NOT NULL DEFAULT 0"
             )
 
     def _table_columns(self, table_name: str) -> dict[str, str]:
@@ -704,8 +709,8 @@ class Database:
                 """
                 INSERT INTO executions (
                     ts, mode, status, action, side, asset, condition_id, size, price, notional,
-                    source_wallet, source_signal_id, strategy_variant, notes, pnl_delta
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_wallet, source_signal_id, strategy_variant, notes, pnl_delta, fee_paid
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(time.time()),
@@ -723,6 +728,7 @@ class Database:
                     active_variant,
                     notes,
                     result.pnl_delta,
+                    result.fee_paid,
                 ),
             )
 

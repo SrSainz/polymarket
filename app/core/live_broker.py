@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
-from app.core.execution_engine import apply_fill_to_database
+from app.core.execution_engine import apply_fill_to_database, estimate_fill_fee_paid
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, TradeSide
 from app.polymarket.clob_client import CLOBClient
@@ -79,6 +79,8 @@ class LiveBroker:
             raise
         order_id = _extract_order_id(response)
         status = _live_execution_status(response)
+        fee_lookup = getattr(self.clob_client, "get_fee_rate_bps", None)
+        fee_rate_bps = _safe_float(fee_lookup(str(instruction.asset))) if callable(fee_lookup) else 0.0
         if order_id:
             _persist_pending_live_order(
                 db=self.db,
@@ -86,6 +88,7 @@ class LiveBroker:
                 instruction=instruction,
                 profile=profile,
                 response=response,
+                fee_rate_bps=fee_rate_bps,
             )
         if profile in {"maker_gtd", "maker_post_only_gtc"}:
             return ExecutionResult(
@@ -151,6 +154,12 @@ class LiveBroker:
             filled_size=fill_size,
             fill_price=fill_price,
             fill_notional=fill_notional,
+            fee_paid=estimate_fill_fee_paid(
+                instruction=instruction,
+                fill_size=fill_size,
+                fill_price=fill_price,
+                fee_lookup=fee_lookup,
+            ),
             message=str(response),
             status="filled",
             notes=_live_execution_notes(response, prefix=profile),
@@ -308,6 +317,7 @@ def _persist_pending_live_order(
     instruction: CopyInstruction,
     profile: str,
     response: object,
+    fee_rate_bps: float = 0.0,
 ) -> None:
     payload = {
         "order_id": str(order_id or "").strip(),
@@ -327,6 +337,7 @@ def _persist_pending_live_order(
         "reason": instruction.reason,
         "execution_profile": str(profile or ""),
         "response_status": _live_execution_status(response),
+        "fee_rate_bps": max(float(fee_rate_bps or 0.0), 0.0),
     }
     db.set_bot_state(_pending_live_order_key(order_id), json.dumps(payload, separators=(",", ":"), sort_keys=True))
 
