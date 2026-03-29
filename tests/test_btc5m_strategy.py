@@ -409,6 +409,47 @@ def test_microstructure_taker_fee_estimate_uses_public_fee_rate(tmp_path: Path) 
     db.close()
 
 
+def test_arb_single_side_net_edge_uses_dynamic_fee_rate(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FeeAwareCLOBClient(
+            books={
+                "asset-up": {"asks": [{"price": 0.40, "size": 50}], "bids": [{"price": 0.39, "size": 50}]},
+            },
+            fee_bps=2500.0,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-single-side-dynamic-fee"),
+    )
+    target = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.40,
+        best_bid=0.39,
+        best_ask_size=50.0,
+        ask_levels=(AskLevel(price=0.40, size=50.0),),
+    )
+
+    net_edge = service._arb_estimated_single_side_net_edge(  # noqa: SLF001
+        target=target,
+        fair_value=0.415,
+        pair_sum=1.0,
+        delta_bps=3.0,
+    )
+
+    assert round(net_edge * 10_000, 2) == -29.0
+    db.close()
+
+
 def test_live_user_trade_reconciliation_updates_live_position_from_pending_order(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

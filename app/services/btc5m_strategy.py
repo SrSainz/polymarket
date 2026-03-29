@@ -2566,7 +2566,26 @@ class BTC5mStrategyService:
         spread_drag = effective_spread * _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT
         drift_shortfall = max(_ARB_CHEAP_SIDE_MIN_DELTA_BPS - abs(delta_bps), 0.0)
         drift_drag = min(drift_shortfall / 400.0, 0.006)
-        return raw_edge - overround_drag - spread_drag - drift_drag - _ARB_CHEAP_SIDE_FEE_ESTIMATE
+        fee_drag = self._arb_effective_taker_fee_fraction(target=target)
+        return raw_edge - overround_drag - spread_drag - drift_drag - fee_drag
+
+    def _arb_effective_taker_fee_fraction(self, *, target: MarketOutcome) -> float:
+        fee_drag = float(_ARB_CHEAP_SIDE_FEE_ESTIMATE)
+        fee_lookup = getattr(self.clob_client, "get_fee_rate_bps", None)
+        if not callable(fee_lookup):
+            return fee_drag
+        if target.best_ask <= 0 or target.best_ask >= 1:
+            return fee_drag
+
+        fee_rate_bps = _safe_float(fee_lookup(str(target.asset_id)))
+        if fee_rate_bps <= 0:
+            return fee_drag
+
+        fee_rate = fee_rate_bps / 10_000
+        effective_rate = fee_rate * max(target.best_ask * (1.0 - target.best_ask), 0.0) ** 2
+        if effective_rate <= 0:
+            return fee_drag
+        return max(fee_drag, effective_rate)
 
     def _arb_strategy_min_notional(self) -> float:
         configured = float(getattr(self.settings.config, "arb_min_trade_amount", 0.0) or 0.0)
