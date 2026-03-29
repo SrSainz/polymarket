@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260329-shadow-home2" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260329-shadow-home3" />
   </head>
   <body>
     <div class="app-shell">
@@ -155,6 +155,27 @@
                 <li><span>Fee taker</span><strong id="shadowHealthFeeValue">-</strong></li>
               </ul>
               <p id="shadowHealthMeta" class="mini-meta">Esperando diagnostico.</p>
+            </article>
+
+            <article class="panel shadow-mini-card shadow-edge-card" id="shadowEdgeCard">
+              <div class="subpanel-head">
+                <h3>Edge real</h3>
+                <span class="badge">fee + slippage</span>
+              </div>
+              <strong id="shadowEdgeStatusValue" class="shadow-mini-value">-</strong>
+              <p id="shadowEdgeHeadline" class="shadow-card-headline">Leyendo coste real de entrada.</p>
+              <div class="shadow-meter shadow-edge-meter" aria-hidden="true">
+                <span id="shadowEdgeMeterNegative" class="shadow-meter-fill shadow-meter-fill-negative"></span>
+                <span id="shadowEdgeMeterPositive" class="shadow-meter-fill shadow-meter-fill-positive"></span>
+                <span class="shadow-meter-center"></span>
+              </div>
+              <div class="shadow-edge-pills">
+                <span id="shadowEdgeGrossValue" class="shadow-edge-pill">Bruto -</span>
+                <span id="shadowEdgeFeeValue" class="shadow-edge-pill">Fee -</span>
+                <span id="shadowEdgeSlipValue" class="shadow-edge-pill">Slippage -</span>
+                <span id="shadowEdgeModeValue" class="shadow-edge-pill">Modo -</span>
+              </div>
+              <p id="shadowEdgeMeta" class="mini-meta">Sin edge calculado todavia.</p>
             </article>
 
             <article class="panel shadow-mini-card" id="shadowRecentCard">
@@ -803,6 +824,6 @@
         <p id="lastUpdated">Ultima actualizacion: -</p>
       </footer>
     </div>
-    <script src="/assets/app.js?v=20260329-shadow-home2"></script>
+    <script src="/assets/app.js?v=20260329-shadow-home3"></script>
   </body>
 </html>

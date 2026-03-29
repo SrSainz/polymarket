@@ -1359,6 +1359,51 @@ td {
   gap: 12px;
 }
 
+.shadow-edge-card {
+  gap: 14px;
+}
+
+.shadow-edge-meter {
+  margin-top: -2px;
+}
+
+.shadow-edge-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.shadow-edge-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted-strong);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.shadow-edge-card.is-positive .shadow-edge-pill {
+  border-color: rgba(143, 208, 170, 0.28);
+  background: rgba(143, 208, 170, 0.12);
+  color: #d8f1e2;
+}
+
+.shadow-edge-card.is-negative .shadow-edge-pill {
+  border-color: rgba(239, 155, 155, 0.28);
+  background: rgba(239, 155, 155, 0.12);
+  color: #ffd9d9;
+}
+
+.shadow-edge-card.is-warning .shadow-edge-pill {
+  border-color: rgba(233, 178, 125, 0.28);
+  background: rgba(233, 178, 125, 0.12);
+  color: #fde0c2;
+}
+
 .shadow-mini-list {
   list-style: none;
   margin: 0;

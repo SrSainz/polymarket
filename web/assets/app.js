@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-29-shadow-home2";
+const UI_BUILD = "2026-03-29-shadow-home3";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -634,6 +634,32 @@ function compareReferenceMeta(intel) {
   return quality || "sin calidad";
 }
 
+function shadowEdgeSnapshot(intel, summary) {
+  const edge = intel?.edge || {};
+  const gross = Number(edge?.gross_edge_bps ?? summary?.strategy_expected_edge_bps ?? 0);
+  const net = Number(edge?.selected_ev_bps ?? summary?.strategy_taker_ev_bps ?? 0);
+  const fee = Math.max(Number(edge?.taker_fee_bps ?? summary?.strategy_taker_fee_bps ?? 0), 0);
+  const estimatedCost = Math.max(Number(edge?.estimated_cost_bps || 0), 0);
+  const slippage = Math.max(estimatedCost - fee, 0);
+  const breakEvenGap = Math.max(Number(edge?.break_even_gap_bps || 0), 0);
+  const execution = String(edge?.selected_execution || edge?.execution_flavor || summary?.strategy_selected_execution || "-").trim() || "-";
+  const tone = net > 0.01 ? "positive" : net < -0.01 ? "negative" : "warning";
+  return { gross, net, fee, slippage, estimatedCost, breakEvenGap, execution, tone };
+}
+
+function shadowEdgeHeadline(snapshot) {
+  if (!snapshot) return "Sin edge calculado todavia.";
+  if (snapshot.net > 0.01) return "Ahora mismo sí compensa entrar";
+  if (snapshot.breakEvenGap > 0.01) return `Ahora mismo faltan ${fmtBps(snapshot.breakEvenGap, 1)} para break-even`;
+  if (snapshot.gross > 0.01) return "Hay edge bruto, pero el coste se lo come";
+  return "No hay edge útil ahora mismo";
+}
+
+function shadowEdgeMeta(snapshot) {
+  if (!snapshot) return "Sin edge calculado todavia.";
+  return `bruto ${fmtBps(snapshot.gross, 1)} - fee ${fmtBps(snapshot.fee, 1)} - slippage/drag ${fmtBps(snapshot.slippage, 1)} = neto ${fmtBps(snapshot.net, 1)} | ${snapshot.execution}`;
+}
+
 function clamp(value, min, max) {
   return Math.min(Math.max(Number(value), min), max);
 }
@@ -843,6 +869,7 @@ function paintShadowOverview(summary, items = lastPositions) {
   const positionCount = breakdown.length || Number(buckets.currentSummary.count || 0);
   const netEdgeBps = Number(edge?.selected_ev_bps ?? summary?.strategy_taker_ev_bps ?? 0);
   const feeBps = Number(edge?.taker_fee_bps ?? summary?.strategy_taker_fee_bps ?? 0);
+  const edgeSnapshot = shadowEdgeSnapshot(userIntel, summary);
   const latencyHeadline = compareLatencyHeadline(userIntel);
   const referenceHeadline = compareReferenceHeadline(userIntel) || String(spotInfo?.effectiveSource || "-").replaceAll("-", " ");
   const referenceMeta = compareReferenceMeta(userIntel);
@@ -926,6 +953,20 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowHealthMeta").textContent =
     operability.reason ||
     `${feedInfo.label} | ${String(reference?.reference_quality || spotInfo.referenceQuality || "").trim() || "sin calidad"} | ${String(edge?.edge_status || "sin edge")}`;
+
+  const edgeCard = document.getElementById("shadowEdgeCard");
+  applyToneClass(edgeCard, edgeSnapshot.tone);
+  document.getElementById("shadowEdgeStatusValue").textContent = fmtBps(edgeSnapshot.net, 1);
+  document.getElementById("shadowEdgeHeadline").textContent = shadowEdgeHeadline(edgeSnapshot);
+  const edgeScale = Math.max(Math.abs(edgeSnapshot.gross), Math.abs(edgeSnapshot.net), edgeSnapshot.estimatedCost, 10);
+  const edgeWidthPct = clamp((Math.abs(edgeSnapshot.net) / edgeScale) * 50, 0, 50);
+  document.getElementById("shadowEdgeMeterNegative").style.width = edgeSnapshot.net < 0 ? `${edgeWidthPct}%` : "0%";
+  document.getElementById("shadowEdgeMeterPositive").style.width = edgeSnapshot.net > 0 ? `${edgeWidthPct}%` : "0%";
+  document.getElementById("shadowEdgeGrossValue").textContent = `Bruto ${fmtBps(edgeSnapshot.gross, 1)}`;
+  document.getElementById("shadowEdgeFeeValue").textContent = `Fee ${fmtBps(edgeSnapshot.fee, 1)}`;
+  document.getElementById("shadowEdgeSlipValue").textContent = `Slippage ${fmtBps(edgeSnapshot.slippage, 1)}`;
+  document.getElementById("shadowEdgeModeValue").textContent = `${edgeSnapshot.execution || "-"}`;
+  document.getElementById("shadowEdgeMeta").textContent = shadowEdgeMeta(edgeSnapshot);
 
   const recentCard = document.getElementById("shadowRecentCard");
   const recentSum = recentRows.reduce((acc, item) => acc + Number(item?.pnl || 0), 0);
