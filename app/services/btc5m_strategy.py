@@ -131,6 +131,8 @@ _ARB_STABILIZE_CATCHUP_MAX_PAIR_SUM = 1.03
 _ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE = -0.030
 _ARB_STABILIZE_CATCHUP_PROGRESS_FRACTION = 0.24
 _ARB_STABILIZE_CATCHUP_BUDGET_FRACTION = 0.14
+_ARB_STABILIZE_RESIDUAL_MAX_CARRY_FRACTION = 0.75
+_ARB_STABILIZE_RESIDUAL_MAX_TARGET_FRACTION = 0.25
 _ARB_MIN_OPERABLE_BUDGET_SLACK = 0.05
 _ARB_UNWIND_RATIO_TRIGGER = 0.18
 _ARB_UNWIND_EXTREME_RATIO = 0.88
@@ -3666,6 +3668,19 @@ class BTC5mStrategyService:
         if needed_notional <= 0:
             return None
 
+        min_operable_budget = self._arb_min_operable_budget(target)
+        residual_completion = (
+            relaxed_live_catchup
+            and catchup_rebalance
+            and seconds_remaining > _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING
+            and needed_notional < min_operable_budget
+            and current_total_notional <= (min_operable_budget * _ARB_STABILIZE_RESIDUAL_MAX_CARRY_FRACTION)
+            and current_target_notional <= (min_operable_budget * _ARB_STABILIZE_RESIDUAL_MAX_TARGET_FRACTION)
+            and other_notional > 0
+            and cycle_budget >= min_operable_budget
+            and cash_balance >= min_operable_budget
+        )
+
         progress_fraction = (
             _ARB_STABILIZE_CATCHUP_PROGRESS_FRACTION if catchup_rebalance else _ARB_STABILIZE_PROGRESS_FRACTION
         )
@@ -3687,6 +3702,11 @@ class BTC5mStrategyService:
             cycle_budget=cycle_budget,
             cash_balance=cash_balance,
         )
+        if stabilize_budget < min_operable_budget and residual_completion:
+            # With tiny orphaned exposure, the exchange minimum can exceed the mathematically
+            # "needed" hedge. In live-like modes we allow one bounded catch-up order so the
+            # bracket can become two-sided instead of idling all window in redistribuir.
+            stabilize_budget = _round_down(min(min_operable_budget, cycle_budget, cash_balance), "0.01")
         if stabilize_budget < self._arb_min_notional(target):
             return None
 
@@ -3723,7 +3743,10 @@ class BTC5mStrategyService:
             up_exposure=projected_up_notional,
             down_exposure=projected_down_notional,
         )
-        mode_label = "catchup" if catchup_rebalance else "stabilize"
+        if residual_completion:
+            mode_label = "residual-catchup"
+        else:
+            mode_label = "catchup" if catchup_rebalance else "stabilize"
         note = (
             f"{mode_label} {target.label} ask {target.best_ask:.3f} ~ fair {fair_value:.3f} | "
             f"net {net_edge * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
@@ -3740,7 +3763,11 @@ class BTC5mStrategyService:
             trigger=target,
             window_seconds=self._seconds_into_window(market),
             cycle_budget=round(primary_notional, 6),
-            market_bias=f"{'Catch-up' if catchup_rebalance else 'Stabilize'} {target.label}",
+            market_bias=(
+                f"Residual Catch-up {target.label}"
+                if residual_completion
+                else f"{'Catch-up' if catchup_rebalance else 'Stabilize'} {target.label}"
+            ),
             timing_regime=timing_regime,
             price_mode="stabilize-catchup" if catchup_rebalance else "stabilize-bracket",
             primary_ratio=1.0,
@@ -4036,7 +4063,7 @@ class BTC5mStrategyService:
         official_price_source = str(beat_state.get("official_price_source") or "public-gamma-missing")
         captured_price_to_beat = float(beat_state["captured_price_to_beat"])
         anchor_price = float(beat_state["effective_price_to_beat"])
-        anchor_source = str(beat_state.get("local_anchor_source") or beat_state["anchor_source"])
+        anchor_source = str(beat_state.get("anchor_source") or beat_state.get("local_anchor_source") or "")
         if anchor_price <= 0:
             return None
 

@@ -3523,6 +3523,114 @@ def test_arb_stabilize_catchup_still_operates_with_live_small_25_usdc_budget(tmp
     db.close()
 
 
+def test_arb_stabilize_residual_catchup_completes_tiny_orphan_leg_in_shadow_mode(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=145)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Residual Catch-up",
+        "slug": "btc-updown-5m-residual-catchup",
+        "conditionId": "cond-arb-residual-catchup",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {
+                    "min_order_size": "5.0",
+                    "bids": [{"price": "0.57"}],
+                    "asks": [{"price": "0.58", "size": "500"}],
+                },
+                "asset-down": {
+                    "min_order_size": "5.0",
+                    "bids": [{"price": "0.41"}],
+                    "asks": [{"price": "0.42", "size": "500"}],
+                },
+            },
+            balance=178.73,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            min_trade_amount=3.0,
+            live_small_target_capital=178.73,
+            live_btc5m_cycle_budget_usdc=43.58,
+        ),
+        logger=logging.getLogger("test-btc5m-shadow-residual-catchup"),
+    )
+
+    plan = service._build_arb_stabilize_plan(  # noqa: SLF001
+        mode="shadow",
+        market=market,
+        up_outcome=MarketOutcome(
+            label="Up",
+            asset_id="asset-up",
+            best_ask=0.58,
+            best_bid=0.57,
+            best_ask_size=500.0,
+            ask_levels=(AskLevel(price=0.58, size=500.0),),
+        ),
+        down_outcome=MarketOutcome(
+            label="Down",
+            asset_id="asset-down",
+            best_ask=0.42,
+            best_bid=0.41,
+            best_ask_size=500.0,
+            ask_levels=(AskLevel(price=0.42, size=500.0),),
+        ),
+        pair_sum=1.01,
+        fair_up=0.6541,
+        fair_down=0.4022,
+        up_net_edge=0.0573,
+        down_net_edge=-0.0178,
+        desired_up_ratio=0.58,
+        current_up_ratio=1.0,
+        timing_regime="mid-late",
+        cycle_budget=43.58,
+        cash_balance=178.73,
+        remaining_instruction_capacity=12,
+        current_up_notional=1.5669,
+        current_down_notional=0.0,
+        spot_context=ArbSpotContext(
+            current_price=71100.0,
+            reference_price=71100.0,
+            lead_price=71100.0,
+            anchor_price=71000.0,
+            local_anchor_price=71000.0,
+            official_price_to_beat=0.0,
+            anchor_source="polymarket-rtds-anchor",
+            fair_up=0.6541,
+            fair_down=0.4022,
+            delta_bps=-0.8,
+            price_mode="reference",
+            source="polymarket-rtds+binance",
+            age_ms=20,
+            binance_price=71100.0,
+            chainlink_price=71000.0,
+        ),
+        bracket_phase="redistribuir",
+    )
+
+    assert plan is not None
+    assert plan.price_mode == "stabilize-catchup"
+    assert plan.primary_target.label == "Down"
+    assert "residual-catchup Down" in plan.note
+    assert plan.primary_notional >= 2.1
+    assert plan.primary_notional <= 2.12
+    db.close()
+
+
 def test_arb_micro_unwinds_extreme_wrong_side_inventory_when_repair_is_too_expensive(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
