@@ -73,7 +73,7 @@ class CLOBClient:
     def get_book(self, token_id: str) -> dict[str, Any]:
         if self.market_feed is not None:
             book = self.market_feed.get_book(token_id)
-            if book:
+            if _book_has_usable_top_levels(book):
                 return book
         response = self.session.get(
             f"{self.base_url}/book",
@@ -386,6 +386,24 @@ def _normalize_order_status(payload: object) -> dict[str, Any]:
         "created_at": int(_safe_float(row.get("created_at") or 0)),
         "order_type": str(row.get("order_type") or row.get("type") or ""),
     }
+
+
+def _book_has_usable_top_levels(book: dict[str, Any] | None) -> bool:
+    if not isinstance(book, dict):
+        return False
+    bids = book.get("bids") or []
+    asks = book.get("asks") or []
+    if not bids or not asks:
+        return False
+    try:
+        best_bid = bids[0]
+        best_ask = asks[0]
+        bid_price = float(best_bid.get("price") or 0.0)
+        ask_price = float(best_ask.get("price") or 0.0)
+        ask_size = float(best_ask.get("size") or 0.0)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return bid_price > 0 and ask_price > 0 and ask_size > 0
 
 
 def _safe_float(value: object) -> float:

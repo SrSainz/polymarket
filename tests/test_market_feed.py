@@ -33,6 +33,18 @@ class _FakeFeed:
         return None
 
 
+class _FakeResponse:
+    def __init__(self, payload) -> None:  # noqa: ANN001
+        self._payload = payload
+        self.status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self):  # noqa: ANN001
+        return self._payload
+
+
 def test_canonical_book_accepts_buys_and_sells_shape() -> None:
     payload = {
         "asset_id": "asset-up",
@@ -83,6 +95,30 @@ def test_clob_client_prefers_market_feed_before_rest() -> None:
     assert status.mode == "websocket"
     assert status.connected is True
     assert status.tracked_assets == 2
+
+
+def test_clob_client_falls_back_to_rest_when_market_feed_book_is_incomplete() -> None:
+    feed = _FakeFeed()
+    feed.book = {
+        "bids": [{"price": "0.41", "size": "25"}],
+        "asks": [],
+    }
+    client = CLOBClient("https://clob.polymarket.com", EnvSettings(), market_feed=feed)
+
+    def _rest_book(*args, **kwargs):  # noqa: ANN001, ARG001
+        return _FakeResponse(
+            {
+                "bids": [{"price": "0.41", "size": "25"}],
+                "asks": [{"price": "0.43", "size": "20"}],
+            }
+        )
+
+    client.session.get = _rest_book  # type: ignore[assignment]
+
+    assert client.get_book("asset-up") == {
+        "bids": [{"price": "0.41", "size": "25"}],
+        "asks": [{"price": "0.43", "size": "20"}],
+    }
 
 
 def test_market_feed_reports_idle_when_no_assets_tracked() -> None:
