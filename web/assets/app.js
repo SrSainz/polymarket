@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-30-shadow-home6";
+const UI_BUILD = "2026-03-30-shadow-home7";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -870,6 +870,7 @@ function paintShadowOverview(summary, items = lastPositions) {
     snapshotInfo.hasLiveBalanceSnapshot,
     LIVE_BALANCE_STALE_SECONDS
   );
+  const hasLiveBalanceSnapshot = Boolean(snapshotInfo.hasLiveBalanceSnapshot);
   const timingInfo = windowTiming(summary);
   const feedInfo = feedModeInfo(summary);
   const spotInfo = currentSpotInfo(summary);
@@ -962,12 +963,12 @@ function paintShadowOverview(summary, items = lastPositions) {
 
   const moneyCard = document.getElementById("shadowMoneyCard");
   applyToneClass(moneyCard, liveBalanceStale ? "warning" : toneFromNumber(todayPnl));
-  document.getElementById("shadowEquityValue").textContent = liveBalanceStale ? "-" : fmtUsdPlain(liveEquityEstimate, 2);
-  document.getElementById("shadowCashFreeValue").textContent = liveBalanceStale ? "-" : fmtUsdPlain(liveCashBalance, 2);
-  document.getElementById("shadowOperableValue").textContent = liveBalanceStale ? "-" : fmtUsdPlain(liveAvailableToTrade, 2);
+  document.getElementById("shadowEquityValue").textContent = hasLiveBalanceSnapshot ? fmtUsdPlain(liveEquityEstimate, 2) : "-";
+  document.getElementById("shadowCashFreeValue").textContent = hasLiveBalanceSnapshot ? fmtUsdPlain(liveCashBalance, 2) : "-";
+  document.getElementById("shadowOperableValue").textContent = hasLiveBalanceSnapshot ? fmtUsdPlain(liveAvailableToTrade, 2) : "-";
   document.getElementById("shadowExposureNowValue").textContent = fmtUsdPlain(currentWindowExposure, 2);
   document.getElementById("shadowMoneyMeta").textContent = liveBalanceStale
-    ? `Snapshot de balance viejo (${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}). Ocultamos equity y caja hasta que refresque.`
+    ? `Snapshot de balance viejo (${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}). Mostramos el ultimo valor conocido mientras refresca.`
     : operability.state === "budget_limited" || budgetShortfall > 0
     ? `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy | ${budgetLimitMeta(summary)}.`
     : `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy.`;
@@ -2236,23 +2237,23 @@ function paintSummary(summary, items = lastPositions) {
   toggleClosestClass("heroCashBalance", ".hero-inline-card", "is-stale", liveBalanceStale);
   document.getElementById("liveCashBalance").textContent = isPublicRuntime()
     ? "-"
-    : liveBalanceStale
-    ? "-"
-    : fmtUsdPlain(liveEquityEstimate, 2);
+    : hasLiveBalanceSnapshot
+    ? fmtUsdPlain(liveEquityEstimate, 2)
+    : "-";
   document.getElementById("liveCashMeta").textContent = isPublicRuntime()
     ? "requiere backend del NAS para caja, capital y estado reales"
     : liveBalanceStale
-    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); ocultando equity, caja y operable`
+    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo valor conocido`
     : `equity = caja + MTM | operable ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
   document.getElementById("heroCashBalance").textContent = isPublicRuntime()
     ? fmtUsdPlain(totalExposure, 2)
-    : liveBalanceStale
-    ? "-"
-    : fmtUsdPlain(liveAvailableToTrade, 2);
+    : hasLiveBalanceSnapshot
+    ? fmtUsdPlain(liveAvailableToTrade, 2)
+    : "-";
   document.getElementById("heroCashMeta").textContent = isPublicRuntime()
     ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones visibles | wallet ${shortWallet(watchedWallet)}`
     : liveBalanceStale
-    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); capital operativo oculto`
+    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo capital operativo conocido`
     : `operable = min(caja, allowance) | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
