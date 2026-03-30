@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import re
 import time
@@ -251,6 +252,7 @@ class GammaClient:
         safe_slug = str(slug or "").strip()
         if not safe_slug:
             return 0.0
+        expected_window_start = self._btc5m_slug_window_start_iso(safe_slug)
         try:
             response = self.session.get(
                 f"https://polymarket.com/event/{safe_slug}",
@@ -278,6 +280,8 @@ class GammaClient:
                 continue
             if str(query_key[4] or "").strip().lower() != "fiveminute":
                 continue
+            if expected_window_start and str(query_key[3] or "").strip() != expected_window_start:
+                continue
             data = ((query.get("state") or {}).get("data") or {})
             if not isinstance(data, dict):
                 continue
@@ -288,3 +292,12 @@ class GammaClient:
             if open_price > 0:
                 return open_price
         return 0.0
+
+    def _btc5m_slug_window_start_iso(self, slug: str) -> str:
+        safe_slug = str(slug or "").strip()
+        if not safe_slug.startswith("btc-updown-5m-"):
+            return ""
+        suffix = safe_slug.rsplit("-", 1)[-1]
+        if not suffix.isdigit():
+            return ""
+        return datetime.fromtimestamp(int(suffix), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

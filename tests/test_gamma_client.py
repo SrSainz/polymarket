@@ -69,14 +69,14 @@ class _SequencedSession:
         return queue.pop(0)
 
 
-def _event_page_html(slug: str, open_price: float) -> str:
+def _event_page_html(slug: str, open_price: float, *, query_start: str = "2026-03-27T20:10:00Z") -> str:
     payload = {
         "props": {
             "pageProps": {
                 "dehydratedState": {
                     "queries": [
                         {
-                            "queryKey": ["crypto-prices", "price", "BTC", "2026-03-27T20:25:00Z", "fiveminute", "2026-03-27T20:30:00Z"],
+                            "queryKey": ["crypto-prices", "price", "BTC", query_start, "fiveminute", "2026-03-27T20:15:00Z"],
                             "state": {"data": {"openPrice": open_price, "closePrice": None}},
                         }
                     ]
@@ -236,6 +236,58 @@ def test_get_public_price_to_beat_falls_back_to_public_web_when_gamma_is_incompl
                 {"id": "evt-web-fallback", "eventMetadata": {}}
             ),
             (f"https://polymarket.com/event/{slug}", ()): _FakeResponse(_event_page_html(slug, 66010.0)),
+        }
+    )
+    client = GammaClient(base_url)
+    client.session = session
+
+    official, source = client.get_public_price_to_beat(slug)
+
+    assert official == 66010.0
+    assert source == "public-web"
+
+
+def test_get_public_price_to_beat_ignores_public_web_query_for_other_window() -> None:
+    slug = "btc-updown-5m-1774642200"
+    base_url = "https://gamma-api.polymarket.com"
+    html = (
+        '<html><body><script id="__NEXT_DATA__" type="application/json">'
+        + json.dumps(
+            {
+                "props": {
+                    "pageProps": {
+                        "dehydratedState": {
+                            "queries": [
+                                {
+                                    "queryKey": ["crypto-prices", "price", "BTC", "2026-03-27T20:05:00Z", "fiveminute", "2026-03-27T20:10:00Z"],
+                                    "state": {"data": {"openPrice": 65000.0}},
+                                },
+                                {
+                                    "queryKey": ["crypto-prices", "price", "BTC", "2026-03-27T20:10:00Z", "fiveminute", "2026-03-27T20:15:00Z"],
+                                    "state": {"data": {"openPrice": 66010.0}},
+                                },
+                            ]
+                        }
+                    }
+                },
+                "query": {"slug": slug},
+            }
+        )
+        + "</script></body></html>"
+    )
+    session = _FakeSession(
+        {
+            (f"{base_url}/markets/slug/{slug}", ()): _FakeResponse(
+                {
+                    "slug": slug,
+                    "question": "Bitcoin Up or Down",
+                    "events": [{"id": "evt-web-fallback", "eventMetadata": {}}],
+                }
+            ),
+            (f"{base_url}/events/evt-web-fallback", ()): _FakeResponse(
+                {"id": "evt-web-fallback", "eventMetadata": {}}
+            ),
+            (f"https://polymarket.com/event/{slug}", ()): _FakeResponse(html),
         }
     )
     client = GammaClient(base_url)
