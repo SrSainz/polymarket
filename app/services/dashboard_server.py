@@ -31,6 +31,7 @@ from app.core.strategy_monitoring import (
 )
 from app.polymarket.gamma_client import GammaClient
 from app.services.runtime_compare_db import build_runtime_compare_payload
+from app.settings import load_settings
 
 _MIDPOINT_CACHE: dict[str, tuple[float | None, float]] = {}
 _MIDPOINT_CACHE_TTL_SECONDS = 20
@@ -38,7 +39,7 @@ _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, str, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-30-shadow-home6"
+_DASHBOARD_BUILD = "2026-03-30-shadow-home8"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -63,6 +64,84 @@ _RUNTIME_RESET_BOT_STATE_KEYS = [
     "position_ledger_mode",
     "shadow_last_instruction_at",
     "shadow_last_instruction",
+]
+_RUNTIME_RESET_VISIBLE_ZERO_KEYS = [
+    "live_marked_exposure",
+    "live_unrealized_pnl",
+    "strategy_total_exposure",
+    "strategy_target_price",
+    "strategy_trigger_price_seen",
+    "strategy_pair_sum",
+    "strategy_edge_pct",
+    "strategy_fair_value",
+    "strategy_spot_price",
+    "strategy_spot_anchor",
+    "strategy_spot_local_anchor",
+    "strategy_official_price_to_beat",
+    "strategy_captured_price_to_beat",
+    "strategy_captured_vs_official_bps",
+    "strategy_effective_price_to_beat",
+    "strategy_last_updated_at",
+    "strategy_plan_legs",
+    "strategy_window_seconds",
+    "strategy_cycle_budget",
+    "strategy_cycle_budget_remaining",
+    "strategy_cycle_budget_shortfall",
+    "strategy_effective_min_notional",
+    "strategy_current_market_exposure",
+    "strategy_spot_delta_bps",
+    "strategy_spot_fair_up",
+    "strategy_spot_fair_down",
+    "strategy_spot_age_ms",
+    "strategy_spot_binance",
+    "strategy_spot_chainlink",
+    "strategy_desired_up_ratio",
+    "strategy_desired_down_ratio",
+    "strategy_current_up_ratio",
+    "strategy_primary_ratio",
+    "strategy_primary_exposure",
+    "strategy_hedge_exposure",
+    "strategy_replenishment_count",
+    "strategy_reference_comparable",
+    "strategy_terminal_ev_pct",
+    "strategy_terminal_ev_bps",
+    "strategy_taker_fee_bps",
+    "strategy_expected_edge_bps",
+    "strategy_taker_ev_bps",
+    "strategy_maker_ev_bps",
+    "strategy_market_exposure_cap",
+    "strategy_total_exposure_cap",
+    "strategy_market_exposure_remaining",
+    "strategy_total_exposure_remaining",
+    "strategy_cash_available_for_cycle",
+    "strategy_budget_effective_ceiling",
+    "strategy_cycle_budget_floor_applied",
+]
+_RUNTIME_RESET_VISIBLE_TEXT_KEYS = [
+    "strategy_market_slug",
+    "strategy_market_title",
+    "strategy_target_outcome",
+    "strategy_trigger_outcome",
+    "strategy_market_bias",
+    "strategy_resolution_mode",
+    "strategy_timing_regime",
+    "strategy_price_mode",
+    "strategy_last_note",
+    "strategy_primary_outcome",
+    "strategy_hedge_outcome",
+    "strategy_spot_source",
+    "strategy_spot_price_mode",
+    "strategy_anchor_source",
+    "strategy_official_price_slug",
+    "strategy_captured_price_slug",
+    "strategy_captured_price_source",
+    "strategy_effective_price_slug",
+    "strategy_effective_price_source",
+    "strategy_bracket_phase",
+    "strategy_reference_quality",
+    "strategy_reference_note",
+    "strategy_selected_execution",
+    "runtime_guard_profile",
 ]
 _LIVE_READINESS_THRESHOLDS = {
     "min_shared_windows": 100,
@@ -828,6 +907,90 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(str(db_path))
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def _runtime_mode_from_db_path(db_path: Path) -> str:
+    file_name = str(db_path.name or "").strip().lower()
+    if file_name == "bot_shadow.db":
+        return "shadow"
+    if file_name == "bot_live.db":
+        return "live"
+    return "paper"
+
+
+def _seed_runtime_state_after_reset(conn: sqlite3.Connection, db_path: Path) -> None:
+    now_ts = int(time.time())
+    runtime_mode = _runtime_mode_from_db_path(db_path)
+    current_cash_balance = max(_bot_state_float(conn, "live_cash_balance"), 0.0)
+    current_cash_allowance = max(_bot_state_float(conn, "live_cash_allowance"), 0.0)
+    current_total_capital = max(_bot_state_float(conn, "live_total_capital"), current_cash_balance, 0.0)
+    current_capital_target = max(_bot_state_float(conn, "strategy_capital_target"), 0.0)
+    current_operating_bankroll = max(_bot_state_float(conn, "strategy_operating_bankroll"), 0.0)
+
+    settings = None
+    try:
+        settings = load_settings(db_path.parent.parent)
+    except Exception:  # noqa: BLE001
+        settings = None
+
+    bankroll_base = 0.0
+    if settings is not None:
+        bankroll_base = max(float(settings.config.bankroll or 0.0), 0.0)
+
+    if runtime_mode == "paper":
+        capital_target = max(float(settings.config.bankroll or 0.0), 0.0) if settings is not None else max(
+            current_total_capital,
+            current_cash_balance,
+            0.0,
+        )
+        cash_balance = capital_target
+        cash_allowance = capital_target
+        total_capital = capital_target
+        operating_bankroll = capital_target
+    elif runtime_mode == "shadow":
+        capital_target = (
+            max(float(settings.config.live_small_target_capital or 0.0), 0.0)
+            if settings is not None
+            else max(current_capital_target, current_total_capital, current_cash_balance, 0.0)
+        )
+        cash_balance = capital_target
+        cash_allowance = capital_target
+        total_capital = capital_target
+        operating_bankroll = capital_target
+    else:
+        capital_target = max(current_capital_target, current_total_capital, current_cash_balance, 0.0)
+        cash_balance = current_cash_balance
+        cash_allowance = current_cash_allowance if current_cash_allowance > 0 else current_cash_balance
+        total_capital = max(current_total_capital, cash_balance, 0.0)
+        operating_bankroll = max(current_operating_bankroll, total_capital, 0.0)
+
+    capital_scale_ratio = capital_target / bankroll_base if bankroll_base > 0 else 0.0
+    reset_note = (
+        f"runtime {runtime_mode} limpiado desde dashboard; esperando el siguiente ciclo para reconstruir mercado, beat y balance"
+    )
+    reset_reason = "Runtime reiniciado; el motor esta recomponiendo la foto actual."
+
+    for key in _RUNTIME_RESET_VISIBLE_ZERO_KEYS:
+        _set_bot_state(conn, key, "0")
+    for key in _RUNTIME_RESET_VISIBLE_TEXT_KEYS:
+        _set_bot_state(conn, key, "")
+
+    _set_bot_state(conn, "strategy_runtime_mode", runtime_mode)
+    _set_bot_state(conn, "live_cash_balance", f"{cash_balance:.8f}")
+    _set_bot_state(conn, "live_cash_allowance", f"{cash_allowance:.8f}")
+    _set_bot_state(conn, "live_total_capital", f"{total_capital:.8f}")
+    _set_bot_state(conn, "live_balance_updated_at", str(now_ts))
+    _set_bot_state(conn, "strategy_capital_target", f"{capital_target:.8f}")
+    _set_bot_state(conn, "strategy_capital_scale_ratio", f"{capital_scale_ratio:.6f}")
+    _set_bot_state(conn, "strategy_operating_bankroll", f"{operating_bankroll:.8f}")
+    _set_bot_state(conn, "strategy_reserved_profit", "0.00000000")
+    _set_bot_state(conn, "strategy_last_note", reset_note)
+    _set_bot_state(conn, "strategy_last_updated_at", str(now_ts))
+    _set_bot_state(conn, "strategy_operability_state", "observing")
+    _set_bot_state(conn, "strategy_operability_label", "Reiniciando")
+    _set_bot_state(conn, "strategy_operability_reason", reset_reason)
+    _set_bot_state(conn, "strategy_operability_blocking", "0")
+    _set_bot_state(conn, "runtime_reset_at", str(now_ts))
 
 
 def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live_trading_enabled: bool) -> dict:
@@ -2189,4 +2352,5 @@ def _reset_runtime_tables(db_path: Path) -> dict[str, int]:
                 f"DELETE FROM bot_state WHERE {where_sql}",
                 tuple(bot_state_params),
             )
+            _seed_runtime_state_after_reset(conn, db_path)
     return deleted

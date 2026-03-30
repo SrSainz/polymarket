@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-30-shadow-home7";
+const UI_BUILD = "2026-03-30-shadow-home8";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -3335,7 +3335,7 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
 
   const runtimeLabel = String(lastSummary?.strategy_runtime_mode || "runtime actual").trim() || "runtime actual";
   const accepted = window.confirm(
-    `Esto limpiara el ledger del runtime actual (${runtimeLabel}): posiciones, senales, ejecuciones, pnl diario y ventanas de estrategia. Mantiene el mercado y la referencia actual para que pueda seguir operando. No reinicia procesos ni toca otros runtimes. Continuar?`
+    `Esto reseteara el runtime actual (${runtimeLabel}): borra posiciones, senales, ejecuciones, pnl diario y ventanas de estrategia, y deja el estado visible en limpio para que el motor reconstruya mercado, beat y balance en el siguiente ciclo. No reinicia procesos ni toca otros runtimes. Continuar?`
   );
   if (!accepted) return;
 
@@ -3351,13 +3351,13 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
     const windows = Number(deleted.strategy_windows || 0);
     const dailyPnl = Number(deleted.daily_pnl || 0);
     document.getElementById("lastUpdated").textContent =
-      `Limpieza de ${runtimeLabel}: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}, ventanas ${windows}, pnl diario ${dailyPnl}. Se mantiene el snapshot actual de mercado/referencia.`;
+      `Reset de ${runtimeLabel}: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}, ventanas ${windows}, pnl diario ${dailyPnl}. El motor reconstruira mercado, beat y balance en el siguiente ciclo.`;
     await refreshAll();
   } catch (error) {
     document.getElementById("lastUpdated").textContent = `Error al limpiar: ${error.message}`;
   } finally {
     button.disabled = false;
-    button.textContent = originalLabel || "Limpiar runtime";
+    button.textContent = originalLabel || "Resetear runtime";
   }
 });
 
@@ -3370,7 +3370,7 @@ document.getElementById("resetCompareBtn").addEventListener("click", async () =>
   }
 
   const accepted = window.confirm(
-    "Esto limpiara el ledger de paper, shadow y la base comparativa runtime_compare.db. Mantiene el snapshot actual de mercado/referencia y no toca live. No reinicia procesos. Continuar?"
+    "Esto reseteara el ledger de paper, shadow y la base comparativa runtime_compare.db. El motor reconstruira mercado, beat y balance en el siguiente ciclo. No toca live ni reinicia procesos. Continuar?"
   );
   if (!accepted) return;
 
