@@ -1032,8 +1032,8 @@ def _claimable_positions_snapshot(workspace_root: Path) -> dict:
         }
 
     wallet = str(
-        settings.config.polymarket_funder
-        or settings.config.bot_wallet_address
+        getattr(settings.env, "polymarket_funder", "")
+        or getattr(settings.env, "bot_wallet_address", "")
         or ""
     ).strip().lower()
     if not wallet:
@@ -1048,7 +1048,7 @@ def _claimable_positions_snapshot(workspace_root: Path) -> dict:
             "detected_at": 0,
         }
 
-    base_url = str(settings.config.data_api_host or "").rstrip("/")
+    base_url = str(getattr(settings.env, "data_api_host", "") or "").rstrip("/")
     cache_key = f"{base_url}|{wallet}"
     now = time.time()
     cached = _CLAIMABLE_CACHE.get(cache_key)

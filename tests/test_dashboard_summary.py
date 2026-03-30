@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.core.paper_broker import PaperBroker
@@ -11,6 +12,7 @@ from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.services.dashboard_server import (
     _allowed_cors_origin,
     _apply_live_control_action,
+    _claimable_positions_snapshot,
     _destructive_request_allowed,
     _latency_payload,
     _liquidations_payload,
@@ -167,6 +169,50 @@ def test_summary_payload_exposes_claimable_redeem_snapshot(tmp_path: Path) -> No
     assert summary["claimable_positions"][0]["slug"] == "btc-updown-5m-1"
     assert summary["claimable_detected_at"] == 1774828800
     assert "currentValue" in summary["dashboard_metric_sources"]["claimable_usdc_estimate"]
+
+
+def test_claimable_positions_snapshot_uses_env_wallet_and_data_api(tmp_path: Path) -> None:
+    fake_settings = SimpleNamespace(
+        env=SimpleNamespace(
+            polymarket_funder="0xFunder",
+            bot_wallet_address="0xBot",
+            data_api_host="https://data-api.polymarket.com",
+        )
+    )
+    fake_positions = [
+        {
+            "redeemable": True,
+            "size": "4",
+            "currentValue": "4",
+            "curPrice": "1",
+            "slug": "btc-updown-5m-1",
+            "title": "Bitcoin Up or Down",
+            "outcome": "Up",
+            "endDate": "2026-03-30T10:00:00Z",
+        },
+        {
+            "redeemable": False,
+            "size": "3",
+            "currentValue": "3",
+            "curPrice": "1",
+            "slug": "btc-updown-5m-2",
+            "title": "Bitcoin Up or Down",
+            "outcome": "Down",
+            "endDate": "2026-03-30T10:05:00Z",
+        },
+    ]
+
+    with patch("app.services.dashboard_server.load_settings", return_value=fake_settings), patch(
+        "app.services.dashboard_server.ActivityClient.get_positions",
+        return_value=fake_positions,
+    ):
+        snapshot = _claimable_positions_snapshot(tmp_path)
+
+    assert snapshot["available"] is True
+    assert snapshot["wallet"] == "0xfunder"
+    assert snapshot["positions_count"] == 1
+    assert snapshot["usdc_estimate"] == 4.0
+    assert snapshot["positions"][0]["slug"] == "btc-updown-5m-1"
 
 
 def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
