@@ -4054,6 +4054,67 @@ def test_btc5m_operating_bankroll_keeps_reserved_profit_out_of_reinvestment(tmp_
     db.close()
 
 
+def test_btc5m_operating_bankroll_reserves_only_net_realized_profit(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, profit_keep_ratio=0.5),
+        logger=logging.getLogger("test-btc5m-bankroll-vault-net"),
+    )
+    today = datetime.now(timezone.utc).date().isoformat()
+    db.record_execution(
+        result=ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.CLOSE,
+            asset="asset-win",
+            size=10.0,
+            price=0.60,
+            notional=6.0,
+            pnl_delta=200.0,
+            message="paper win",
+        ),
+        side=TradeSide.SELL.value,
+        condition_id="cond-win",
+        source_wallet="strategy:test",
+        source_signal_id=0,
+        notes="profit test",
+    )
+    db.record_execution(
+        result=ExecutionResult(
+            mode="paper",
+            status="filled",
+            action=SignalAction.CLOSE,
+            asset="asset-loss",
+            size=10.0,
+            price=0.20,
+            notional=2.0,
+            pnl_delta=-150.0,
+            message="paper loss",
+        ),
+        side=TradeSide.SELL.value,
+        condition_id="cond-loss",
+        source_wallet="strategy:test",
+        source_signal_id=0,
+        notes="loss test",
+    )
+    db.add_daily_pnl(today, 50.0)
+
+    operating_bankroll, reserved_profit = service._operating_bankroll_snapshot(live_total_capital=1050.0)  # noqa: SLF001
+
+    assert reserved_profit == 25.0
+    assert operating_bankroll == 1025.0
+    db.close()
+
+
 def test_live_operating_bankroll_snapshot_uses_live_small_target_and_live_history_only(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

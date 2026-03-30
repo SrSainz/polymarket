@@ -5170,6 +5170,7 @@ class BTC5mStrategyService:
         reserved_profit = calculate_reserved_profit(
             profit_gross=realized_profit_gross,
             profit_keep_ratio=self.settings.config.profit_keep_ratio,
+            realized_pnl=realized_pnl,
         )
         effective_bankroll = calculate_effective_bankroll(
             base_bankroll=base_bankroll,

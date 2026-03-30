@@ -994,6 +994,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_window_seconds = _bot_state_int(conn, "strategy_window_seconds")
         strategy_cycle_budget = _bot_state_float(conn, "strategy_cycle_budget")
         strategy_effective_min_notional = _bot_state_float(conn, "strategy_effective_min_notional")
+        strategy_operating_bankroll = _bot_state_float(conn, "strategy_operating_bankroll")
+        strategy_reserved_profit = _bot_state_float(conn, "strategy_reserved_profit")
         strategy_market_exposure_cap = _bot_state_float(conn, "strategy_market_exposure_cap")
         strategy_total_exposure_cap = _bot_state_float(conn, "strategy_total_exposure_cap")
         strategy_market_exposure_cap_pct = _bot_state_float(conn, "strategy_market_exposure_cap_pct")
@@ -1356,6 +1358,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_cycle_budget_remaining": round(strategy_cycle_budget_remaining, 4),
         "strategy_cycle_budget_shortfall": round(strategy_cycle_budget_shortfall, 4),
         "strategy_effective_min_notional": round(strategy_effective_min_notional, 4),
+        "strategy_operating_bankroll": round(strategy_operating_bankroll, 4),
+        "strategy_reserved_profit": round(strategy_reserved_profit, 4),
         "strategy_exposure_cap_mode": strategy_exposure_cap_mode,
         "strategy_market_exposure_cap": round(strategy_market_exposure_cap, 4),
         "strategy_total_exposure_cap": round(strategy_total_exposure_cap, 4),
@@ -1436,6 +1440,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "strategy_taker_fee_bps": "fee-rate oficial del CLOB convertido a bps para la ventana actual",
             "strategy_current_market_total_exposure": "exposicion del slug actual agregada desde copy_positions",
             "strategy_current_market_live_pnl": "unrealized_pnl del slug actual",
+            "strategy_operating_bankroll": "bankroll operativo real que el motor esta reutilizando tras apartar la parte reservada de beneficios",
+            "strategy_reserved_profit": "beneficio ya apartado para no re-arriesgarlo; ahora se limita por beneficio neto acumulado y no por suma bruta de ganadoras",
             "strategy_exposure_cap_mode": "modo del limitador de riesgo activo: fijo en fase pequena o porcentual sobre bankroll operativo tras compounding",
             "strategy_market_exposure_cap": "tope maximo de exposicion permitida dentro del mercado actual para este ciclo",
             "strategy_total_exposure_cap": "tope maximo de exposicion total simultanea permitido por el motor",

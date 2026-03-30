@@ -1719,6 +1719,10 @@ function budgetLimitMeta(summary) {
     `total ${fmtUsdPlain(ctx.totalCapRemaining, 2)}`,
     `techo util ${fmtUsdPlain(ctx.budgetCeiling, 2)}`,
   ];
+  const operatingBankroll = Math.max(Number(summary?.strategy_operating_bankroll || 0), 0);
+  const reservedProfit = Math.max(Number(summary?.strategy_reserved_profit || 0), 0);
+  if (operatingBankroll > 0) parts.push(`operativo ${fmtUsdPlain(operatingBankroll, 2)}`);
+  if (reservedProfit > 0) parts.push(`reservado ${fmtUsdPlain(reservedProfit, 2)}`);
   if (ctx.effectiveMinNotional > 0) parts.push(`minimo ${fmtUsdPlain(ctx.effectiveMinNotional, 2)}`);
   if (ctx.floorApplied) parts.push("suelo de redistribucion activo");
   if (ctx.capMode === "percent-after-compounding") parts.push("tope por % operativo");

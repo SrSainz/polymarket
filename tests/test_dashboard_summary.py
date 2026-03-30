@@ -56,6 +56,8 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_operability_label", "Comprando")
     db.set_bot_state("strategy_operability_reason", "Hay plan activo y el motor esta ejecutando o acompanando el bracket actual.")
     db.set_bot_state("strategy_operability_blocking", "0")
+    db.set_bot_state("strategy_operating_bankroll", "125.000000")
+    db.set_bot_state("strategy_reserved_profit", "25.000000")
     db.set_bot_state("strategy_exposure_cap_mode", "percent-after-compounding")
     db.set_bot_state("strategy_market_exposure_cap", "26.355434")
     db.set_bot_state("strategy_total_exposure_cap", "105.421737")
@@ -103,6 +105,8 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     assert summary["strategy_operability_label"] == "Comprando"
     assert summary["strategy_operability_reason"].startswith("Hay plan activo")
     assert summary["strategy_operability_blocking"] is False
+    assert summary["strategy_operating_bankroll"] == 125.0
+    assert summary["strategy_reserved_profit"] == 25.0
     assert summary["strategy_exposure_cap_mode"] == "percent-after-compounding"
     assert summary["strategy_market_exposure_cap"] == 26.3554
     assert summary["strategy_total_exposure_cap"] == 105.4217
