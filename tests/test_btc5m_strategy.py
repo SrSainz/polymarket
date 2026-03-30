@@ -1568,6 +1568,119 @@ def test_vidarx_micro_records_window_results(tmp_path: Path) -> None:
     db.close()
 
 
+def test_settle_resolved_positions_closes_resolved_window_without_active_positions(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Empty",
+        "slug": "btc-updown-5m-empty",
+        "conditionId": "cond-empty",
+        "closed": True,
+        "acceptingOrders": False,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "outcomePrices": "[\"1\", \"0\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=100.0),
+        logger=logging.getLogger("test-btc5m-empty-window-cleanup"),
+    )
+
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-empty",
+        condition_id="cond-empty",
+        title="Bitcoin Up or Down - Empty",
+        price_mode="extreme",
+        timing_regime="second-wave",
+        primary_outcome="Up",
+        hedge_outcome="Down",
+        primary_ratio=0.8,
+        planned_budget=10.0,
+        current_exposure=0.0,
+        notes="opened but never filled",
+    )
+
+    stats = {"pending": 0, "filled": 0, "blocked": 0, "failed": 0, "skipped": 0, "opportunities": 0}
+    service._settle_resolved_paper_positions(stats)
+
+    row = db.conn.execute(
+        "SELECT status, realized_pnl, winning_outcome, notes FROM strategy_windows WHERE slug = ?",
+        ("btc-updown-5m-empty",),
+    ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "closed"
+    assert abs(float(row["realized_pnl"]) - 0.0) < 1e-9
+    assert str(row["winning_outcome"]) == "Up"
+    assert "no active positions" in str(row["notes"])
+    assert stats["filled"] == 0
+    assert stats["opportunities"] == 0
+    db.close()
+
+
+def test_settle_resolved_positions_keeps_open_window_without_active_positions_if_market_open(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Pending",
+        "slug": "btc-updown-5m-pending",
+        "conditionId": "cond-pending",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "outcomePrices": "[\"0.55\", \"0.45\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="vidarx_micro", bankroll=100.0),
+        logger=logging.getLogger("test-btc5m-open-window-preserved"),
+    )
+
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-pending",
+        condition_id="cond-pending",
+        title="Bitcoin Up or Down - Pending",
+        price_mode="extreme",
+        timing_regime="second-wave",
+        primary_outcome="Up",
+        hedge_outcome="Down",
+        primary_ratio=0.8,
+        planned_budget=10.0,
+        current_exposure=0.0,
+        notes="opened but waiting",
+    )
+
+    service._settle_resolved_paper_positions(
+        {"pending": 0, "filled": 0, "blocked": 0, "failed": 0, "skipped": 0, "opportunities": 0}
+    )
+
+    row = db.conn.execute(
+        "SELECT status, realized_pnl FROM strategy_windows WHERE slug = ?",
+        ("btc-updown-5m-pending",),
+    ).fetchone()
+    assert row is not None
+    assert str(row["status"]) == "open"
+    assert abs(float(row["realized_pnl"]) - 0.0) < 1e-9
+    db.close()
+
+
 def test_vidarx_micro_stops_after_25pct_drawdown(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

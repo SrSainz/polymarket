@@ -6975,12 +6975,66 @@ class BTC5mStrategyService:
             reason=f"vidarx_micro:{reason_label}:{entry_kind}:{bucket_price:.2f}:tranche-{tranche_index}",
         )
 
+    def _close_resolved_empty_strategy_windows(
+        self,
+        *,
+        copy_positions: Sequence[Mapping[str, object]] | None = None,
+    ) -> None:
+        raw_positions = list(copy_positions) if copy_positions is not None else list(self.db.list_copy_positions())
+        active_positions = [dict(row) for row in raw_positions]
+        if not active_positions:
+            active_slugs: set[str] = set()
+            active_condition_ids: set[str] = set()
+        else:
+            active_slugs = {
+                str(row["slug"] or "")
+                for row in active_positions
+                if float(row["size"] or 0.0) > 0
+            }
+            active_condition_ids = {
+                str(row["condition_id"] or "")
+                for row in active_positions
+                if float(row["size"] or 0.0) > 0
+            }
+
+        for window in self.db.list_open_strategy_windows(slug_prefix="btc-updown-5m-"):
+            slug = str(window["slug"] or "")
+            condition_id = str(window["condition_id"] or "")
+            if slug in active_slugs or condition_id in active_condition_ids:
+                continue
+            try:
+                market = self.gamma_client.get_market_by_slug(slug)
+            except Exception as error:  # noqa: BLE001
+                self.logger.warning(
+                    "strategy window cleanup skipped slug=%s: market lookup failed: %s",
+                    slug,
+                    error,
+                )
+                continue
+            if not market or not bool(market.get("closed")):
+                continue
+            winning_outcome = self._resolved_winning_outcome(market)
+            existing_note = str(window["notes"] or "").strip()
+            cleanup_note = f"resolved {winning_outcome or '-'} with no active positions"
+            if existing_note:
+                cleanup_note = f"{existing_note} | {cleanup_note}"
+            self.db.close_strategy_window(
+                slug=slug,
+                realized_pnl=0.0,
+                winning_outcome=winning_outcome,
+                current_exposure=0.0,
+                notes=cleanup_note,
+            )
+            self.logger.info("closed resolved empty strategy window slug=%s", slug)
+
     def _settle_resolved_paper_positions(self, stats: dict[str, int], mode: str = "paper") -> None:
-        if not self.db.list_copy_positions():
+        copy_positions = list(self.db.list_copy_positions())
+        self._close_resolved_empty_strategy_windows(copy_positions=copy_positions)
+        if not copy_positions:
             return
 
         resolved_totals: dict[str, dict[str, object]] = {}
-        for row in list(self.db.list_copy_positions()):
+        for row in copy_positions:
             slug = str(row["slug"] or "")
             asset = str(row["asset"] or "")
             size = float(row["size"] or 0.0)

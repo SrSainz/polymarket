@@ -641,6 +641,15 @@ class Database:
             (slug,),
         ).fetchone()
 
+    def list_open_strategy_windows(self, *, slug_prefix: str | None = None) -> list[sqlite3.Row]:
+        query = "SELECT * FROM strategy_windows WHERE status = 'open'"
+        params: list[object] = []
+        if slug_prefix:
+            query += " AND slug LIKE ?"
+            params.append(f"{slug_prefix}%")
+        query += " ORDER BY opened_at ASC, slug ASC"
+        return self.conn.execute(query, tuple(params)).fetchall()
+
     def upsert_copy_position(
         self,
         *,
