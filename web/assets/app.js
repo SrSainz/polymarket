@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-29-shadow-home4";
+const UI_BUILD = "2026-03-30-shadow-home6";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -891,6 +891,8 @@ function paintShadowOverview(summary, items = lastPositions) {
   const liveCashBalance = Number(summary?.live_cash_balance ?? 0);
   const liveAvailableToTrade = Number(summary?.live_available_to_trade ?? liveCashBalance);
   const liveEquityEstimate = Number(summary?.live_equity_estimate ?? summary?.live_total_capital ?? liveCashBalance);
+  const budgetInfo = budgetContext(summary);
+  const budgetShortfall = budgetInfo.budgetShortfall;
   const strategyMode = String(summary?.strategy_runtime_mode || "").trim().toLowerCase();
   const marketTitle = String(summary?.strategy_market_title || summary?.strategy_market_slug || "Sin mercado activo");
   const primaryStatus = shadowPrimaryStatus(summary, operability, currentWindowExposure, currentWindowPnl);
@@ -966,6 +968,8 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowExposureNowValue").textContent = fmtUsdPlain(currentWindowExposure, 2);
   document.getElementById("shadowMoneyMeta").textContent = liveBalanceStale
     ? `Snapshot de balance viejo (${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}). Ocultamos equity y caja hasta que refresque.`
+    : operability.state === "budget_limited" || budgetShortfall > 0
+    ? `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy | ${budgetLimitMeta(summary)}.`
     : `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy.`;
 
   const positionCard = document.getElementById("shadowPositionCard");
@@ -987,6 +991,8 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowHealthMeta").textContent =
     runtimeGuard.active
       ? operability.reason
+      : operability.state === "budget_limited" || budgetShortfall > 0
+      ? `${operability.reason || simplifiedStrategyReason(summary)} | ${budgetLimitMeta(summary)}`
       : operability.reason ||
         `${feedInfo.label} | ${String(reference?.reference_quality || spotInfo.referenceQuality || "").trim() || "sin calidad"} | ${String(edge?.edge_status || "sin edge")}`;
 
@@ -1675,6 +1681,50 @@ function currentWindowDirection(summary) {
     .join(" / ");
 }
 
+function budgetContext(summary) {
+  const cycleBudget = Math.max(Number(summary?.strategy_cycle_budget || 0), 0);
+  const deployed = Math.max(Number(summary?.strategy_current_market_total_exposure || 0), 0);
+  const remainingBudget = Math.max(Number(summary?.strategy_cycle_budget_remaining ?? cycleBudget - deployed), 0);
+  const effectiveMinNotional = Math.max(Number(summary?.strategy_effective_min_notional || 0), 0);
+  const budgetShortfall = Math.max(Number(summary?.strategy_cycle_budget_shortfall || 0), 0);
+  const marketCapRemaining = Math.max(Number(summary?.strategy_market_exposure_remaining || 0), 0);
+  const totalCapRemaining = Math.max(Number(summary?.strategy_total_exposure_remaining || 0), 0);
+  const cashAvailableForCycle = Math.max(Number(summary?.strategy_cash_available_for_cycle || 0), 0);
+  const budgetCeiling = Math.max(
+    Number(summary?.strategy_budget_effective_ceiling ?? Math.min(marketCapRemaining, totalCapRemaining, cashAvailableForCycle)),
+    0,
+  );
+  const floorApplied = Boolean(summary?.strategy_cycle_budget_floor_applied);
+  const capMode = String(summary?.strategy_exposure_cap_mode || "").trim();
+  return {
+    cycleBudget,
+    deployed,
+    remainingBudget,
+    effectiveMinNotional,
+    budgetShortfall,
+    marketCapRemaining,
+    totalCapRemaining,
+    cashAvailableForCycle,
+    budgetCeiling,
+    floorApplied,
+    capMode,
+  };
+}
+
+function budgetLimitMeta(summary) {
+  const ctx = budgetContext(summary);
+  const parts = [
+    `libre ${fmtUsdPlain(ctx.cashAvailableForCycle, 2)}`,
+    `mercado ${fmtUsdPlain(ctx.marketCapRemaining, 2)}`,
+    `total ${fmtUsdPlain(ctx.totalCapRemaining, 2)}`,
+    `techo util ${fmtUsdPlain(ctx.budgetCeiling, 2)}`,
+  ];
+  if (ctx.effectiveMinNotional > 0) parts.push(`minimo ${fmtUsdPlain(ctx.effectiveMinNotional, 2)}`);
+  if (ctx.floorApplied) parts.push("suelo de redistribucion activo");
+  if (ctx.capMode === "percent-after-compounding") parts.push("tope por % operativo");
+  return parts.join(" | ");
+}
+
 function simplifiedStrategyReason(summary) {
   const note = String(summary?.strategy_last_note || "").trim();
   const noteLower = note.toLowerCase();
@@ -1703,6 +1753,13 @@ function simplifiedStrategyReason(summary) {
   }
   if (noteLower.includes("market cap exhausted")) {
     return "Ya hay bastante dinero metido en este bracket y no compensa seguir cargando.";
+  }
+  if (noteLower.includes("budget below minimum")) {
+    const budgetInfo = budgetContext(summary);
+    if (budgetInfo.effectiveMinNotional > 0) {
+      return `La equity total puede ir bien, pero en este ciclo solo queda ${fmtUsdPlain(budgetInfo.budgetCeiling, 2)} util frente a un minimo operativo de ${fmtUsdPlain(budgetInfo.effectiveMinNotional, 2)}. ${budgetInfo.floorApplied ? "Ya hemos intentado redondear la redistribucion al minimo sin saltarnos los topes." : "El motor prefiere no forzar una compra demasiado pequena."}`;
+    }
+    return "La equity total puede ir bien, pero en este ciclo ya no queda presupuesto util suficiente para operar con tamano serio.";
   }
   if (noteLower.includes("max fills")) {
     return "Ya se alcanzo el maximo de compras permitido para este bracket.";
@@ -2358,11 +2415,12 @@ function paintLabOverview(summary) {
   const snapshotInfo = snapshotTiming(summary);
   const windowSeconds = timingInfo.elapsed;
   const windowPct = timingInfo.pct;
+  const budgetInfo = budgetContext(summary);
   const deployed = Math.max(Number(summary.strategy_current_market_total_exposure ?? 0), 0);
-  const cycleBudget = Math.max(Number(summary.strategy_cycle_budget || 0), 0);
-  const remainingBudget = Math.max(Number(summary.strategy_cycle_budget_remaining ?? cycleBudget - deployed), 0);
-  const effectiveMinNotional = Math.max(Number(summary.strategy_effective_min_notional || 0), 0);
-  const budgetShortfall = Math.max(Number(summary.strategy_cycle_budget_shortfall || 0), 0);
+  const cycleBudget = budgetInfo.cycleBudget;
+  const remainingBudget = budgetInfo.remainingBudget;
+  const effectiveMinNotional = budgetInfo.effectiveMinNotional;
+  const budgetShortfall = budgetInfo.budgetShortfall;
   const exposurePct = cycleBudget > 0 ? Math.min((deployed / cycleBudget) * 100, 100) : 0;
   const feedInfo = feedModeInfo(summary);
   const edgeInfo = currentEdgeInfo(summary);

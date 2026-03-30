@@ -5307,6 +5307,68 @@ def test_arb_min_notional_uses_max_of_arb_strategy_and_exchange_minimums(tmp_pat
     db.close()
 
 
+def test_arb_cycle_budget_floor_allows_near_minimum_redistribution(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-budget-floor-redistribution"),
+        spot_feed=None,
+    )
+
+    budget, floored = service._arb_floor_cycle_budget_to_minimum(  # noqa: SLF001
+        cycle_budget=2.55,
+        effective_min_notional=3.20,
+        market_cap_remaining=6.05,
+        total_cap_remaining=84.99,
+        cash_balance=12.34,
+        bracket_phase="redistribuir",
+    )
+
+    assert floored is True
+    assert budget == 3.2
+    db.close()
+
+
+def test_arb_cycle_budget_floor_keeps_new_open_restrictive(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-budget-floor-open"),
+        spot_feed=None,
+    )
+
+    budget, floored = service._arb_floor_cycle_budget_to_minimum(  # noqa: SLF001
+        cycle_budget=2.55,
+        effective_min_notional=3.20,
+        market_cap_remaining=6.05,
+        total_cap_remaining=84.99,
+        cash_balance=12.34,
+        bracket_phase="abrir",
+    )
+
+    assert floored is False
+    assert budget == 2.55
+    db.close()
+
+
 def test_arb_micro_live_small_scales_underround_ladder_to_micro_tranches_under_25_usdc(tmp_path: Path) -> None:
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=70)).isoformat().replace("+00:00", "Z")
     market = {

@@ -38,7 +38,7 @@ _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, str, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-30-shadow-home5"
+_DASHBOARD_BUILD = "2026-03-30-shadow-home6"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -994,6 +994,16 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_window_seconds = _bot_state_int(conn, "strategy_window_seconds")
         strategy_cycle_budget = _bot_state_float(conn, "strategy_cycle_budget")
         strategy_effective_min_notional = _bot_state_float(conn, "strategy_effective_min_notional")
+        strategy_market_exposure_cap = _bot_state_float(conn, "strategy_market_exposure_cap")
+        strategy_total_exposure_cap = _bot_state_float(conn, "strategy_total_exposure_cap")
+        strategy_market_exposure_cap_pct = _bot_state_float(conn, "strategy_market_exposure_cap_pct")
+        strategy_total_exposure_cap_pct = _bot_state_float(conn, "strategy_total_exposure_cap_pct")
+        strategy_market_exposure_remaining = _bot_state_float(conn, "strategy_market_exposure_remaining")
+        strategy_total_exposure_remaining = _bot_state_float(conn, "strategy_total_exposure_remaining")
+        strategy_cash_available_for_cycle = _bot_state_float(conn, "strategy_cash_available_for_cycle")
+        strategy_budget_effective_ceiling = _bot_state_float(conn, "strategy_budget_effective_ceiling")
+        strategy_cycle_budget_floor_applied = _bot_state_int(conn, "strategy_cycle_budget_floor_applied")
+        strategy_exposure_cap_mode = _bot_state_text(conn, "strategy_exposure_cap_mode")
         strategy_current_market_exposure = _bot_state_float(conn, "strategy_current_market_exposure")
         strategy_resolution_mode = _bot_state_text(conn, "strategy_resolution_mode")
         strategy_timing_regime = _bot_state_text(conn, "strategy_timing_regime")
@@ -1346,6 +1356,16 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_cycle_budget_remaining": round(strategy_cycle_budget_remaining, 4),
         "strategy_cycle_budget_shortfall": round(strategy_cycle_budget_shortfall, 4),
         "strategy_effective_min_notional": round(strategy_effective_min_notional, 4),
+        "strategy_exposure_cap_mode": strategy_exposure_cap_mode,
+        "strategy_market_exposure_cap": round(strategy_market_exposure_cap, 4),
+        "strategy_total_exposure_cap": round(strategy_total_exposure_cap, 4),
+        "strategy_market_exposure_cap_pct": round(strategy_market_exposure_cap_pct, 6),
+        "strategy_total_exposure_cap_pct": round(strategy_total_exposure_cap_pct, 6),
+        "strategy_market_exposure_remaining": round(strategy_market_exposure_remaining, 4),
+        "strategy_total_exposure_remaining": round(strategy_total_exposure_remaining, 4),
+        "strategy_cash_available_for_cycle": round(strategy_cash_available_for_cycle, 4),
+        "strategy_budget_effective_ceiling": round(strategy_budget_effective_ceiling, 4),
+        "strategy_cycle_budget_floor_applied": bool(strategy_cycle_budget_floor_applied),
         "strategy_current_market_exposure": round(strategy_current_market_exposure, 4),
         "strategy_resolution_mode": strategy_resolution_mode,
         "strategy_timing_regime": strategy_timing_regime,
@@ -1416,6 +1436,14 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "strategy_taker_fee_bps": "fee-rate oficial del CLOB convertido a bps para la ventana actual",
             "strategy_current_market_total_exposure": "exposicion del slug actual agregada desde copy_positions",
             "strategy_current_market_live_pnl": "unrealized_pnl del slug actual",
+            "strategy_exposure_cap_mode": "modo del limitador de riesgo activo: fijo en fase pequena o porcentual sobre bankroll operativo tras compounding",
+            "strategy_market_exposure_cap": "tope maximo de exposicion permitida dentro del mercado actual para este ciclo",
+            "strategy_total_exposure_cap": "tope maximo de exposicion total simultanea permitido por el motor",
+            "strategy_market_exposure_remaining": "hueco restante dentro del tope del mercado actual antes de abrir o seguir cargando",
+            "strategy_total_exposure_remaining": "hueco restante dentro del tope total simultaneo antes de bloquear nuevas compras",
+            "strategy_cash_available_for_cycle": "caja libre real que el motor ve utilizable en este ciclo",
+            "strategy_budget_effective_ceiling": "techo util real del ciclo: el minimo entre caja libre, hueco de mercado y hueco total",
+            "strategy_cycle_budget_floor_applied": "si el motor ha subido una redistribucion cercana al minimo operativo para no quedarse a centimos del tamano minimo",
             "compare_realized_pnl": "SUM(strategy_windows.realized_pnl) por runtime",
             "compare_history": "strategy_windows cerradas de paper y shadow",
             "compare_samples": "snapshots recientes guardados en runtime_compare_samples",

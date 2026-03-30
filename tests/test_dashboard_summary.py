@@ -56,6 +56,15 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     db.set_bot_state("strategy_operability_label", "Comprando")
     db.set_bot_state("strategy_operability_reason", "Hay plan activo y el motor esta ejecutando o acompanando el bracket actual.")
     db.set_bot_state("strategy_operability_blocking", "0")
+    db.set_bot_state("strategy_exposure_cap_mode", "percent-after-compounding")
+    db.set_bot_state("strategy_market_exposure_cap", "26.355434")
+    db.set_bot_state("strategy_total_exposure_cap", "105.421737")
+    db.set_bot_state("strategy_market_exposure_remaining", "6.054321")
+    db.set_bot_state("strategy_total_exposure_remaining", "84.991237")
+    db.set_bot_state("strategy_cash_available_for_cycle", "12.340000")
+    db.set_bot_state("strategy_budget_effective_ceiling", "6.054321")
+    db.set_bot_state("strategy_effective_min_notional", "3.200000")
+    db.set_bot_state("strategy_cycle_budget_floor_applied", "1")
     db.close()
     runtime_dir = tmp_path / "research" / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -94,6 +103,15 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     assert summary["strategy_operability_label"] == "Comprando"
     assert summary["strategy_operability_reason"].startswith("Hay plan activo")
     assert summary["strategy_operability_blocking"] is False
+    assert summary["strategy_exposure_cap_mode"] == "percent-after-compounding"
+    assert summary["strategy_market_exposure_cap"] == 26.3554
+    assert summary["strategy_total_exposure_cap"] == 105.4217
+    assert summary["strategy_market_exposure_remaining"] == 6.0543
+    assert summary["strategy_total_exposure_remaining"] == 84.9912
+    assert summary["strategy_cash_available_for_cycle"] == 12.34
+    assert summary["strategy_budget_effective_ceiling"] == 6.0543
+    assert summary["strategy_effective_min_notional"] == 3.2
+    assert summary["strategy_cycle_budget_floor_applied"] is True
     assert summary["runtime_diagnostics_status"] == "degraded"
     assert summary["runtime_diagnostics_findings"][0]["title"] == "Libro viejo"
 

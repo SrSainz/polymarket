@@ -138,6 +138,7 @@ _ARB_STABILIZE_CATCHUP_BUDGET_FRACTION = 0.14
 _ARB_STABILIZE_RESIDUAL_MAX_CARRY_FRACTION = 0.75
 _ARB_STABILIZE_RESIDUAL_MAX_TARGET_FRACTION = 0.25
 _ARB_MIN_OPERABLE_BUDGET_SLACK = 0.05
+_ARB_CARRY_BUDGET_FLOOR_RATIO = 0.80
 _ARB_UNWIND_RATIO_TRIGGER = 0.18
 _ARB_UNWIND_EXTREME_RATIO = 0.88
 _ARB_UNWIND_MAX_FAIR_DISCOUNT = 0.03
@@ -1625,12 +1626,20 @@ class BTC5mStrategyService:
             timing_regime=timing_regime,
             carry_exposure=carry_exposure,
         )
+        market_cap_remaining = max(market_cap - existing_market_notional, 0.0)
+        total_cap_remaining = max(total_cap - current_total_exposure, 0.0)
         cycle_budget = min(
             cycle_budget,
-            max(market_cap - existing_market_notional, 0.0),
-            max(total_cap - current_total_exposure, 0.0),
+            market_cap_remaining,
+            total_cap_remaining,
             cash_balance,
         )
+        effective_budget_ceiling = min(market_cap_remaining, total_cap_remaining, cash_balance)
+        self.db.set_bot_state("strategy_market_exposure_remaining", f"{market_cap_remaining:.6f}")
+        self.db.set_bot_state("strategy_total_exposure_remaining", f"{total_cap_remaining:.6f}")
+        self.db.set_bot_state("strategy_cash_available_for_cycle", f"{max(cash_balance, 0.0):.6f}")
+        self.db.set_bot_state("strategy_budget_effective_ceiling", f"{max(effective_budget_ceiling, 0.0):.6f}")
+        self.db.set_bot_state("strategy_cycle_budget_floor_applied", "0")
         remaining_instruction_capacity = self._arb_dynamic_instruction_capacity(
             cycle_budget=cycle_budget,
             timing_regime=timing_regime,
@@ -1639,6 +1648,15 @@ class BTC5mStrategyService:
             ratio_gap=abs(desired_up_ratio - current_up_ratio),
             carry_exposure=carry_exposure,
         )
+        cycle_budget, cycle_budget_floored = self._arb_floor_cycle_budget_to_minimum(
+            cycle_budget=cycle_budget,
+            effective_min_notional=effective_min_notional,
+            market_cap_remaining=market_cap_remaining,
+            total_cap_remaining=total_cap_remaining,
+            cash_balance=cash_balance,
+            bracket_phase=bracket_phase,
+        )
+        self.db.set_bot_state("strategy_cycle_budget_floor_applied", "1" if cycle_budget_floored else "0")
         if cycle_budget < effective_min_notional:
             self._record_strategy_snapshot(
                 market=market,
@@ -1681,8 +1699,8 @@ class BTC5mStrategyService:
         cycle_budget = self._arb_scaled_cycle_budget(
             base_budget=cycle_budget,
             max_budget=min(
-                max(market_cap - existing_market_notional, 0.0),
-                max(total_cap - current_total_exposure, 0.0),
+                market_cap_remaining,
+                total_cap_remaining,
                 cash_balance,
             ),
             timing_regime=timing_regime,
@@ -1693,6 +1711,16 @@ class BTC5mStrategyService:
             carry_exposure=carry_exposure,
         )
         cycle_budget = _round_down(cycle_budget * reference_state.budget_scale, "0.01")
+        cycle_budget, cycle_budget_floored = self._arb_floor_cycle_budget_to_minimum(
+            cycle_budget=cycle_budget,
+            effective_min_notional=effective_min_notional,
+            market_cap_remaining=market_cap_remaining,
+            total_cap_remaining=total_cap_remaining,
+            cash_balance=cash_balance,
+            bracket_phase=bracket_phase,
+        )
+        if cycle_budget_floored:
+            self.db.set_bot_state("strategy_cycle_budget_floor_applied", "1")
         remaining_instruction_capacity = self._arb_dynamic_instruction_capacity(
             cycle_budget=cycle_budget,
             timing_regime=timing_regime,
@@ -2839,6 +2867,38 @@ class BTC5mStrategyService:
         if max_operable_budget < min_budget:
             return floored_budget
         return _round_down(min(min_budget, max_operable_budget), "0.01")
+
+    def _arb_floor_cycle_budget_to_minimum(
+        self,
+        *,
+        cycle_budget: float,
+        effective_min_notional: float,
+        market_cap_remaining: float,
+        total_cap_remaining: float,
+        cash_balance: float,
+        bracket_phase: str,
+    ) -> tuple[float, bool]:
+        floored_budget = _round_down(max(cycle_budget, 0.0), "0.01")
+        effective_min = max(float(effective_min_notional or 0.0), 0.0)
+        if floored_budget >= effective_min or effective_min <= 0:
+            return floored_budget, False
+
+        if str(bracket_phase or "").strip().lower() not in {"redistribuir", "acompanar"}:
+            return floored_budget, False
+
+        hard_ceiling = min(
+            max(float(market_cap_remaining or 0.0), 0.0),
+            max(float(total_cap_remaining or 0.0), 0.0),
+            max(float(cash_balance or 0.0), 0.0),
+        )
+        if hard_ceiling + _ARB_MIN_OPERABLE_BUDGET_SLACK < effective_min:
+            return floored_budget, False
+
+        near_minimum = floored_budget + _ARB_MIN_OPERABLE_BUDGET_SLACK >= effective_min * _ARB_CARRY_BUDGET_FLOOR_RATIO
+        if not near_minimum:
+            return floored_budget, False
+
+        return _round_down(min(effective_min, hard_ceiling), "0.01"), True
 
     def _arb_single_side_entry_budget(
         self,
