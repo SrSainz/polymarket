@@ -2357,6 +2357,37 @@ def test_live_exposure_caps_switch_to_percent_after_compounding(tmp_path: Path) 
     db.close()
 
 
+def test_live_exposure_caps_keep_fixed_cycle_for_tiny_profit_above_target(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=97.72,
+            live_btc5m_ticket_allocation_pct=0.25,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-percent-caps-tolerance"),
+    )
+
+    cap_mode = service._arb_exposure_cap_mode(  # noqa: SLF001
+        mode="live",
+        effective_bankroll=97.724329,
+        live_total_capital=97.724329,
+    )
+
+    assert cap_mode == "fixed-cycle"
+    db.close()
+
+
 def test_live_small_drawdown_floor_uses_absolute_max_total_loss(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

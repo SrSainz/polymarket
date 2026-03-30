@@ -140,6 +140,7 @@ _ARB_STABILIZE_RESIDUAL_MAX_TARGET_FRACTION = 0.25
 _ARB_MIN_OPERABLE_BUDGET_SLACK = 0.05
 _ARB_CARRY_BUDGET_FLOOR_RATIO = 0.80
 _ARB_OPENING_BUDGET_FLOOR_RATIO = 0.92
+_ARB_SMALL_CAPITAL_TARGET_TOLERANCE_USDC = 0.25
 _ARB_UNWIND_RATIO_TRIGGER = 0.18
 _ARB_UNWIND_EXTREME_RATIO = 0.88
 _ARB_UNWIND_MAX_FAIR_DISCOUNT = 0.03
@@ -2947,7 +2948,8 @@ class BTC5mStrategyService:
             ),
             0.0,
         )
-        if configured_target <= 0 or capital_now <= configured_target + 1e-9:
+        target_tolerance = max(_ARB_SMALL_CAPITAL_TARGET_TOLERANCE_USDC, configured_target * 0.0025)
+        if configured_target <= 0 or capital_now <= configured_target + target_tolerance:
             return "fixed-cycle"
         return "percent-after-compounding"
 
