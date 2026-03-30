@@ -121,6 +121,54 @@ def test_summary_payload_exposes_live_state(tmp_path: Path) -> None:
     assert summary["runtime_diagnostics_findings"][0]["title"] == "Libro viejo"
 
 
+def test_summary_payload_exposes_claimable_redeem_snapshot(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("live_cash_balance", "40.00")
+    db.set_bot_state("live_cash_allowance", "40.00")
+    db.set_bot_state("live_total_capital", "40.00")
+    db.close()
+
+    with patch(
+        "app.services.dashboard_server._claimable_positions_snapshot",
+        return_value={
+            "available": True,
+            "wallet": "0xabc",
+            "positions_count": 2,
+            "shares_total": 17.5,
+            "usdc_estimate": 17.5,
+            "positions": [
+                {
+                    "slug": "btc-updown-5m-1",
+                    "title": "Bitcoin Up or Down",
+                    "outcome": "Up",
+                    "size": 10.0,
+                    "estimated_usdc": 10.0,
+                    "end_date": "2026-03-30T10:00:00Z",
+                }
+            ],
+            "error": "",
+            "detected_at": 1774828800,
+        },
+    ):
+        summary = _summary_payload(
+            db_path,
+            clob_host="https://clob.polymarket.com",
+            execution_mode="live",
+            live_trading_enabled=True,
+        )
+
+    assert summary["claimable_available"] is True
+    assert summary["claimable_wallet"] == "0xabc"
+    assert summary["claimable_positions_count"] == 2
+    assert summary["claimable_shares_total"] == 17.5
+    assert summary["claimable_usdc_estimate"] == 17.5
+    assert summary["claimable_positions"][0]["slug"] == "btc-updown-5m-1"
+    assert summary["claimable_detected_at"] == 1774828800
+    assert "currentValue" in summary["dashboard_metric_sources"]["claimable_usdc_estimate"]
+
+
 def test_summary_payload_exposes_vidarx_lab_state(tmp_path: Path) -> None:
     db_path = tmp_path / "bot.db"
     db = Database(db_path)

@@ -29,6 +29,7 @@ from app.core.strategy_monitoring import (
     build_resolution_pnl_curve,
     build_setup_performance,
 )
+from app.polymarket.activity_client import ActivityClient
 from app.polymarket.gamma_client import GammaClient
 from app.services.runtime_compare_db import build_runtime_compare_payload
 from app.settings import load_settings
@@ -38,8 +39,10 @@ _MIDPOINT_CACHE_TTL_SECONDS = 20
 _PUBLIC_GAMMA_API_HOST = "https://gamma-api.polymarket.com"
 _PUBLIC_GAMMA_BEAT_CACHE: dict[str, tuple[float, str, float]] = {}
 _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
+_CLAIMABLE_CACHE: dict[str, tuple[dict, float]] = {}
+_CLAIMABLE_CACHE_TTL_SECONDS = 30.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-30-shadow-home9"
+_DASHBOARD_BUILD = "2026-03-30-shadow-home10"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -1009,6 +1012,131 @@ def _runtime_mode_from_db_path(db_path: Path) -> str:
     return "paper"
 
 
+def _claimable_positions_snapshot(workspace_root: Path) -> dict:
+    settings = None
+    try:
+        settings = load_settings(workspace_root)
+    except Exception:  # noqa: BLE001
+        settings = None
+
+    if settings is None:
+        return {
+            "available": False,
+            "wallet": "",
+            "positions_count": 0,
+            "shares_total": 0.0,
+            "usdc_estimate": 0.0,
+            "positions": [],
+            "error": "settings unavailable",
+            "detected_at": 0,
+        }
+
+    wallet = str(
+        settings.config.polymarket_funder
+        or settings.config.bot_wallet_address
+        or ""
+    ).strip().lower()
+    if not wallet:
+        return {
+            "available": False,
+            "wallet": "",
+            "positions_count": 0,
+            "shares_total": 0.0,
+            "usdc_estimate": 0.0,
+            "positions": [],
+            "error": "wallet not configured",
+            "detected_at": 0,
+        }
+
+    base_url = str(settings.config.data_api_host or "").rstrip("/")
+    cache_key = f"{base_url}|{wallet}"
+    now = time.time()
+    cached = _CLAIMABLE_CACHE.get(cache_key)
+    if cached and (now - cached[1]) < _CLAIMABLE_CACHE_TTL_SECONDS:
+        return dict(cached[0])
+
+    snapshot = {
+        "available": True,
+        "wallet": wallet,
+        "positions_count": 0,
+        "shares_total": 0.0,
+        "usdc_estimate": 0.0,
+        "positions": [],
+        "error": "",
+        "detected_at": int(now),
+    }
+    try:
+        client = ActivityClient(base_url or "https://data-api.polymarket.com", timeout=5)
+        raw_positions: list[dict] = []
+        page_limit = 500
+        for page_index in range(4):
+            offset = page_index * page_limit
+            page = client.get_positions(wallet=wallet, limit=page_limit, offset=offset)
+            if not page:
+                break
+            raw_positions.extend(page)
+            if len(page) < page_limit:
+                break
+
+        claimable_positions: list[dict] = []
+        shares_total = 0.0
+        usdc_estimate = 0.0
+        for item in raw_positions:
+            if not _snapshot_bool(item.get("redeemable")):
+                continue
+            size = max(_snapshot_float(item.get("size")), 0.0)
+            if size <= 0:
+                continue
+            current_value = max(_snapshot_float(item.get("currentValue")), 0.0)
+            current_price = max(_snapshot_float(item.get("curPrice")), 0.0)
+            estimated_usdc = current_value if current_value > 0 else (size * current_price)
+            if estimated_usdc <= 0:
+                continue
+            shares_total += size
+            usdc_estimate += estimated_usdc
+            claimable_positions.append(
+                {
+                    "slug": str(item.get("slug") or ""),
+                    "title": str(item.get("title") or item.get("slug") or ""),
+                    "outcome": str(item.get("outcome") or ""),
+                    "size": round(size, 4),
+                    "estimated_usdc": round(estimated_usdc, 4),
+                    "end_date": str(item.get("endDate") or ""),
+                }
+            )
+
+        claimable_positions.sort(
+            key=lambda row: (float(row.get("estimated_usdc") or 0.0), float(row.get("size") or 0.0)),
+            reverse=True,
+        )
+        snapshot["positions_count"] = len(claimable_positions)
+        snapshot["shares_total"] = round(shares_total, 4)
+        snapshot["usdc_estimate"] = round(usdc_estimate, 4)
+        snapshot["positions"] = claimable_positions[:8]
+    except Exception as exc:  # noqa: BLE001
+        snapshot["available"] = False
+        snapshot["error"] = str(exc).strip()[:200]
+
+    _CLAIMABLE_CACHE[cache_key] = (dict(snapshot), now)
+    return snapshot
+
+
+def _snapshot_float(value: object) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _snapshot_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
+
+
 def _seed_runtime_state_after_reset(conn: sqlite3.Connection, db_path: Path) -> None:
     now_ts = int(time.time())
     runtime_mode = _runtime_mode_from_db_path(db_path)
@@ -1438,6 +1566,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
     variant_leaderboard = _variant_leaderboard_rows(experiment_payload)
     wallet_hypotheses = _wallet_hypothesis_rows(wallet_payload)
     wallet_patterns = _wallet_pattern_rows(wallet_payload)
+    claimable_snapshot = _claimable_positions_snapshot(db_path.parent.parent)
 
     unrealized_pnl = 0.0
     exposure_mark = 0.0
@@ -1593,6 +1722,14 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "live_available_to_trade": round(live_available_to_trade, 4),
         "live_equity_estimate": round(live_equity_estimate, 4),
         "live_balance_updated_at": int(live_balance_updated_at),
+        "claimable_available": bool(claimable_snapshot.get("available")),
+        "claimable_wallet": str(claimable_snapshot.get("wallet") or ""),
+        "claimable_positions_count": int(claimable_snapshot.get("positions_count") or 0),
+        "claimable_shares_total": round(float(claimable_snapshot.get("shares_total") or 0.0), 4),
+        "claimable_usdc_estimate": round(float(claimable_snapshot.get("usdc_estimate") or 0.0), 4),
+        "claimable_positions": claimable_snapshot.get("positions") if isinstance(claimable_snapshot.get("positions"), list) else [],
+        "claimable_error": str(claimable_snapshot.get("error") or ""),
+        "claimable_detected_at": int(claimable_snapshot.get("detected_at") or 0),
         "live_control_state": str(live_control["state"]),
         "live_control_label": str(live_control["label"]),
         "live_control_reason": str(live_control["reason"]),
@@ -1767,6 +1904,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "live_total_capital": "bot_state.live_total_capital",
             "live_available_to_trade": "min(bot_state.live_cash_balance, bot_state.live_cash_allowance); si allowance<=0 usa balance",
             "live_equity_estimate": "live_cash_balance + exposure_mark (caja + mark-to-market de copy_positions)",
+            "claimable_usdc_estimate": "suma del currentValue o size*curPrice de posiciones redeemable devueltas por /positions del Data API para POLYMARKET_FUNDER o BOT_WALLET_ADDRESS",
             "realized_pnl": "SUM(daily_pnl.pnl)",
             "unrealized_pnl": "mark-to-market de copy_positions usando midpoint del libro; si no hay midpoint usa avg_price",
             "pnl_total": "realized_pnl + unrealized_pnl",

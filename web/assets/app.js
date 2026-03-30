@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-30-shadow-home9";
+const UI_BUILD = "2026-03-30-shadow-home10";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -892,6 +892,11 @@ function paintShadowOverview(summary, items = lastPositions) {
   const liveCashBalance = Number(summary?.live_cash_balance ?? 0);
   const liveAvailableToTrade = Number(summary?.live_available_to_trade ?? liveCashBalance);
   const liveEquityEstimate = Number(summary?.live_equity_estimate ?? summary?.live_total_capital ?? liveCashBalance);
+  const claimable = claimableContext(summary);
+  const claimableMeta =
+    claimable.usdcEstimate > 0
+      ? ` | claim pendiente ${fmtUsdPlain(claimable.usdcEstimate, 2)} en ${claimable.positionsCount} ${claimable.positionsCount === 1 ? "posicion" : "posiciones"}`
+      : "";
   const budgetInfo = budgetContext(summary);
   const budgetShortfall = budgetInfo.budgetShortfall;
   const strategyMode = String(summary?.strategy_runtime_mode || "").trim().toLowerCase();
@@ -968,10 +973,10 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowOperableValue").textContent = hasLiveBalanceSnapshot ? fmtUsdPlain(liveAvailableToTrade, 2) : "-";
   document.getElementById("shadowExposureNowValue").textContent = fmtUsdPlain(currentWindowExposure, 2);
   document.getElementById("shadowMoneyMeta").textContent = liveBalanceStale
-    ? `Snapshot de balance viejo (${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}). Mostramos el ultimo valor conocido mientras refresca.`
+    ? `Snapshot de balance viejo (${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}). Mostramos el ultimo valor conocido mientras refresca.${claimableMeta}`
     : operability.state === "budget_limited" || budgetShortfall > 0
-    ? `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy | ${budgetLimitMeta(summary)}.`
-    : `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy.`;
+    ? `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy | ${budgetLimitMeta(summary)}.${claimableMeta}`
+    : `Equity actual = caja + MTM | snapshot ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)} | ${fmtUsd(todayPnl, 2)} hoy.${claimableMeta}`;
 
   const positionCard = document.getElementById("shadowPositionCard");
   applyToneClass(positionCard, currentWindowExposure > 0 ? toneFromNumber(currentWindowPnl) : "neutral");
@@ -1712,6 +1717,23 @@ function budgetContext(summary) {
   };
 }
 
+function claimableContext(summary) {
+  const positionsCount = Math.max(Number(summary?.claimable_positions_count || 0), 0);
+  const sharesTotal = Math.max(Number(summary?.claimable_shares_total || 0), 0);
+  const usdcEstimate = Math.max(Number(summary?.claimable_usdc_estimate || 0), 0);
+  const wallet = String(summary?.claimable_wallet || "").trim();
+  const available = Boolean(summary?.claimable_available);
+  const error = String(summary?.claimable_error || "").trim();
+  return {
+    positionsCount,
+    sharesTotal,
+    usdcEstimate,
+    wallet,
+    available,
+    error,
+  };
+}
+
 function budgetLimitMeta(summary) {
   const ctx = budgetContext(summary);
   const parts = [
@@ -1722,8 +1744,10 @@ function budgetLimitMeta(summary) {
   ];
   const operatingBankroll = Math.max(Number(summary?.strategy_operating_bankroll || 0), 0);
   const reservedProfit = Math.max(Number(summary?.strategy_reserved_profit || 0), 0);
+  const claimable = claimableContext(summary);
   if (operatingBankroll > 0) parts.push(`operativo ${fmtUsdPlain(operatingBankroll, 2)}`);
   if (reservedProfit > 0) parts.push(`reservado ${fmtUsdPlain(reservedProfit, 2)}`);
+  if (claimable.usdcEstimate > 0) parts.push(`claim ${fmtUsdPlain(claimable.usdcEstimate, 2)}`);
   if (ctx.effectiveMinNotional > 0) parts.push(`minimo ${fmtUsdPlain(ctx.effectiveMinNotional, 2)}`);
   if (ctx.floorApplied) parts.push("suelo de redistribucion activo");
   if (ctx.capMode === "percent-after-compounding") parts.push("tope por % operativo");
@@ -2243,8 +2267,8 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("liveCashMeta").textContent = isPublicRuntime()
     ? "requiere backend del NAS para caja, capital y estado reales"
     : liveBalanceStale
-    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo valor conocido`
-    : `equity = caja + MTM | operable ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
+    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo valor conocido${claimableMeta}`
+    : `equity = caja + MTM | operable ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${claimableMeta}`;
   document.getElementById("heroCashBalance").textContent = isPublicRuntime()
     ? fmtUsdPlain(totalExposure, 2)
     : hasLiveBalanceSnapshot
@@ -2253,8 +2277,8 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("heroCashMeta").textContent = isPublicRuntime()
     ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones visibles | wallet ${shortWallet(watchedWallet)}`
     : liveBalanceStale
-    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo capital operativo conocido`
-    : `operable = min(caja, allowance) | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`;
+    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo capital operativo conocido${claimableMeta}`
+    : `operable = min(caja, allowance) | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${claimableMeta}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
