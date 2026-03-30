@@ -14,6 +14,7 @@ from app.services.dashboard_server import (
     _apply_live_control_action,
     _claimable_positions_snapshot,
     _destructive_request_allowed,
+    _executions_payload,
     _latency_payload,
     _liquidations_payload,
     _metrics_payload,
@@ -169,6 +170,113 @@ def test_summary_payload_exposes_claimable_redeem_snapshot(tmp_path: Path) -> No
     assert summary["claimable_positions"][0]["slug"] == "btc-updown-5m-1"
     assert summary["claimable_detected_at"] == 1774828800
     assert "currentValue" in summary["dashboard_metric_sources"]["claimable_usdc_estimate"]
+
+
+def test_summary_payload_exposes_pending_live_orders(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("live_cash_balance", "97.72")
+    db.set_bot_state("live_cash_allowance", "97.72")
+    db.set_bot_state("live_total_capital", "97.72")
+    db.set_bot_state(
+        "live_pending_order:abc123",
+        json.dumps(
+            {
+                "order_id": "abc123",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-live-1",
+                "condition_id": "cond-live-1",
+                "size": 4.0,
+                "price": 0.41,
+                "notional": 1.64,
+                "source_wallet": "strategy-live",
+                "source_signal_id": 17,
+                "title": "BTC Up or Down",
+                "slug": "btc-updown-5m-1774910400",
+                "outcome": "Up",
+                "reason": "fase abrir",
+                "execution_profile": "taker_fak",
+                "response_status": "live",
+                "submitted_at": 1774910401,
+            },
+            separators=(",", ":"),
+        ),
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="live",
+        live_trading_enabled=True,
+    )
+
+    assert summary["live_pending_orders_count"] == 1
+    assert summary["live_pending_orders_total_notional"] == 1.64
+    assert summary["last_live_activity_ts"] == 1774910401
+    assert summary["live_pending_orders"][0]["order_id"] == "abc123"
+    assert summary["live_pending_orders"][0]["status"] == "submitted"
+
+
+def test_executions_payload_includes_pending_live_orders_before_fills(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.record_execution(
+        result=ExecutionResult(
+            mode="live",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="asset-filled",
+            size=5.0,
+            price=0.4,
+            notional=2.0,
+            pnl_delta=0.0,
+            message="filled",
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-filled",
+        source_wallet="0xsrc",
+        source_signal_id=11,
+        notes="fill real",
+    )
+    db.set_bot_state(
+        "live_pending_order:pending-1",
+        json.dumps(
+            {
+                "order_id": "pending-1",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-pending",
+                "condition_id": "cond-pending",
+                "size": 3.0,
+                "price": 0.42,
+                "notional": 1.26,
+                "source_wallet": "strategy-live",
+                "source_signal_id": 19,
+                "title": "BTC Up or Down",
+                "slug": "btc-updown-5m-1774910700",
+                "outcome": "Down",
+                "reason": "fase abrir",
+                "execution_profile": "taker_fak",
+                "response_status": "matched",
+                "submitted_at": int(time.time()) + 60,
+            },
+            separators=(",", ":"),
+        ),
+    )
+    db.close()
+
+    payload = _executions_payload(db_path, limit=10)
+
+    assert len(payload["items"]) >= 2
+    assert payload["items"][0]["pending_live_order"] is True
+    assert payload["items"][0]["status"] == "submitted"
+    assert payload["items"][0]["order_id"] == "pending-1"
+    assert payload["items"][0]["slug"] == "btc-updown-5m-1774910700"
+    assert payload["items"][1]["pending_live_order"] is False
 
 
 def test_claimable_positions_snapshot_uses_env_wallet_and_data_api(tmp_path: Path) -> None:

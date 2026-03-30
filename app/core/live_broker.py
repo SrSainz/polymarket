@@ -335,6 +335,7 @@ def _persist_pending_live_order(
         "outcome": instruction.outcome,
         "category": instruction.category,
         "reason": instruction.reason,
+        "submitted_at": int(time.time()),
         "execution_profile": str(profile or ""),
         "response_status": _live_execution_status(response),
         "fee_rate_bps": max(float(fee_rate_bps or 0.0), 0.0),
