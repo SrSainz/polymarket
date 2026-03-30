@@ -139,6 +139,7 @@ _ARB_STABILIZE_RESIDUAL_MAX_CARRY_FRACTION = 0.75
 _ARB_STABILIZE_RESIDUAL_MAX_TARGET_FRACTION = 0.25
 _ARB_MIN_OPERABLE_BUDGET_SLACK = 0.05
 _ARB_CARRY_BUDGET_FLOOR_RATIO = 0.80
+_ARB_OPENING_BUDGET_FLOOR_RATIO = 0.92
 _ARB_UNWIND_RATIO_TRIGGER = 0.18
 _ARB_UNWIND_EXTREME_RATIO = 0.88
 _ARB_UNWIND_MAX_FAIR_DISCOUNT = 0.03
@@ -1655,6 +1656,7 @@ class BTC5mStrategyService:
             total_cap_remaining=total_cap_remaining,
             cash_balance=cash_balance,
             bracket_phase=bracket_phase,
+            allow_opening_floor=False,
         )
         self.db.set_bot_state("strategy_cycle_budget_floor_applied", "1" if cycle_budget_floored else "0")
         if cycle_budget < effective_min_notional:
@@ -1718,6 +1720,7 @@ class BTC5mStrategyService:
             total_cap_remaining=total_cap_remaining,
             cash_balance=cash_balance,
             bracket_phase=bracket_phase,
+            allow_opening_floor=mode in {"live", "shadow"} and reference_state.comparable,
         )
         if cycle_budget_floored:
             self.db.set_bot_state("strategy_cycle_budget_floor_applied", "1")
@@ -2877,13 +2880,17 @@ class BTC5mStrategyService:
         total_cap_remaining: float,
         cash_balance: float,
         bracket_phase: str,
+        allow_opening_floor: bool = False,
     ) -> tuple[float, bool]:
         floored_budget = _round_down(max(cycle_budget, 0.0), "0.01")
         effective_min = max(float(effective_min_notional or 0.0), 0.0)
         if floored_budget >= effective_min or effective_min <= 0:
             return floored_budget, False
 
-        if str(bracket_phase or "").strip().lower() not in {"redistribuir", "acompanar"}:
+        normalized_phase = str(bracket_phase or "").strip().lower()
+        if normalized_phase not in {"redistribuir", "acompanar", "abrir"}:
+            return floored_budget, False
+        if normalized_phase == "abrir" and not allow_opening_floor:
             return floored_budget, False
 
         hard_ceiling = min(
@@ -2894,7 +2901,12 @@ class BTC5mStrategyService:
         if hard_ceiling + _ARB_MIN_OPERABLE_BUDGET_SLACK < effective_min:
             return floored_budget, False
 
-        near_minimum = floored_budget + _ARB_MIN_OPERABLE_BUDGET_SLACK >= effective_min * _ARB_CARRY_BUDGET_FLOOR_RATIO
+        floor_ratio = (
+            _ARB_OPENING_BUDGET_FLOOR_RATIO
+            if normalized_phase == "abrir"
+            else _ARB_CARRY_BUDGET_FLOOR_RATIO
+        )
+        near_minimum = floored_budget + _ARB_MIN_OPERABLE_BUDGET_SLACK >= effective_min * floor_ratio
         if not near_minimum:
             return floored_budget, False
 
