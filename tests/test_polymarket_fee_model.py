@@ -44,3 +44,21 @@ def test_crypto_fee_model_after_switch_matches_public_curve() -> None:
         category="crypto",
         as_of=date(2026, 3, 30),
     ), 4) == 0.6912
+
+
+def test_crypto_fee_model_after_switch_normalizes_fee_rate_endpoint_base() -> None:
+    explicit_rate = effective_taker_fee_rate(
+        fee_rate_bps=720.0,
+        price=0.50,
+        category="crypto",
+        as_of=date(2026, 3, 30),
+    )
+    endpoint_rate = effective_taker_fee_rate(
+        fee_rate_bps=1000.0,
+        price=0.50,
+        category="crypto",
+        as_of=date(2026, 3, 30),
+    )
+
+    assert round(explicit_rate * 10_000, 2) == 180.0
+    assert endpoint_rate == explicit_rate

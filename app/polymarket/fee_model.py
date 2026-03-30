@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 _CRYPTO_FEE_SCHEDULE_SWITCH = date(2026, 3, 30)
+_CRYPTO_FEE_RATE_V2_BPS = 720.0
+_CRYPTO_FEE_RATE_V2_ENDPOINT_BASE_BPS = 1000.0
 
 
 def _schedule_date(as_of: date | datetime | None = None) -> date:
@@ -71,11 +73,19 @@ def effective_taker_fee_rate(
     category: str,
     as_of: date | datetime | None = None,
 ) -> float:
-    fee_rate = max(float(fee_rate_bps or 0.0), 0.0) / 10_000
+    normalized_category = normalize_market_category(category)
+    raw_fee_rate_bps = max(float(fee_rate_bps or 0.0), 0.0)
+    if (
+        normalized_category == "crypto"
+        and _schedule_date(as_of) >= _CRYPTO_FEE_SCHEDULE_SWITCH
+        and abs(raw_fee_rate_bps - _CRYPTO_FEE_RATE_V2_ENDPOINT_BASE_BPS) <= 1e-9
+    ):
+        raw_fee_rate_bps = _CRYPTO_FEE_RATE_V2_BPS
+    fee_rate = raw_fee_rate_bps / 10_000
     best_ask = max(min(float(price or 0.0), 1.0), 0.0)
     if fee_rate <= 0 or best_ask <= 0 or best_ask >= 1:
         return 0.0
-    exponent = taker_fee_exponent(category=category, as_of=as_of)
+    exponent = taker_fee_exponent(category=normalized_category, as_of=as_of)
     return fee_rate * max(best_ask * (1.0 - best_ask), 0.0) ** exponent
 
 
