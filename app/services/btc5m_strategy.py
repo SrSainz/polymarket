@@ -756,6 +756,7 @@ class BTC5mStrategyService:
             market=market,
             cash_balance=cash_balance,
             effective_bankroll=operating_bankroll,
+            live_total_capital=live_total_capital,
             current_total_exposure=total_exposure,
             carry_exposure=carry_state.carry_exposure,
             carry_window_count=carry_state.previous_open_windows,
@@ -1435,6 +1436,7 @@ class BTC5mStrategyService:
         market: dict,
         cash_balance: float,
         effective_bankroll: float,
+        live_total_capital: float | None = None,
         current_total_exposure: float,
         carry_exposure: float = 0.0,
         carry_window_count: int = 0,
@@ -1510,8 +1512,26 @@ class BTC5mStrategyService:
         condition_id = str(market.get("conditionId") or "")
         existing_market_notional = self._get_condition_exposure(condition_id)
         window_state = self.db.get_strategy_window(slug)
-        market_cap = self._arb_market_exposure_cap(mode=mode, effective_bankroll=effective_bankroll)
-        total_cap = self._arb_total_exposure_cap(mode=mode, effective_bankroll=effective_bankroll)
+        market_cap = self._arb_market_exposure_cap(
+            mode=mode,
+            effective_bankroll=effective_bankroll,
+            live_total_capital=live_total_capital,
+        )
+        total_cap = self._arb_total_exposure_cap(
+            mode=mode,
+            effective_bankroll=effective_bankroll,
+            live_total_capital=live_total_capital,
+        )
+        caps_mode = self._arb_exposure_cap_mode(
+            mode=mode,
+            effective_bankroll=effective_bankroll,
+            live_total_capital=live_total_capital,
+        )
+        self.db.set_bot_state("strategy_market_exposure_cap", f"{market_cap:.6f}")
+        self.db.set_bot_state("strategy_total_exposure_cap", f"{total_cap:.6f}")
+        self.db.set_bot_state("strategy_market_exposure_cap_pct", f"{_ARB_MAX_MARKET_EXPOSURE_FRACTION:.6f}")
+        self.db.set_bot_state("strategy_total_exposure_cap_pct", f"{_ARB_MAX_TOTAL_EXPOSURE_FRACTION:.6f}")
+        self.db.set_bot_state("strategy_exposure_cap_mode", caps_mode)
 
         if existing_market_notional >= market_cap:
             self._record_strategy_snapshot(
@@ -2837,19 +2857,73 @@ class BTC5mStrategyService:
         single_budget = _round_down(cycle_budget * single_budget_fraction, "0.01")
         return min(max(single_budget, self._arb_min_operable_budget(target)), cash_balance)
 
-    def _arb_market_exposure_cap(self, *, mode: str, effective_bankroll: float) -> float:
+    def _arb_exposure_cap_mode(
+        self,
+        *,
+        mode: str,
+        effective_bankroll: float,
+        live_total_capital: float | None = None,
+    ) -> str:
+        if mode not in {"live", "shadow"}:
+            return "percent"
+        configured_target = self._configured_live_small_target_capital()
+        capital_now = max(
+            float(
+                live_total_capital
+                if live_total_capital is not None
+                else effective_bankroll
+            ),
+            0.0,
+        )
+        if configured_target <= 0 or capital_now <= configured_target + 1e-9:
+            return "fixed-cycle"
+        return "percent-after-compounding"
+
+    def _arb_market_exposure_cap(
+        self,
+        *,
+        mode: str,
+        effective_bankroll: float,
+        live_total_capital: float | None = None,
+    ) -> float:
         cap = max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_MARKET_EXPOSURE_FRACTION)
         if mode in {"live", "shadow"}:
-            live_cycle_budget = self._live_cycle_budget_target(mode=mode, live_total_capital=effective_bankroll)
-            if live_cycle_budget > 0:
+            live_cycle_budget = self._live_cycle_budget_target(
+                mode=mode,
+                live_total_capital=max(
+                    float(live_total_capital if live_total_capital is not None else effective_bankroll),
+                    0.0,
+                ),
+            )
+            if live_cycle_budget > 0 and self._arb_exposure_cap_mode(
+                mode=mode,
+                effective_bankroll=effective_bankroll,
+                live_total_capital=live_total_capital,
+            ) == "fixed-cycle":
                 cap = live_cycle_budget
         return cap
 
-    def _arb_total_exposure_cap(self, *, mode: str, effective_bankroll: float) -> float:
+    def _arb_total_exposure_cap(
+        self,
+        *,
+        mode: str,
+        effective_bankroll: float,
+        live_total_capital: float | None = None,
+    ) -> float:
         cap = max(self._arb_strategy_min_notional() * 2, effective_bankroll * _ARB_MAX_TOTAL_EXPOSURE_FRACTION)
         if mode in {"live", "shadow"}:
-            live_cycle_budget = self._live_cycle_budget_target(mode=mode, live_total_capital=effective_bankroll)
-            if live_cycle_budget > 0:
+            live_cycle_budget = self._live_cycle_budget_target(
+                mode=mode,
+                live_total_capital=max(
+                    float(live_total_capital if live_total_capital is not None else effective_bankroll),
+                    0.0,
+                ),
+            )
+            if live_cycle_budget > 0 and self._arb_exposure_cap_mode(
+                mode=mode,
+                effective_bankroll=effective_bankroll,
+                live_total_capital=live_total_capital,
+            ) == "fixed-cycle":
                 overlap_cap = live_cycle_budget * _ARB_LIVE_TOTAL_EXPOSURE_OVERLAP_MULTIPLIER
                 capital_guard_cap = max(
                     live_cycle_budget,

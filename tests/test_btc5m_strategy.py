@@ -2289,12 +2289,71 @@ def test_live_cycle_budget_target_uses_absolute_usdc_cap_when_configured(tmp_pat
     )
 
     budget = service._live_cycle_budget_target(mode="live", live_total_capital=111.26)  # noqa: SLF001
-    market_cap = service._arb_market_exposure_cap(mode="live", effective_bankroll=111.26)  # noqa: SLF001
-    total_cap = service._arb_total_exposure_cap(mode="live", effective_bankroll=111.26)  # noqa: SLF001
+    market_cap = service._arb_market_exposure_cap(  # noqa: SLF001
+        mode="live",
+        effective_bankroll=111.26,
+        live_total_capital=111.26,
+    )
+    total_cap = service._arb_total_exposure_cap(  # noqa: SLF001
+        mode="live",
+        effective_bankroll=111.26,
+        live_total_capital=111.26,
+    )
+    cap_mode = service._arb_exposure_cap_mode(  # noqa: SLF001
+        mode="live",
+        effective_bankroll=111.26,
+        live_total_capital=111.26,
+    )
 
     assert round(budget, 2) == 25.00
     assert round(market_cap, 2) == 25.00
     assert round(total_cap, 2) == 31.25
+    assert cap_mode == "fixed-cycle"
+    db.close()
+
+
+def test_live_exposure_caps_switch_to_percent_after_compounding(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=111.26,
+            live_btc5m_ticket_allocation_pct=0.25,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-percent-caps"),
+    )
+
+    budget = service._live_cycle_budget_target(mode="live", live_total_capital=1000.0)  # noqa: SLF001
+    market_cap = service._arb_market_exposure_cap(  # noqa: SLF001
+        mode="live",
+        effective_bankroll=1000.0,
+        live_total_capital=1000.0,
+    )
+    total_cap = service._arb_total_exposure_cap(  # noqa: SLF001
+        mode="live",
+        effective_bankroll=1000.0,
+        live_total_capital=1000.0,
+    )
+    cap_mode = service._arb_exposure_cap_mode(  # noqa: SLF001
+        mode="live",
+        effective_bankroll=1000.0,
+        live_total_capital=1000.0,
+    )
+
+    assert round(budget, 2) == 25.00
+    assert round(market_cap, 2) == 50.00
+    assert round(total_cap, 2) == 200.00
+    assert cap_mode == "percent-after-compounding"
     db.close()
 
 
