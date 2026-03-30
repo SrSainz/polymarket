@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-30-shadow-home8";
+const UI_BUILD = "2026-03-30-shadow-home9";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -3306,6 +3306,8 @@ document.getElementById("apiBaseBtn").addEventListener("click", async () => {
     document.getElementById("lastUpdated").textContent = `Backend API guardado: ${apiBase || "local"}`;
     document.getElementById("resetBtn").disabled = false;
     document.getElementById("resetBtn").title = "";
+    document.getElementById("wipeRuntimeBtn").disabled = false;
+    document.getElementById("wipeRuntimeBtn").title = "";
     document.getElementById("resetCompareBtn").disabled = false;
     document.getElementById("resetCompareBtn").title = "";
   } catch (error) {
@@ -3315,6 +3317,8 @@ document.getElementById("apiBaseBtn").addEventListener("click", async () => {
     document.getElementById("runtimeBadge").textContent = modeLabel();
     document.getElementById("resetBtn").disabled = true;
     document.getElementById("resetBtn").title = "Solo disponible cuando el dashboard esta conectado al backend local";
+    document.getElementById("wipeRuntimeBtn").disabled = true;
+    document.getElementById("wipeRuntimeBtn").title = "Solo disponible cuando el dashboard esta conectado al backend local";
     document.getElementById("resetCompareBtn").disabled = true;
     document.getElementById("resetCompareBtn").title =
       "Solo disponible cuando el dashboard esta conectado al backend local";
@@ -3329,19 +3333,49 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
   const button = document.getElementById("resetBtn");
   if (runtimeMode !== "local") {
     document.getElementById("lastUpdated").textContent =
-      "Reset no disponible en modo Public API. Usa la URL del backend local.";
+      "Reinicio no disponible en modo Public API. Usa la URL del backend local.";
     return;
   }
 
   const runtimeLabel = String(lastSummary?.strategy_runtime_mode || "runtime actual").trim() || "runtime actual";
   const accepted = window.confirm(
-    `Esto reseteara el runtime actual (${runtimeLabel}): borra posiciones, senales, ejecuciones, pnl diario y ventanas de estrategia, y deja el estado visible en limpio para que el motor reconstruya mercado, beat y balance en el siguiente ciclo. No reinicia procesos ni toca otros runtimes. Continuar?`
+    `Esto reiniciara la foto visible del runtime actual (${runtimeLabel}) sin borrar posiciones, senales, ejecuciones, pnl diario ni ventanas. Conserva caja, historial y compounding, y deja que el motor reconstruya mercado, beat y balance en el siguiente ciclo. No reinicia procesos ni toca otros runtimes. Continuar?`
   );
   if (!accepted) return;
 
   const originalLabel = button.textContent;
   button.disabled = true;
-  button.textContent = "Limpiando...";
+  button.textContent = "Reiniciando...";
+  try {
+    await postJson(withCacheBust(buildApiUrl("/api/restart-runtime")), { confirm: "restart-runtime" });
+    document.getElementById("lastUpdated").textContent =
+      `Reinicio suave de ${runtimeLabel}: historial, pnl y posiciones conservados. El motor reconstruira mercado, beat y balance en el siguiente ciclo.`;
+    await refreshAll();
+  } catch (error) {
+    document.getElementById("lastUpdated").textContent = `Error al reiniciar: ${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel || "Reiniciar runtime";
+  }
+});
+
+document.getElementById("wipeRuntimeBtn").addEventListener("click", async () => {
+  const button = document.getElementById("wipeRuntimeBtn");
+  if (runtimeMode !== "local") {
+    document.getElementById("lastUpdated").textContent =
+      "Borrado total no disponible en modo Public API. Usa la URL del backend local.";
+    return;
+  }
+
+  const runtimeLabel = String(lastSummary?.strategy_runtime_mode || "runtime actual").trim() || "runtime actual";
+  const accepted = window.confirm(
+    `Esto borrara por completo el runtime actual (${runtimeLabel}): posiciones, senales, ejecuciones, pnl diario y ventanas de estrategia. Tambien reiniciara la foto visible para que el motor empiece de cero. No reinicia procesos ni toca otros runtimes. Continuar?`
+  );
+  if (!accepted) return;
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Borrando...";
   try {
     const result = await postJson(withCacheBust(buildApiUrl("/api/reset")), { confirm: "reset" });
     const deleted = result.deleted || {};
@@ -3351,13 +3385,13 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
     const windows = Number(deleted.strategy_windows || 0);
     const dailyPnl = Number(deleted.daily_pnl || 0);
     document.getElementById("lastUpdated").textContent =
-      `Reset de ${runtimeLabel}: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}, ventanas ${windows}, pnl diario ${dailyPnl}. El motor reconstruira mercado, beat y balance en el siguiente ciclo.`;
+      `Borrado total de ${runtimeLabel}: posiciones ${positions}, ejecuciones ${executions}, senales ${signals}, ventanas ${windows}, pnl diario ${dailyPnl}. El motor reconstruira mercado, beat y balance en el siguiente ciclo.`;
     await refreshAll();
   } catch (error) {
-    document.getElementById("lastUpdated").textContent = `Error al limpiar: ${error.message}`;
+    document.getElementById("lastUpdated").textContent = `Error al borrar runtime: ${error.message}`;
   } finally {
     button.disabled = false;
-    button.textContent = originalLabel || "Resetear runtime";
+    button.textContent = originalLabel || "Borrado total";
   }
 });
 
@@ -3455,15 +3489,20 @@ async function bootstrap() {
       : "Proyecto principal (Backend NAS desconectado)";
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const resetBtn = document.getElementById("resetBtn");
+  const wipeRuntimeBtn = document.getElementById("wipeRuntimeBtn");
   const resetCompareBtn = document.getElementById("resetCompareBtn");
   if (runtimeMode !== "local") {
     resetBtn.disabled = true;
     resetBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
+    wipeRuntimeBtn.disabled = true;
+    wipeRuntimeBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
     resetCompareBtn.disabled = true;
     resetCompareBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
   } else {
     resetBtn.disabled = false;
     resetBtn.title = "";
+    wipeRuntimeBtn.disabled = false;
+    wipeRuntimeBtn.title = "";
     resetCompareBtn.disabled = false;
     resetCompareBtn.title = "";
   }

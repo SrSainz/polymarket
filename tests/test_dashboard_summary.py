@@ -17,6 +17,7 @@ from app.services.dashboard_server import (
     _metrics_payload,
     _microstructure_payload,
     _reset_compare_state,
+    _restart_runtime_state,
     _reset_runtime_state,
     _summary_payload,
 )
@@ -1688,6 +1689,88 @@ def test_summary_payload_filters_strategy_variant_and_exposes_incubation(tmp_pat
     assert summary["strategy_recent_resolutions"][0]["slug"] == "btc-updown-5m-v1"
     assert len(summary["strategy_setup_performance"]) == 1
     assert summary["strategy_setup_performance"][0]["price_mode"] == "underround"
+
+
+def test_restart_runtime_state_preserves_history_and_balance_snapshot(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_shadow.db"
+    db = Database(db_path)
+    db.init_schema()
+    now_ts = int(time.time())
+    db.set_bot_state("strategy_runtime_mode", "shadow")
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-stale")
+    db.set_bot_state("strategy_official_price_to_beat", "68123.45")
+    db.set_bot_state("strategy_last_note", "nota vieja")
+    db.set_bot_state("live_cash_balance", "150.12")
+    db.set_bot_state("live_cash_allowance", "150.12")
+    db.set_bot_state("live_total_capital", "203.45")
+    db.set_bot_state("live_balance_updated_at", str(now_ts - 25))
+    db.set_bot_state("strategy_capital_target", "111.26")
+    db.set_bot_state("strategy_operating_bankroll", "132.75")
+    db.set_bot_state("strategy_reserved_profit", "70.70")
+    db.set_bot_state("strategy_total_exposure", "53.33")
+    db.set_bot_state("live_marked_exposure", "52.10")
+    db.set_bot_state("live_unrealized_pnl", "1.23")
+    db.set_bot_state("runtime_guard_state", "ready")
+    db.set_bot_state("position_ledger_mode", "shadow")
+    db.set_bot_state("live_control_state", "paused")
+    db.set_bot_state("live_control_reason", "pausado para test")
+    db.set_bot_state("live_control_updated_at", str(now_ts - 50))
+    db.upsert_copy_position(
+        asset="asset-1",
+        condition_id="cond-1",
+        size=10.0,
+        avg_price=0.5,
+        realized_pnl=0.0,
+        title="Market",
+        slug="btc-updown-5m-1",
+        outcome="Up",
+        category="crypto",
+    )
+    with db.conn:
+        db.conn.execute(
+            """
+            INSERT INTO executions(
+                ts, mode, status, action, side, asset, condition_id, size, price, notional, pnl_delta
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (now_ts, "shadow", "filled", "close", "sell", "asset-1", "cond-1", 10.0, 1.0, 10.0, 4.5),
+        )
+        db.conn.execute("INSERT INTO daily_pnl(day, pnl) VALUES (?, ?)", ("2026-03-30", 4.5))
+        db.conn.execute(
+            """
+            INSERT INTO strategy_windows(
+                slug, condition_id, title, status, opened_at, price_mode, realized_pnl
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("btc-updown-5m-test", "cond-1", "Bitcoin Up or Down - Test", "closed", now_ts, "underround", 4.25),
+        )
+    db.close()
+
+    result = _restart_runtime_state(db_path)
+
+    assert result["ok"] is True
+    db = Database(db_path)
+    assert db.get_bot_state("strategy_market_slug") == ""
+    assert db.get_bot_state("strategy_official_price_to_beat") == "0"
+    assert db.get_bot_state("strategy_runtime_mode") == "shadow"
+    assert db.get_bot_state("strategy_last_note").startswith("runtime shadow reiniciado")
+    assert db.get_bot_state("strategy_operability_label") == "Reiniciando"
+    assert db.get_bot_state("live_cash_balance") == "150.12000000"
+    assert db.get_bot_state("live_total_capital") == "203.45000000"
+    assert db.get_bot_state("strategy_operating_bankroll") == "132.75000000"
+    assert db.get_bot_state("strategy_reserved_profit") == "70.70000000"
+    assert db.get_bot_state("runtime_guard_state") == "ready"
+    assert db.get_bot_state("position_ledger_mode") == "shadow"
+    assert db.get_bot_state("live_control_state") == "paused"
+    execution_count = db.conn.execute("SELECT COUNT(*) AS value FROM executions").fetchone()["value"]
+    strategy_window_count = db.conn.execute("SELECT COUNT(*) AS value FROM strategy_windows").fetchone()["value"]
+    daily_pnl_count = db.conn.execute("SELECT COUNT(*) AS value FROM daily_pnl").fetchone()["value"]
+    copy_position_count = db.conn.execute("SELECT COUNT(*) AS value FROM copy_positions").fetchone()["value"]
+    assert execution_count == 1
+    assert strategy_window_count == 1
+    assert daily_pnl_count == 1
+    assert copy_position_count == 1
+    db.close()
 
 
 def test_reset_runtime_state_clears_visible_snapshot_and_seeds_clean_runtime_state(tmp_path: Path) -> None:
