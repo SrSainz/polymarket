@@ -3565,12 +3565,15 @@ class BTC5mStrategyService:
         fair_down: float,
         delta_bps: float,
     ) -> tuple[bool, str]:
+        mode_text = str(mode or "").strip().lower()
         if not self._arb_is_live_like_mode(mode=mode):
             return False, ""
         if bracket_phase != "abrir":
             return False, ""
         if current_up_notional > 0 or current_down_notional > 0:
             return False, ""
+        if mode_text == "live":
+            return True, "cheap-side bloqueado en live: live opera bracket-only; la primera entrada debe abrir dos patas"
 
         if seconds_into_window > _ARB_EARLY_MID_END:
             return True, "cheap-side bloqueado en live-like: ventana demasiado avanzada para abrir solo una pata"

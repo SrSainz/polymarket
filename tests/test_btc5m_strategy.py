@@ -995,7 +995,7 @@ def test_cleanup_stale_pending_live_orders_removes_expired_window_and_keeps_curr
     db.close()
 
 
-def test_live_blocks_flat_single_side_open_when_second_leg_is_not_viable(tmp_path: Path) -> None:
+def test_live_blocks_flat_single_side_open_in_bracket_only_mode_even_if_second_leg_is_not_viable(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     market = {
@@ -1071,7 +1071,7 @@ def test_live_blocks_flat_single_side_open_when_second_leg_is_not_viable(tmp_pat
     )
 
     assert blocked is True
-    assert "segunda pata" in reason
+    assert "live opera bracket-only" in reason
     db.close()
 
 
@@ -1176,7 +1176,7 @@ def test_live_biased_bracket_anchors_on_strong_edge_side_when_ratio_side_is_weak
     db.close()
 
 
-def test_live_allows_strong_flat_cheap_side_open_when_second_leg_is_viable(tmp_path: Path) -> None:
+def test_live_blocks_flat_cheap_side_open_in_bracket_only_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     service = BTC5mStrategyService(
@@ -1193,7 +1193,7 @@ def test_live_allows_strong_flat_cheap_side_open_when_second_leg_is_viable(tmp_p
             strategy_entry_mode="arb_micro",
             live_small_target_capital=97.72,
         ),
-        logger=logging.getLogger("test-btc5m-live-cheap-allow"),
+        logger=logging.getLogger("test-btc5m-live-cheap-block"),
     )
 
     up_outcome = MarketOutcome(
@@ -1238,12 +1238,12 @@ def test_live_allows_strong_flat_cheap_side_open_when_second_leg_is_viable(tmp_p
         delta_bps=-14.0,
     )
 
-    assert blocked is False
-    assert reason == ""
+    assert blocked is True
+    assert "live opera bracket-only" in reason
     db.close()
 
 
-def test_live_flat_cheap_side_probe_uses_single_instruction(tmp_path: Path) -> None:
+def test_live_flat_cheap_side_probe_is_blocked_in_bracket_only_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=35)).isoformat().replace("+00:00", "Z")
@@ -1285,7 +1285,7 @@ def test_live_flat_cheap_side_probe_uses_single_instruction(tmp_path: Path) -> N
             live_small_target_capital=97.72,
             live_btc5m_cycle_budget_usdc=25.0,
         ),
-        logger=logging.getLogger("test-btc5m-live-cheap-single-probe"),
+        logger=logging.getLogger("test-btc5m-live-cheap-single-probe-blocked"),
     )
     spot_context = ArbSpotContext(
         current_price=66710.0,
@@ -1326,11 +1326,8 @@ def test_live_flat_cheap_side_probe_uses_single_instruction(tmp_path: Path) -> N
         carry_window_count=0,
     )
 
-    assert plan is not None
-    assert plan.price_mode == "cheap-side"
-    assert plan.primary_target.label == "Down"
-    assert len(plan.instructions) == 1
-    assert "sonda unica live" in plan.note
+    assert plan is None
+    assert "live opera bracket-only" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -2010,7 +2007,7 @@ def test_cheap_side_selector_accepts_micro_probe_signal_with_positive_net_edge(t
     db.close()
 
 
-def test_live_allows_micro_probe_flat_cheap_side_open_when_second_leg_is_viable(tmp_path: Path) -> None:
+def test_live_blocks_micro_probe_flat_cheap_side_open_in_bracket_only_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     service = BTC5mStrategyService(
@@ -2024,7 +2021,7 @@ def test_live_allows_micro_probe_flat_cheap_side_open_when_second_leg_is_viable(
         daily_summary=SimpleNamespace(send_if_due=lambda: False),
         trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
         settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72, live_btc5m_cycle_budget_usdc=25.0),
-        logger=logging.getLogger("test-btc5m-live-cheap-micro-probe-allow"),
+        logger=logging.getLogger("test-btc5m-live-cheap-micro-probe-block"),
     )
 
     up_outcome = MarketOutcome(
@@ -2069,8 +2066,8 @@ def test_live_allows_micro_probe_flat_cheap_side_open_when_second_leg_is_viable(
         delta_bps=-1.9,
     )
 
-    assert blocked is False
-    assert reason == ""
+    assert blocked is True
+    assert "live opera bracket-only" in reason
     db.close()
 
 
