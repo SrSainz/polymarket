@@ -3226,11 +3226,6 @@ class BTC5mStrategyService:
     ) -> tuple[bool, str]:
         if not self._arb_is_live_like_mode(mode=mode):
             return False, ""
-        if str(mode or "").strip().lower() == "live":
-            return (
-                True,
-                "cheap-side bloqueado en live: la primera entrada debe abrir el bracket con dos patas",
-            )
         if bracket_phase != "abrir":
             return False, ""
         if current_up_notional > 0 or current_down_notional > 0:

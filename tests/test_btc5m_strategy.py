@@ -771,7 +771,7 @@ def test_live_user_trade_without_pending_order_is_recorded_as_observed_activity(
     db.close()
 
 
-def test_live_blocks_flat_single_side_open_even_with_strong_edge(tmp_path: Path) -> None:
+def test_live_blocks_flat_single_side_open_when_second_leg_is_not_viable(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     market = {
@@ -847,7 +847,7 @@ def test_live_blocks_flat_single_side_open_even_with_strong_edge(tmp_path: Path)
     )
 
     assert blocked is True
-    assert "dos patas" in reason
+    assert "segunda pata" in reason
     db.close()
 
 
@@ -952,6 +952,73 @@ def test_live_biased_bracket_anchors_on_strong_edge_side_when_ratio_side_is_weak
     db.close()
 
 
+def test_live_allows_strong_flat_cheap_side_open_when_second_leg_is_viable(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=97.72),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=97.72,
+        ),
+        logger=logging.getLogger("test-btc5m-live-cheap-allow"),
+    )
+
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.44,
+        best_bid=0.43,
+        best_ask_size=150.0,
+        ask_levels=(AskLevel(price=0.44, size=150.0), AskLevel(price=0.45, size=150.0)),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.57,
+        best_bid=0.56,
+        best_ask_size=150.0,
+        ask_levels=(AskLevel(price=0.57, size=150.0), AskLevel(price=0.58, size=150.0)),
+    )
+    signal = ArbSingleSideSignal(
+        target=down_outcome,
+        fair_value=0.67,
+        raw_edge=0.10,
+        net_edge=0.08,
+        edge_source="spot",
+    )
+
+    blocked, reason = service._arb_should_block_flat_single_side_open(  # noqa: SLF001
+        mode="live",
+        bracket_phase="abrir",
+        current_up_notional=0.0,
+        current_down_notional=0.0,
+        signal=signal,
+        pair_sum=1.01,
+        cycle_budget=25.0,
+        cash_balance=97.72,
+        single_budget=8.0,
+        seconds_into_window=35,
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        fair_up=0.55,
+        fair_down=0.67,
+        delta_bps=-14.0,
+    )
+
+    assert blocked is False
+    assert reason == ""
+    db.close()
+
+
 def test_operability_state_prefers_waiting_bracket_over_waiting_edge_for_live_cheap_side_block(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -972,15 +1039,15 @@ def test_operability_state_prefers_waiting_bracket_over_waiting_edge_for_live_ch
     state = service._derive_strategy_operability_state(  # noqa: SLF001
         note=(
             "arb_micro no locked edge: pair sum 1.010 | Up edge 0.00% net -1.67% | "
-            "Down edge 11.28% net 10.03% | cheap-side bloqueado en live: "
-            "la primera entrada debe abrir el bracket con dos patas"
+            "Down edge 11.28% net 10.03% | cheap-side bloqueado en live-like: "
+            "segunda pata Up sin tamano minimo operable en libro"
         ),
         extra_state={},
     )
 
     assert state.state == "waiting_bracket"
     assert state.label == "Esperando bracket"
-    assert "cheap-side bloqueado en live" in state.reason
+    assert "cheap-side bloqueado en live-like" in state.reason
     db.close()
 
 
