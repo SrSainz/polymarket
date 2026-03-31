@@ -2080,6 +2080,14 @@ class BTC5mStrategyService:
                 ratio_gap=ratio_gap_abs,
             )
             if single_levels:
+                live_single_probe = (
+                    str(mode or "").strip().lower() == "live"
+                    and bracket_phase == "abrir"
+                    and current_up_notional <= _ARB_MIN_OPERABLE_BUDGET_SLACK
+                    and current_down_notional <= _ARB_MIN_OPERABLE_BUDGET_SLACK
+                )
+                if live_single_probe:
+                    single_levels = single_levels[:1]
                 instructions = [
                     instruction
                     for idx, level in enumerate(single_levels[:remaining_instruction_capacity], start=1)
@@ -2112,11 +2120,12 @@ class BTC5mStrategyService:
                             up_exposure=projected_up_notional,
                             down_exposure=projected_down_notional,
                         )
+                        live_probe_note = " | sonda unica live" if live_single_probe else ""
                         note = (
                             f"cheap {target.label} ask {target.best_ask:.3f} < fair {fair_value:.3f} | "
                             f"edge {relative_edge * 100:.2f}% net {net_edge * 100:.2f}% | "
                             f"ev {terminal_ev_pct * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
-                            f"{edge_source} | {timing_regime} | niveles {len(single_levels)} | "
+                            f"{edge_source} | {timing_regime}{live_probe_note} | niveles {len(single_levels)} | "
                             f"compras {len(instructions)} | objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
                             f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | fase {bracket_phase}{carry_note}"
                         )
@@ -2205,6 +2214,7 @@ class BTC5mStrategyService:
         if stabilize_plan is not None:
             return self._with_arb_reference_state(stabilize_plan, reference_state)
         unwind_plan = self._build_arb_inventory_unwind_plan(
+            mode=mode,
             market=market,
             up_outcome=up_outcome,
             down_outcome=down_outcome,
@@ -3237,6 +3247,16 @@ class BTC5mStrategyService:
         if mode_text == "shadow":
             return bool(self.settings.config.shadow_live_like_mode)
         return False
+
+    def _arb_has_single_leg_inventory(
+        self,
+        *,
+        up_notional: float,
+        down_notional: float,
+    ) -> bool:
+        up_live = max(float(up_notional), 0.0) > _ARB_MIN_OPERABLE_BUDGET_SLACK
+        down_live = max(float(down_notional), 0.0) > _ARB_MIN_OPERABLE_BUDGET_SLACK
+        return up_live ^ down_live
 
     def _arb_live_like_second_leg_viability(
         self,
@@ -4313,6 +4333,7 @@ class BTC5mStrategyService:
     def _build_arb_inventory_unwind_plan(
         self,
         *,
+        mode: str = "paper",
         market: dict,
         up_outcome: MarketOutcome,
         down_outcome: MarketOutcome,
@@ -4330,6 +4351,11 @@ class BTC5mStrategyService:
         carry_note: str = "",
     ) -> StrategyPlan | None:
         if bracket_phase != "redistribuir" or spot_context is None:
+            return None
+        if str(mode or "").strip().lower() == "live" and self._arb_has_single_leg_inventory(
+            up_notional=current_up_notional,
+            down_notional=current_down_notional,
+        ):
             return None
 
         desired_down_ratio = max(1.0 - desired_up_ratio, 0.0)
