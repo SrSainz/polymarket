@@ -144,6 +144,9 @@ _ARB_STABILIZE_CATCHUP_BUDGET_FRACTION = 0.14
 _ARB_STABILIZE_RESIDUAL_MAX_CARRY_FRACTION = 0.75
 _ARB_STABILIZE_RESIDUAL_MAX_TARGET_FRACTION = 0.25
 _ARB_LIVE_REBALANCE_EXTREME_LEG_PRICE = 0.90
+_ARB_LIVE_SINGLE_LEG_EXIT_SECONDS_REMAINING = 90
+_ARB_LIVE_SINGLE_LEG_EXIT_CONTRADICTION_DELTA_BPS = 4.0
+_ARB_LIVE_SINGLE_LEG_EXIT_CONTRADICTION_MIN_FAIR = 0.68
 _ARB_MIN_OPERABLE_BUDGET_SLACK = 0.05
 _ARB_CARRY_BUDGET_FLOOR_RATIO = 0.80
 _ARB_OPENING_BUDGET_FLOOR_RATIO = 0.92
@@ -1798,6 +1801,25 @@ class BTC5mStrategyService:
 
         terminal_ev_block_reason = ""
         late_directional_pair_block = directional_target is not None and pair_sum >= 0.998
+        single_leg_exit_plan = self._build_arb_live_single_leg_probe_exit_plan(
+            mode=mode,
+            market=market,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+            pair_sum=pair_sum,
+            fair_up=fair_up,
+            fair_down=fair_down,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_up_ratio,
+            timing_regime=timing_regime,
+            current_up_notional=current_up_notional,
+            current_down_notional=current_down_notional,
+            spot_context=spot_context,
+            bracket_phase=bracket_phase,
+            carry_note=carry_note,
+        )
+        if single_leg_exit_plan is not None:
+            return self._with_arb_reference_state(single_leg_exit_plan, reference_state)
         if pair_sum <= pair_sum_cap and not late_directional_pair_block:
             overlay_reserve_fraction = 0.0
             if _ARB_ENABLE_PAIR_OVERLAY and abs(desired_up_ratio - 0.5) >= _ARB_REBALANCE_RATIO_TRIGGER:
@@ -3320,6 +3342,143 @@ class BTC5mStrategyService:
         if str(mode or "").strip().lower() != "live":
             return False
         return max(float(up_outcome.best_ask), float(down_outcome.best_ask)) >= _ARB_LIVE_REBALANCE_EXTREME_LEG_PRICE
+
+    def _build_arb_live_single_leg_probe_exit_plan(
+        self,
+        *,
+        mode: str,
+        market: dict,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+        pair_sum: float,
+        fair_up: float,
+        fair_down: float,
+        desired_up_ratio: float,
+        current_up_ratio: float,
+        timing_regime: str,
+        current_up_notional: float,
+        current_down_notional: float,
+        spot_context: ArbSpotContext | None,
+        bracket_phase: str,
+        carry_note: str = "",
+    ) -> StrategyPlan | None:
+        if str(mode or "").strip().lower() != "live" or spot_context is None:
+            return None
+        if not self._arb_has_single_leg_inventory(
+            up_notional=current_up_notional,
+            down_notional=current_down_notional,
+        ):
+            return None
+
+        condition_id = str(market.get("conditionId") or "").strip()
+        if not condition_id:
+            return None
+        for pending in self._pending_live_orders():
+            if str(pending.get("condition_id") or "").strip() != condition_id:
+                continue
+            if self._pending_live_order_remaining_notional(pending) <= 0:
+                continue
+            return None
+
+        held_target = up_outcome if current_up_notional > current_down_notional else down_outcome
+        held_fair = fair_up if held_target.asset_id == up_outcome.asset_id else fair_down
+        held_position = self.db.get_copy_position(held_target.asset_id)
+        if held_position is None:
+            return None
+        if str(held_position["condition_id"] or "").strip() != condition_id:
+            return None
+
+        current_size = float(held_position["size"] or 0.0)
+        avg_price = float(held_position["avg_price"] or 0.0)
+        if current_size <= 0 or held_target.best_bid <= 0:
+            return None
+
+        seconds_remaining = max(300 - self._seconds_into_window(market), 0)
+        holding_up = held_target.asset_id == up_outcome.asset_id
+        contradiction = False
+        if holding_up:
+            contradiction = (
+                spot_context.delta_bps <= -_ARB_LIVE_SINGLE_LEG_EXIT_CONTRADICTION_DELTA_BPS
+                and spot_context.fair_down >= _ARB_LIVE_SINGLE_LEG_EXIT_CONTRADICTION_MIN_FAIR
+            )
+        else:
+            contradiction = (
+                spot_context.delta_bps >= _ARB_LIVE_SINGLE_LEG_EXIT_CONTRADICTION_DELTA_BPS
+                and spot_context.fair_up >= _ARB_LIVE_SINGLE_LEG_EXIT_CONTRADICTION_MIN_FAIR
+            )
+        late_timeout = seconds_remaining <= _ARB_LIVE_SINGLE_LEG_EXIT_SECONDS_REMAINING
+        if not contradiction and not late_timeout:
+            return None
+
+        instruction = self._build_arb_sell_instruction(
+            market=market,
+            target=held_target,
+            shares=current_size,
+            price=held_target.best_bid,
+            pair_sum=pair_sum,
+            tranche_index=1,
+            reason_prefix="single_leg_probe_exit",
+        )
+        if instruction is None:
+            return None
+
+        projected_up_notional = current_up_notional
+        projected_down_notional = current_down_notional
+        if held_target.asset_id == up_outcome.asset_id:
+            projected_up_notional = max(current_up_notional - instruction.notional, 0.0)
+        else:
+            projected_down_notional = max(current_down_notional - instruction.notional, 0.0)
+        current_ratio_after = self._arb_current_up_ratio(
+            up_exposure=projected_up_notional,
+            down_exposure=projected_down_notional,
+        )
+        reason_bits: list[str] = []
+        if contradiction:
+            reason_bits.append("contradiccion spot")
+        if late_timeout:
+            reason_bits.append("sonda sin cubrir en tramo final")
+        pnl_pct = ((held_target.best_bid / avg_price) - 1.0) if avg_price > 0 else 0.0
+        note = (
+            f"cerrar sonda {held_target.label} bid {held_target.best_bid:.3f} vs avg {avg_price:.3f} | "
+            f"mtm {pnl_pct * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
+            f"{', '.join(reason_bits)} | {timing_regime} | ventas 1 | "
+            f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=max(1.0 - desired_up_ratio, 0.0))} | "
+            f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
+            f"fase {bracket_phase}{carry_note}"
+        )
+        return StrategyPlan(
+            instructions=(instruction,),
+            note=note,
+            primary_target=held_target,
+            secondary_target=None,
+            trigger=held_target,
+            window_seconds=self._seconds_into_window(market),
+            cycle_budget=round(instruction.notional, 6),
+            market_bias=f"Cerrar sonda {held_target.label}",
+            timing_regime=timing_regime,
+            price_mode="single-leg-defensive-exit",
+            primary_ratio=1.0,
+            primary_notional=instruction.notional,
+            secondary_notional=0.0,
+            replenishment_count=0,
+            trigger_value=held_target.best_bid,
+            pair_sum=pair_sum,
+            edge_pct=max(pnl_pct, 0.0),
+            fair_value=held_fair,
+            spot_price=spot_context.current_price,
+            spot_anchor=spot_context.anchor_price,
+            spot_delta_bps=spot_context.delta_bps,
+            spot_fair_up=spot_context.fair_up,
+            spot_fair_down=spot_context.fair_down,
+            spot_source=spot_context.source,
+            spot_price_mode=spot_context.price_mode,
+            spot_age_ms=spot_context.age_ms,
+            spot_binance_price=spot_context.binance_price or 0.0,
+            spot_chainlink_price=spot_context.chainlink_price or 0.0,
+            desired_up_ratio=desired_up_ratio,
+            current_up_ratio=current_ratio_after,
+            bracket_phase=bracket_phase,
+        )
 
     def _arb_live_like_second_leg_viability(
         self,
