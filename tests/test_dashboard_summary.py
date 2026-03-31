@@ -279,6 +279,113 @@ def test_executions_payload_includes_pending_live_orders_before_fills(tmp_path: 
     assert payload["items"][1]["pending_live_order"] is False
 
 
+def test_summary_payload_exposes_observed_live_trades(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("live_cash_balance", "97.72")
+    db.set_bot_state("live_cash_allowance", "97.72")
+    db.set_bot_state("live_total_capital", "97.72")
+    db.set_bot_state(
+        "live_observed_activity:manual-order:trade-7",
+        json.dumps(
+            {
+                "order_id": "manual-order",
+                "trade_id": "trade-7",
+                "action": "close",
+                "side": "sell",
+                "asset": "asset-live-7",
+                "condition_id": "cond-live-7",
+                "size": 5.0,
+                "price": 0.35,
+                "notional": 1.75,
+                "source_wallet": "live-user-feed",
+                "title": "BTC Up or Down",
+                "slug": "btc-updown-5m-1774911000",
+                "outcome": "Down",
+                "status": "confirmed",
+                "observed_at": 1774911002,
+                "notes": "movimiento live observado fuera del bot",
+                "observed_live_activity": True,
+            },
+            separators=(",", ":"),
+        ),
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="live",
+        live_trading_enabled=True,
+    )
+
+    assert summary["live_observed_trades_count"] == 1
+    assert summary["live_observed_trades_total_notional"] == 1.75
+    assert summary["last_live_activity_ts"] == 1774911002
+    assert summary["live_observed_trades"][0]["trade_id"] == "trade-7"
+    assert summary["live_observed_trades"][0]["observed_live_activity"] is True
+
+
+def test_executions_payload_includes_observed_live_trades(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.record_execution(
+        result=ExecutionResult(
+            mode="live",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="asset-filled",
+            size=5.0,
+            price=0.4,
+            notional=2.0,
+            pnl_delta=0.0,
+            message="filled",
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-filled",
+        source_wallet="0xsrc",
+        source_signal_id=11,
+        notes="fill real",
+    )
+    db.set_bot_state(
+        "live_observed_activity:manual-order:trade-8",
+        json.dumps(
+            {
+                "order_id": "manual-order",
+                "trade_id": "trade-8",
+                "action": "close",
+                "side": "sell",
+                "asset": "asset-observed",
+                "condition_id": "cond-observed",
+                "size": 4.0,
+                "price": 0.36,
+                "notional": 1.44,
+                "source_wallet": "live-user-feed",
+                "title": "BTC Up or Down",
+                "slug": "btc-updown-5m-1774911300",
+                "outcome": "Down",
+                "status": "confirmed",
+                "observed_at": int(time.time()) + 90,
+                "notes": "movimiento live observado fuera del bot",
+                "observed_live_activity": True,
+            },
+            separators=(",", ":"),
+        ),
+    )
+    db.close()
+
+    payload = _executions_payload(db_path, limit=10)
+
+    assert len(payload["items"]) >= 2
+    assert payload["items"][0]["observed_live_activity"] is True
+    assert payload["items"][0]["pending_live_order"] is False
+    assert payload["items"][0]["trade_id"] == "trade-8"
+    assert payload["items"][0]["slug"] == "btc-updown-5m-1774911300"
+    assert payload["items"][1]["observed_live_activity"] is False
+
+
 def test_claimable_positions_snapshot_uses_env_wallet_and_data_api(tmp_path: Path) -> None:
     fake_settings = SimpleNamespace(
         env=SimpleNamespace(

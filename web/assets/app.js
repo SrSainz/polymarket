@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-31-shadow-home11";
+const UI_BUILD = "2026-03-31-shadow-home12";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -2398,6 +2398,7 @@ function paintSummary(summary, items = lastPositions) {
   const lastLiveExecution = Number(summary.last_live_activity_ts || summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
   const pendingLiveOrders = Number(summary?.live_pending_orders_count || 0);
+  const observedLiveTrades = Number(summary?.live_observed_trades_count || 0);
   const backendWarning = backendWarningText();
   const strategySummary = isPublicRuntime()
     ? `Mostrando datos publicos de ${shortWallet(watchedWallet)}. Para ver el bot real necesitas el backend del NAS.`
@@ -2405,7 +2406,7 @@ function paintSummary(summary, items = lastPositions) {
     ? currentMarketExposure > 0
       ? `${windowState.label}. Objetivo ${desiredRatio}, actual ${actualRatio}, restan ${timingInfo.remaining}s. Exposicion ${fmtUsdPlain(currentMarketExposure, 2)} y capital ${fmtUsdPlain(liveEquityEstimate, 2)}.`
       : `${windowState.label}. ${operability.label}. Capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}.`
-    : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}.${pendingLiveOrders > 0 ? ` ${pendingLiveOrders} ${pendingLiveOrders === 1 ? "orden pendiente de confirmacion" : "ordenes pendientes de confirmacion"}.` : ""} ${strategyNoteText}.`;
+    : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}.${pendingLiveOrders > 0 ? ` ${pendingLiveOrders} ${pendingLiveOrders === 1 ? "orden pendiente de confirmacion" : "ordenes pendientes de confirmacion"}.` : ""}${observedLiveTrades > 0 ? ` ${observedLiveTrades} ${observedLiveTrades === 1 ? "movimiento observado fuera del bot" : "movimientos observados fuera del bot"}.` : ""} ${strategyNoteText}.`;
   const incubationText = incubationMeta(summary);
   const researchText = [transitionText, backtestText, datasetText].filter(Boolean).join(". ");
   document.getElementById("systemNotice").textContent = backendWarning
@@ -2940,14 +2941,15 @@ function paintOperationPnl(items) {
   const meta = document.getElementById("opsPnlMeta");
   const latest = (items || []).slice(0, 6);
   const pendingCount = Number(lastSummary?.live_pending_orders_count || 0);
+  const observedCount = Number(lastSummary?.live_observed_trades_count || 0);
   count.textContent = String(latest.length);
 
   if (!latest.length) {
     body.innerHTML =
-      pendingCount > 0
-        ? `<li class="mini-item"><strong>Sin fills todavia</strong><span>${pendingCount} ${pendingCount === 1 ? "orden enviada sigue pendiente de confirmacion" : "ordenes enviadas siguen pendientes de confirmacion"}</span></li>`
+      pendingCount > 0 || observedCount > 0
+        ? `<li class="mini-item"><strong>Sin fills reconciliados todavia</strong><span>${pendingCount > 0 ? `${pendingCount} ${pendingCount === 1 ? "orden enviada pendiente" : "ordenes enviadas pendientes"}` : "sin ordenes pendientes"}${observedCount > 0 ? `${pendingCount > 0 ? " | " : ""}${observedCount} ${observedCount === 1 ? "movimiento observado fuera del bot" : "movimientos observados fuera del bot"}` : ""}</span></li>`
         : `<li class="mini-item"><strong>Sin operaciones</strong><span>todavia no hay ejecuciones</span></li>`;
-    meta.textContent = pendingCount > 0 ? "ordenes live pendientes" : "ultimos movimientos";
+    meta.textContent = pendingCount > 0 || observedCount > 0 ? "actividad live reciente" : "ultimos movimientos";
     return;
   }
 
@@ -2956,10 +2958,21 @@ function paintOperationPnl(items) {
       const delta = Number(item.pnl_delta || 0);
       const notional = Math.abs(Number(item.notional || 0));
       const klass = delta > 0 ? "pnl-pos" : delta < 0 ? "pnl-neg" : "pnl-flat";
+      const marketLabel = item.title || item.slug || item.asset || item.source_wallet || item.mode || "-";
+      const detailBits = [];
+      if (item.outcome) detailBits.push(String(item.outcome));
+      if (item.pending_live_order) {
+        detailBits.push("pendiente");
+      } else if (item.observed_live_activity) {
+        detailBits.push("observado fuera del bot");
+      } else if (item.status) {
+        detailBits.push(String(item.status));
+      }
+      if (item.order_id) detailBits.push(`order ${String(item.order_id).slice(0, 8)}`);
       return `
         <li class="mini-item">
           <strong>${escapeHtml(tsToIso(item.ts))} | ${escapeHtml(item.action || "-")} ${escapeHtml(item.side || "-")}</strong>
-          <span>${escapeHtml(shortSlug(item.notes?.startsWith("vidarx_resolution:") ? item.notes.split(":")[1] : item.slug || item.source_wallet || item.mode || "-"))}</span>
+          <span>${escapeHtml(shortSlug(marketLabel))}${detailBits.length ? ` | ${escapeHtml(detailBits.join(" | "))}` : ""}</span>
           <span>metido ${fmtUsdPlain(notional, 2)}</span>
           <span class="${klass}">resultado ${fmtUsd(delta, 4)}</span>
         </li>
@@ -2970,7 +2983,8 @@ function paintOperationPnl(items) {
   const sum = latest.reduce((acc, item) => acc + Number(item.pnl_delta || 0), 0);
   const invested = latest.reduce((acc, item) => acc + Math.abs(Number(item.notional || 0)), 0);
   const submittedCount = latest.filter((item) => String(item?.status || "").trim().toLowerCase() === "submitted").length;
-  meta.textContent = `ultimos ${latest.length}: metido ${fmtUsdPlain(invested, 2)} | resultado ${fmtUsd(sum, 4)}${submittedCount > 0 ? ` | ${submittedCount} ${submittedCount === 1 ? "pendiente" : "pendientes"}` : ""}`;
+  const observedItemCount = latest.filter((item) => Boolean(item?.observed_live_activity)).length;
+  meta.textContent = `ultimos ${latest.length}: metido ${fmtUsdPlain(invested, 2)} | resultado ${fmtUsd(sum, 4)}${submittedCount > 0 ? ` | ${submittedCount} ${submittedCount === 1 ? "pendiente" : "pendientes"}` : ""}${observedItemCount > 0 ? ` | ${observedItemCount} ${observedItemCount === 1 ? "observado fuera del bot" : "observados fuera del bot"}` : ""}`;
 }
 
 function paintStrategySetups(summary) {
@@ -3148,6 +3162,10 @@ function paintExecutions(items) {
     .map((item) => {
       const delta = Number(item.pnl_delta || 0);
       const pnlClass = delta > 0 ? "pnl-pos" : delta < 0 ? "pnl-neg" : "pnl-flat";
+      const noteBits = [];
+      if (item.title || item.slug) noteBits.push(String(item.title || item.slug || ""));
+      if (item.outcome) noteBits.push(String(item.outcome));
+      if (item.notes) noteBits.push(String(item.notes));
       return `
       <tr>
         <td data-label="Hora UTC">${tsToIso(item.ts)}</td>
@@ -3157,7 +3175,7 @@ function paintExecutions(items) {
         <td data-label="Wallet fuente">${escapeHtml(shortWallet(item.source_wallet || "-"))}</td>
         <td data-label="Monto USDC">${fmtUsd(Math.abs(Number(item.notional || 0)), 2)}</td>
         <td data-label="Resultado USD"><span class="${pnlClass}">${fmtUsd(delta, 4)}</span></td>
-        <td data-label="Notas">${escapeHtml(item.notes || "-")}</td>
+        <td data-label="Notas">${escapeHtml(noteBits.filter(Boolean).join(" | ") || "-")}</td>
       </tr>
     `
     })

@@ -698,6 +698,79 @@ def test_live_user_trade_failure_clears_pending_order_without_mutating_position(
     db.close()
 
 
+def test_live_user_trade_without_pending_order_is_recorded_as_observed_activity(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    db.upsert_copy_position(
+        asset="asset-down",
+        condition_id="cond-1",
+        size=5.0,
+        avg_price=0.28,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Test",
+        slug="btc-updown-5m-test",
+        outcome="Down",
+        category="crypto",
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={"asset-up": {"asks": [{"price": 0.42, "size": 50}], "bids": [{"price": 0.41, "size": 50}]}, "asset-down": {"asks": [{"price": 0.58, "size": 50}], "bids": [{"price": 0.57, "size": 50}]}}),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-live-observed-activity"),
+    )
+
+    service._handle_user_payload(  # noqa: SLF001
+        {
+            "event_type": "trade",
+            "status": "CONFIRMED",
+            "id": "trade-manual",
+            "asset_id": "asset-down",
+            "side": "SELL",
+            "maker_orders": [
+                {
+                    "order_id": "manual-order",
+                    "matched_amount": "5",
+                    "price": "0.35",
+                }
+            ],
+        }
+    )
+
+    observed_raw = db.get_bot_state("live_observed_activity:manual-order:trade-manual")
+    position = db.get_copy_position("asset-down")
+
+    assert observed_raw is not None
+    assert position is not None
+    assert float(position["size"]) == 5.0
+    assert db.get_recent_executions(limit=5) == []
+    assert db.get_bot_state("live_last_observed_trade_id") == "trade-manual"
+
+    observed = json.loads(observed_raw)
+    assert observed["action"] == "close"
+    assert observed["side"] == "sell"
+    assert observed["title"] == "Bitcoin Up or Down - Test"
+    assert observed["outcome"] == "Down"
+    assert "fuera del bot" in observed["notes"]
+    db.close()
+
+
 def test_shadow_ignores_live_control_even_in_live_like_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

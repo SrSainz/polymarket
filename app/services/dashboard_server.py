@@ -42,7 +42,7 @@ _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _CLAIMABLE_CACHE: dict[str, tuple[dict, float]] = {}
 _CLAIMABLE_CACHE_TTL_SECONDS = 30.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-31-shadow-home11"
+_DASHBOARD_BUILD = "2026-03-31-shadow-home12"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -1095,11 +1095,87 @@ def _pending_live_orders_snapshot(conn: sqlite3.Connection) -> dict[str, object]
             "execution_profile": execution_profile,
             "response_status": response_status,
             "pending_live_order": True,
+            "observed_live_activity": False,
         }
         items.append(item)
         latest_ts = max(latest_ts, submitted_at)
         total_notional += abs(notional)
     items.sort(key=lambda item: (int(item.get("ts") or 0), str(item.get("order_id") or "")), reverse=True)
+    return {
+        "count": len(items),
+        "latest_ts": latest_ts,
+        "total_notional": total_notional,
+        "items": items,
+    }
+
+
+def _observed_live_trades_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
+    items: list[dict[str, object]] = []
+    latest_ts = 0
+    total_notional = 0.0
+    now_ts = int(time.time())
+    for row in _bot_state_rows_by_prefix(conn, "live_observed_activity:"):
+        raw_value = row["value"]
+        try:
+            payload = json.loads(raw_value)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        observed_at_raw = payload.get("observed_at") or payload.get("ts")
+        try:
+            observed_at = int(float(observed_at_raw or 0))
+        except (TypeError, ValueError):
+            observed_at = 0
+        if observed_at <= 0:
+            observed_at = now_ts
+        try:
+            source_signal_id = int(float(payload.get("source_signal_id") or 0))
+        except (TypeError, ValueError):
+            source_signal_id = 0
+        try:
+            size = float(payload.get("size") or 0.0)
+        except (TypeError, ValueError):
+            size = 0.0
+        try:
+            price = float(payload.get("price") or 0.0)
+        except (TypeError, ValueError):
+            price = 0.0
+        try:
+            notional = float(payload.get("notional") or 0.0)
+        except (TypeError, ValueError):
+            notional = 0.0
+        item = {
+            "id": -1,
+            "ts": observed_at,
+            "mode": "live",
+            "status": str(payload.get("status") or "confirmed").strip().lower() or "confirmed",
+            "action": str(payload.get("action") or "observed"),
+            "side": str(payload.get("side") or ""),
+            "asset": str(payload.get("asset") or ""),
+            "condition_id": str(payload.get("condition_id") or ""),
+            "size": size,
+            "price": price,
+            "notional": notional,
+            "source_wallet": str(payload.get("source_wallet") or "live-user-feed"),
+            "source_signal_id": source_signal_id,
+            "strategy_variant": str(payload.get("strategy_variant") or ""),
+            "notes": str(payload.get("notes") or "movimiento live observado fuera del bot"),
+            "pnl_delta": 0.0,
+            "slug": str(payload.get("slug") or ""),
+            "title": str(payload.get("title") or ""),
+            "outcome": str(payload.get("outcome") or ""),
+            "order_id": str(payload.get("order_id") or ""),
+            "trade_id": str(payload.get("trade_id") or ""),
+            "execution_profile": str(payload.get("execution_profile") or ""),
+            "response_status": "",
+            "pending_live_order": False,
+            "observed_live_activity": True,
+        }
+        items.append(item)
+        latest_ts = max(latest_ts, observed_at)
+        total_notional += abs(notional)
+    items.sort(key=lambda item: (int(item.get("ts") or 0), str(item.get("trade_id") or item.get("order_id") or "")), reverse=True)
     return {
         "count": len(items),
         "latest_ts": latest_ts,
@@ -1396,6 +1472,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
     research_root = research_root_from_db(db_path)
     with _connect(db_path) as conn:
         pending_live_orders = _pending_live_orders_snapshot(conn)
+        observed_live_trades = _observed_live_trades_snapshot(conn)
         open_positions = _single_float(conn, "SELECT COUNT(*) AS value FROM copy_positions")
         exposure = _single_float(conn, "SELECT COALESCE(SUM(ABS(size * avg_price)), 0) AS value FROM copy_positions")
         realized_pnl = _single_float(conn, "SELECT COALESCE(SUM(pnl), 0) AS value FROM daily_pnl")
@@ -1720,7 +1797,11 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         live_cash_allowance=live_cash_allowance,
     )
     live_equity_estimate = live_cash_balance + exposure_mark
-    last_live_activity_ts = max(int(last_live_execution_ts), int(pending_live_orders.get("latest_ts") or 0))
+    last_live_activity_ts = max(
+        int(last_live_execution_ts),
+        int(pending_live_orders.get("latest_ts") or 0),
+        int(observed_live_trades.get("latest_ts") or 0),
+    )
     current_market_group = market_groups.get(strategy_market_slug) if strategy_market_slug else None
     if current_market_group is None and strategy_market_title:
         current_market_group = next(
@@ -1818,6 +1899,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "live_pending_orders_count": int(pending_live_orders.get("count") or 0),
         "live_pending_orders_total_notional": round(float(pending_live_orders.get("total_notional") or 0.0), 4),
         "live_pending_orders": pending_live_orders.get("items") if isinstance(pending_live_orders.get("items"), list) else [],
+        "live_observed_trades_count": int(observed_live_trades.get("count") or 0),
+        "live_observed_trades_total_notional": round(float(observed_live_trades.get("total_notional") or 0.0), 4),
+        "live_observed_trades": observed_live_trades.get("items") if isinstance(observed_live_trades.get("items"), list) else [],
         "live_cash_balance": round(live_cash_balance, 4),
         "live_cash_allowance": round(live_cash_allowance, 4),
         "live_total_capital": round(live_total_capital, 4),
@@ -2006,6 +2090,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "live_total_capital": "bot_state.live_total_capital",
             "live_available_to_trade": "min(bot_state.live_cash_balance, bot_state.live_cash_allowance); si allowance<=0 usa balance",
             "live_equity_estimate": "live_cash_balance + exposure_mark (caja + mark-to-market de copy_positions)",
+            "live_pending_orders_count": "ordenes lanzadas por el bot y aun pendientes de confirmacion segun bot_state live_pending_order:*",
+            "live_observed_trades_count": "movimientos confirmados vistos en el user feed que no casaron con una orden pendiente del bot; sirven para visibilidad y auditoria",
             "claimable_usdc_estimate": "suma del currentValue o size*curPrice de posiciones redeemable devueltas por /positions del Data API para POLYMARKET_FUNDER o BOT_WALLET_ADDRESS",
             "realized_pnl": "SUM(daily_pnl.pnl)",
             "unrealized_pnl": "mark-to-market de copy_positions usando midpoint del libro; si no hay midpoint usa avg_price",
@@ -2226,6 +2312,7 @@ def _positions_payload(db_path: Path, *, clob_host: str) -> dict:
 def _executions_payload(db_path: Path, limit: int) -> dict:
     with _connect(db_path) as conn:
         pending_live_orders = _pending_live_orders_snapshot(conn)
+        observed_live_trades = _observed_live_trades_snapshot(conn)
         rows = conn.execute(
             """
             SELECT id, ts, mode, status, action, side, asset, condition_id, size, price, notional,
@@ -2243,6 +2330,11 @@ def _executions_payload(db_path: Path, limit: int) -> dict:
         pending_row = dict(item)
         pending_row["id"] = -1000000 - index
         items.append(pending_row)
+    observed_items = observed_live_trades.get("items") if isinstance(observed_live_trades.get("items"), list) else []
+    for index, item in enumerate(observed_items):
+        observed_row = dict(item)
+        observed_row["id"] = -1500000 - index
+        items.append(observed_row)
     for row in rows:
         items.append(
             {
@@ -2266,12 +2358,13 @@ def _executions_payload(db_path: Path, limit: int) -> dict:
                 "title": "",
                 "outcome": "",
                 "pending_live_order": False,
+                "observed_live_activity": False,
             }
         )
     items.sort(
         key=lambda item: (
             int(item.get("ts") or 0),
-            1 if bool(item.get("pending_live_order")) else 0,
+            2 if bool(item.get("pending_live_order")) else 1 if bool(item.get("observed_live_activity")) else 0,
             int(item.get("id") or 0),
         ),
         reverse=True,

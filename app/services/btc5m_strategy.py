@@ -6159,10 +6159,27 @@ class BTC5mStrategyService:
             status = str(trade.get("status") or "").strip().lower()
             size = float(trade.get("size") or 0.0)
             price = float(trade.get("price") or 0.0)
-            if not order_id:
-                continue
-            pending = self._load_pending_live_order(order_id)
+            synthetic_trade_id = trade_id or f"{str(trade.get('asset') or trade.get('condition_id') or 'external').strip()}:{size:.8f}:{price:.8f}"
+            dedupe_key = self._processed_live_trade_key(order_id=order_id or "external", trade_id=synthetic_trade_id)
+            pending = self._load_pending_live_order(order_id) if order_id else None
             if pending is None:
+                if status not in {"confirmed"}:
+                    continue
+                if size <= 0 or price <= 0:
+                    continue
+                if self.db.get_bot_state(dedupe_key) == "1":
+                    continue
+                self._record_observed_live_trade(
+                    trade=trade,
+                    payload=payload,
+                    order_id=order_id,
+                    trade_id=synthetic_trade_id,
+                    status=status,
+                    size=size,
+                    price=price,
+                )
+                self.db.set_bot_state(dedupe_key, "1")
+                self.db.set_bot_state("live_last_observed_trade_id", trade_id or order_id or synthetic_trade_id)
                 continue
             if status in {"failed", "rejected", "cancelled", "canceled", "expired"}:
                 self.db.delete_bot_state(self._pending_live_order_key(order_id))
@@ -6172,7 +6189,6 @@ class BTC5mStrategyService:
                 continue
             if size <= 0 or price <= 0:
                 continue
-            dedupe_key = self._processed_live_trade_key(order_id=order_id, trade_id=trade_id or f"{size:.8f}:{price:.8f}")
             if self.db.get_bot_state(dedupe_key) == "1":
                 continue
             instruction = self._instruction_from_pending_live_order(pending)
@@ -6233,6 +6249,34 @@ class BTC5mStrategyService:
                         ),
                         "price": _safe_float(row.get("price") or row.get("avg_price") or payload.get("price")),
                         "status": status,
+                        "asset": str(
+                            row.get("asset_id")
+                            or row.get("asset")
+                            or row.get("token_id")
+                            or payload.get("asset_id")
+                            or payload.get("asset")
+                            or payload.get("token_id")
+                            or ""
+                        ).strip(),
+                        "side": str(
+                            row.get("side")
+                            or payload.get("side")
+                            or payload.get("aggressor_side")
+                            or payload.get("taker_side")
+                            or ""
+                        ).strip().lower(),
+                        "condition_id": str(row.get("condition_id") or payload.get("condition_id") or payload.get("market") or "").strip(),
+                        "slug": str(row.get("slug") or payload.get("slug") or "").strip(),
+                        "title": str(row.get("title") or row.get("question") or payload.get("title") or payload.get("question") or "").strip(),
+                        "outcome": str(row.get("outcome") or payload.get("outcome") or "").strip(),
+                        "timestamp": int(
+                            _safe_float(
+                                row.get("timestamp")
+                                or payload.get("timestamp")
+                                or payload.get("match_time")
+                                or payload.get("created_at")
+                            )
+                        ),
                     }
                 )
         if rows:
@@ -6246,16 +6290,22 @@ class BTC5mStrategyService:
             or payload.get("size")
         )
         price = _safe_float(payload.get("price") or payload.get("avg_price") or payload.get("average_price"))
-        return [
-            {
-                "order_id": order_id,
-                "trade_id": trade_id,
-                "size": size,
-                "price": price,
-                "status": status,
-            }
-            for order_id in order_ids
-        ]
+        row_template = {
+            "trade_id": trade_id,
+            "size": size,
+            "price": price,
+            "status": status,
+            "asset": str(payload.get("asset_id") or payload.get("asset") or payload.get("token_id") or "").strip(),
+            "side": str(payload.get("side") or payload.get("aggressor_side") or payload.get("taker_side") or "").strip().lower(),
+            "condition_id": str(payload.get("condition_id") or payload.get("market") or "").strip(),
+            "slug": str(payload.get("slug") or "").strip(),
+            "title": str(payload.get("title") or payload.get("question") or "").strip(),
+            "outcome": str(payload.get("outcome") or "").strip(),
+            "timestamp": int(_safe_float(payload.get("timestamp") or payload.get("match_time") or payload.get("created_at"))),
+        }
+        if not order_ids:
+            return [{"order_id": "", **row_template}]
+        return [{"order_id": order_id, **row_template} for order_id in order_ids]
 
     def _live_user_payload_order_ids(self, payload: dict[str, object]) -> list[str]:
         values = [
@@ -6278,6 +6328,11 @@ class BTC5mStrategyService:
     def _processed_live_trade_key(self, *, order_id: str, trade_id: str) -> str:
         return f"live_processed_trade:{str(order_id or '').strip()}:{str(trade_id or '').strip()}"
 
+    def _observed_live_activity_key(self, *, order_id: str, trade_id: str) -> str:
+        safe_order_id = str(order_id or "external").strip() or "external"
+        safe_trade_id = str(trade_id or "unknown").strip() or "unknown"
+        return f"live_observed_activity:{safe_order_id}:{safe_trade_id}"
+
     def _load_pending_live_order(self, order_id: str) -> dict[str, object] | None:
         raw = self.db.get_bot_state(self._pending_live_order_key(order_id))
         if not raw:
@@ -6287,6 +6342,101 @@ class BTC5mStrategyService:
         except json.JSONDecodeError:
             return None
         return payload if isinstance(payload, dict) else None
+
+    def _record_observed_live_trade(
+        self,
+        *,
+        trade: dict[str, object],
+        payload: dict[str, object],
+        order_id: str,
+        trade_id: str,
+        status: str,
+        size: float,
+        price: float,
+    ) -> None:
+        asset = str(
+            trade.get("asset")
+            or payload.get("asset_id")
+            or payload.get("asset")
+            or payload.get("token_id")
+            or ""
+        ).strip()
+        existing = self.db.get_copy_position(asset) if asset else None
+        condition_id = str(trade.get("condition_id") or payload.get("condition_id") or payload.get("market") or "").strip()
+        title = str(trade.get("title") or trade.get("question") or payload.get("title") or payload.get("question") or "").strip()
+        slug = str(trade.get("slug") or payload.get("slug") or "").strip()
+        outcome = str(trade.get("outcome") or payload.get("outcome") or "").strip()
+        category = str(payload.get("category") or trade.get("category") or "crypto").strip() or "crypto"
+        if existing is not None:
+            condition_id = condition_id or str(existing["condition_id"] or "")
+            title = title or str(existing["title"] or "")
+            slug = slug or str(existing["slug"] or "")
+            outcome = outcome or str(existing["outcome"] or "")
+            category = category or str(existing["category"] or "crypto")
+        side = str(
+            trade.get("side")
+            or payload.get("side")
+            or payload.get("aggressor_side")
+            or payload.get("taker_side")
+            or ""
+        ).strip().lower()
+        if side not in {"buy", "sell"}:
+            side = "unknown"
+        action = "observed"
+        existing_size = float(existing["size"] or 0.0) if existing is not None else 0.0
+        if side == "buy":
+            action = SignalAction.ADD.value if existing_size > 1e-9 else SignalAction.OPEN.value
+        elif side == "sell":
+            action = SignalAction.CLOSE.value if existing_size > 1e-9 and size >= existing_size - 1e-9 else "reduce"
+        observed_at = int(
+            _safe_float(
+                trade.get("timestamp")
+                or payload.get("timestamp")
+                or payload.get("match_time")
+                or payload.get("created_at")
+            )
+        )
+        if observed_at <= 0:
+            observed_at = int(time.time())
+        note_parts = [
+            "movimiento live observado fuera del bot",
+            "no reconciliado al ledger interno",
+        ]
+        if status:
+            note_parts.append(f"estado={status}")
+        if side != "unknown":
+            note_parts.append(f"side={side}")
+        if order_id:
+            note_parts.append(f"order_id={order_id}")
+        if trade_id:
+            note_parts.append(f"trade_id={trade_id}")
+        if asset:
+            note_parts.append(f"asset={asset}")
+        observed_payload = {
+            "order_id": order_id,
+            "trade_id": trade_id,
+            "action": action,
+            "side": side,
+            "asset": asset,
+            "condition_id": condition_id,
+            "size": float(size or 0.0),
+            "price": float(price or 0.0),
+            "notional": float(size or 0.0) * float(price or 0.0),
+            "source_wallet": "live-user-feed",
+            "source_signal_id": 0,
+            "title": title,
+            "slug": slug,
+            "outcome": outcome,
+            "category": category,
+            "status": status,
+            "observed_at": observed_at,
+            "notes": " | ".join(note_parts),
+            "observed_live_activity": True,
+        }
+        self.db.set_bot_state(
+            self._observed_live_activity_key(order_id=order_id, trade_id=trade_id),
+            json.dumps(observed_payload, separators=(",", ":"), sort_keys=True),
+        )
 
     def _instruction_from_pending_live_order(self, pending: dict[str, object]) -> CopyInstruction:
         return CopyInstruction(
