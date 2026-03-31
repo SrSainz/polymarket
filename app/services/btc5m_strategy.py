@@ -625,6 +625,13 @@ class BTC5mStrategyService:
             operating_bankroll=operating_bankroll,
             reserved_profit=reserved_profit,
         )
+        self._record_arb_budget_snapshot(
+            mode=mode,
+            cash_balance=cash_balance,
+            effective_bankroll=operating_bankroll,
+            live_total_capital=live_total_capital,
+            current_total_exposure=total_exposure,
+        )
         ledger_allowed, ledger_note = self._position_ledger_can_run(mode=mode)
         if not ledger_allowed:
             stats["blocked"] += 1
@@ -2309,6 +2316,46 @@ class BTC5mStrategyService:
         desired = max(desired, min_pair_budget)
         desired = min(desired, cash_balance)
         return _round_down(desired, "0.01")
+
+    def _record_arb_budget_snapshot(
+        self,
+        *,
+        mode: str,
+        cash_balance: float,
+        effective_bankroll: float,
+        live_total_capital: float,
+        current_total_exposure: float,
+        current_market_exposure: float = 0.0,
+    ) -> None:
+        market_cap = self._arb_market_exposure_cap(
+            mode=mode,
+            effective_bankroll=effective_bankroll,
+            live_total_capital=live_total_capital,
+        )
+        total_cap = self._arb_total_exposure_cap(
+            mode=mode,
+            effective_bankroll=effective_bankroll,
+            live_total_capital=live_total_capital,
+        )
+        caps_mode = self._arb_exposure_cap_mode(
+            mode=mode,
+            effective_bankroll=effective_bankroll,
+            live_total_capital=live_total_capital,
+        )
+        market_cap_remaining = max(market_cap - max(current_market_exposure, 0.0), 0.0)
+        total_cap_remaining = max(total_cap - max(current_total_exposure, 0.0), 0.0)
+        effective_budget_ceiling = min(market_cap_remaining, total_cap_remaining, max(cash_balance, 0.0))
+
+        self.db.set_bot_state("strategy_market_exposure_cap", f"{market_cap:.6f}")
+        self.db.set_bot_state("strategy_total_exposure_cap", f"{total_cap:.6f}")
+        self.db.set_bot_state("strategy_market_exposure_cap_pct", f"{_ARB_MAX_MARKET_EXPOSURE_FRACTION:.6f}")
+        self.db.set_bot_state("strategy_total_exposure_cap_pct", f"{_ARB_MAX_TOTAL_EXPOSURE_FRACTION:.6f}")
+        self.db.set_bot_state("strategy_exposure_cap_mode", caps_mode)
+        self.db.set_bot_state("strategy_current_market_exposure", f"{max(current_market_exposure, 0.0):.6f}")
+        self.db.set_bot_state("strategy_market_exposure_remaining", f"{market_cap_remaining:.6f}")
+        self.db.set_bot_state("strategy_total_exposure_remaining", f"{total_cap_remaining:.6f}")
+        self.db.set_bot_state("strategy_cash_available_for_cycle", f"{max(cash_balance, 0.0):.6f}")
+        self.db.set_bot_state("strategy_budget_effective_ceiling", f"{max(effective_budget_ceiling, 0.0):.6f}")
 
     def _build_arb_pair_levels(
         self,

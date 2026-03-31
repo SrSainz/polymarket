@@ -2917,6 +2917,39 @@ def test_live_exposure_caps_keep_fixed_cycle_until_one_cycle_budget_above_target
     db.close()
 
 
+def test_arb_micro_paused_live_refreshes_fixed_cycle_caps_in_bot_state(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("live_control_state", "paused")
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=114.14),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=97.72,
+            live_btc5m_ticket_allocation_pct=0.25,
+            live_btc5m_cycle_budget_usdc=25.0,
+            live_control_default_state="paused",
+        ),
+        logger=logging.getLogger("test-btc5m-live-paused-cap-snapshot"),
+    )
+
+    stats = service.run(mode="live")
+
+    assert stats["blocked"] == 1
+    assert round(float(db.get_bot_state("strategy_market_exposure_cap") or 0.0), 2) == 25.00
+    assert round(float(db.get_bot_state("strategy_total_exposure_cap") or 0.0), 2) == 31.25
+    assert round(float(db.get_bot_state("strategy_budget_effective_ceiling") or 0.0), 2) == 25.00
+    assert db.get_bot_state("strategy_exposure_cap_mode") == "fixed-cycle"
+    db.close()
+
+
 def test_live_small_drawdown_floor_uses_absolute_max_total_loss(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
