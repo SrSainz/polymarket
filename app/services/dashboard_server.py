@@ -42,7 +42,7 @@ _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _CLAIMABLE_CACHE: dict[str, tuple[dict, float]] = {}
 _CLAIMABLE_CACHE_TTL_SECONDS = 30.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-31-shadow-home13"
+_DASHBOARD_BUILD = "2026-03-31-shadow-home14"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -1022,6 +1022,37 @@ def _bot_state_rows_by_prefix(conn: sqlite3.Connection, prefix: str) -> list[sql
     ).fetchall()
 
 
+def _safe_float(value: object) -> float:
+    if value is None or isinstance(value, bool):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _pending_live_order_remaining_size(payload: dict[str, object]) -> float:
+    original_size = max(_safe_float(payload.get("size")), 0.0)
+    if original_size <= 0:
+        return 0.0
+    reconciled_size = max(_safe_float(payload.get("reconciled_size")), 0.0)
+    return max(original_size - min(reconciled_size, original_size), 0.0)
+
+
+def _pending_live_order_remaining_notional(payload: dict[str, object]) -> float:
+    remaining_size = _pending_live_order_remaining_size(payload)
+    if remaining_size <= 0:
+        return 0.0
+    original_size = max(_safe_float(payload.get("size")), 0.0)
+    original_notional = abs(_safe_float(payload.get("notional")))
+    if original_size > 0 and original_notional > 0:
+        return abs(original_notional * (remaining_size / original_size))
+    price = max(_safe_float(payload.get("price")), 0.0)
+    if price > 0:
+        return abs(remaining_size * price)
+    return 0.0
+
+
 def _pending_live_orders_snapshot(conn: sqlite3.Connection) -> dict[str, object]:
     items: list[dict[str, object]] = []
     latest_ts = 0
@@ -1047,23 +1078,22 @@ def _pending_live_orders_snapshot(conn: sqlite3.Connection) -> dict[str, object]
             source_signal_id = int(float(payload.get("source_signal_id") or 0))
         except (TypeError, ValueError):
             source_signal_id = 0
-        try:
-            size = float(payload.get("size") or 0.0)
-        except (TypeError, ValueError):
-            size = 0.0
+        size = _pending_live_order_remaining_size(payload)
         try:
             price = float(payload.get("price") or 0.0)
         except (TypeError, ValueError):
             price = 0.0
-        try:
-            notional = float(payload.get("notional") or 0.0)
-        except (TypeError, ValueError):
-            notional = 0.0
+        notional = _pending_live_order_remaining_notional(payload)
+        if size <= 0 or notional <= 0:
+            continue
         response_status = str(payload.get("response_status") or "").strip().lower()
         execution_profile = str(payload.get("execution_profile") or "").strip()
         note_parts = ["orden live pendiente"]
         if execution_profile:
             note_parts.append(execution_profile)
+        reconciled_size = max(_safe_float(payload.get("reconciled_size")), 0.0)
+        if reconciled_size > 0:
+            note_parts.append(f"parcial {reconciled_size:.4f}/{max(_safe_float(payload.get('size')), 0.0):.4f}")
         if response_status:
             note_parts.append(f"estado={response_status}")
         if order_id:
@@ -1075,7 +1105,7 @@ def _pending_live_orders_snapshot(conn: sqlite3.Connection) -> dict[str, object]
             "id": -1,
             "ts": submitted_at,
             "mode": "live",
-            "status": "submitted",
+            "status": "partial" if reconciled_size > 0 else "submitted",
             "action": str(payload.get("action") or ""),
             "side": str(payload.get("side") or ""),
             "asset": str(payload.get("asset") or ""),
@@ -1797,6 +1827,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         live_cash_allowance=live_cash_allowance,
     )
     live_equity_estimate = live_cash_balance + exposure_mark
+    pending_live_orders_items = pending_live_orders.get("items") if isinstance(pending_live_orders.get("items"), list) else []
+    pending_total_exposure = float(pending_live_orders.get("total_notional") or 0.0)
     last_live_activity_ts = max(
         int(last_live_execution_ts),
         int(pending_live_orders.get("latest_ts") or 0),
@@ -1814,6 +1846,22 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
     hedge_exposure_actual = 0.0
     current_market_total_exposure = 0.0
     current_market_total_shares = 0.0
+    current_market_pending_exposure = 0.0
+    current_market_pending_shares = 0.0
+    if pending_live_orders_items and (strategy_market_slug or current_market_group is not None):
+        expected_condition_id = str(current_market_group["condition_id"]) if current_market_group is not None else ""
+        for item in pending_live_orders_items:
+            item_slug = str(item.get("slug") or "")
+            item_condition_id = str(item.get("condition_id") or "")
+            matches_market = False
+            if strategy_market_slug and item_slug == strategy_market_slug:
+                matches_market = True
+            elif expected_condition_id and item_condition_id == expected_condition_id:
+                matches_market = True
+            if not matches_market:
+                continue
+            current_market_pending_exposure += abs(float(item.get("notional") or 0.0))
+            current_market_pending_shares += abs(float(item.get("size") or 0.0))
     if current_market_group is not None:
         current_market_live_pnl = float(current_market_group["unrealized_pnl"])
         current_market_total_exposure = float(current_market_group["total_exposure"])
@@ -1849,6 +1897,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         hedge_exposure_actual = float(
             current_market_group["outcomes"].get(strategy_hedge_outcome or "", {}).get("exposure", 0.0)
         )
+    current_market_total_exposure += current_market_pending_exposure
+    current_market_total_shares += current_market_pending_shares
 
     runtime_window_compare = _runtime_compare_payload(
         db_path,
@@ -1899,6 +1949,8 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "live_pending_orders_count": int(pending_live_orders.get("count") or 0),
         "live_pending_orders_total_notional": round(float(pending_live_orders.get("total_notional") or 0.0), 4),
         "live_pending_orders": pending_live_orders.get("items") if isinstance(pending_live_orders.get("items"), list) else [],
+        "strategy_pending_total_exposure": round(pending_total_exposure, 4),
+        "strategy_pending_market_exposure": round(current_market_pending_exposure, 4),
         "live_observed_trades_count": int(observed_live_trades.get("count") or 0),
         "live_observed_trades_total_notional": round(float(observed_live_trades.get("total_notional") or 0.0), 4),
         "live_observed_trades": observed_live_trades.get("items") if isinstance(observed_live_trades.get("items"), list) else [],
@@ -2091,6 +2143,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "live_available_to_trade": "min(bot_state.live_cash_balance, bot_state.live_cash_allowance); si allowance<=0 usa balance",
             "live_equity_estimate": "live_cash_balance + exposure_mark (caja + mark-to-market de copy_positions)",
             "live_pending_orders_count": "ordenes lanzadas por el bot y aun pendientes de confirmacion segun bot_state live_pending_order:*",
+            "live_pending_orders_total_notional": "notional restante reservado por ordenes live pendientes, neto de la parte ya reconciliada por el user feed",
             "live_observed_trades_count": "movimientos confirmados vistos en el user feed que no casaron con una orden pendiente del bot; sirven para visibilidad y auditoria",
             "claimable_usdc_estimate": "suma del currentValue o size*curPrice de posiciones redeemable devueltas por /positions del Data API para POLYMARKET_FUNDER o BOT_WALLET_ADDRESS",
             "realized_pnl": "SUM(daily_pnl.pnl)",
@@ -2101,7 +2154,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "strategy_effective_price_to_beat": "Gamma publica si existe; si no, captura propia Chainlink RTDS ligada al slug actual",
             "strategy_market_event_lag_ms": "edad local del libro mas viejo entre las patas activas del mercado actual",
             "strategy_taker_fee_bps": "fee-rate oficial del CLOB convertido a bps para la ventana actual",
-            "strategy_current_market_total_exposure": "exposicion del slug actual agregada desde copy_positions",
+            "strategy_current_market_total_exposure": "exposicion del slug actual agregada desde copy_positions mas el notional reservado por ordenes live pendientes del mismo mercado",
             "strategy_current_market_live_pnl": "unrealized_pnl del slug actual",
             "strategy_operating_bankroll": "bankroll operativo real que el motor esta reutilizando tras apartar la parte reservada de beneficios",
             "strategy_reserved_profit": "beneficio ya apartado para no re-arriesgarlo; ahora se limita por beneficio neto acumulado y no por suma bruta de ganadoras",

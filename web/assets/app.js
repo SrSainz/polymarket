@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-31-shadow-home13";
+const UI_BUILD = "2026-03-31-shadow-home14";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -2256,10 +2256,16 @@ function paintSummary(summary, items = lastPositions) {
   const liveCashBalance = Number(summary.live_cash_balance ?? 0);
   const liveAvailableToTrade = Number(summary.live_available_to_trade ?? liveCashBalance);
   const liveEquityEstimate = Number(summary.live_equity_estimate ?? summary.live_total_capital ?? liveCashBalance);
+  const pendingLiveOrders = Number(summary?.live_pending_orders_count || 0);
+  const pendingLiveNotional = Number(summary?.live_pending_orders_total_notional || 0);
   const claimable = claimableContext(summary);
   const claimableMeta =
     claimable.usdcEstimate > 0
       ? ` | claim pendiente ${fmtUsdPlain(claimable.usdcEstimate, 2)} en ${claimable.positionsCount} ${claimable.positionsCount === 1 ? "posicion" : "posiciones"}`
+      : "";
+  const pendingMeta =
+    pendingLiveOrders > 0 && pendingLiveNotional > 0
+      ? ` | reservado pendiente ${fmtUsdPlain(pendingLiveNotional, 2)} en ${pendingLiveOrders} ${pendingLiveOrders === 1 ? "orden" : "ordenes"}`
       : "";
   const liveBalanceUpdatedAt = Number(summary.live_balance_updated_at ?? 0);
   const liveSnapshotText = liveBalanceUpdatedAt > 0 ? tsToIso(liveBalanceUpdatedAt) : "sin snapshot";
@@ -2273,8 +2279,8 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("liveCashMeta").textContent = isPublicRuntime()
     ? "requiere backend del NAS para caja, capital y estado reales"
     : liveBalanceStale
-    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo valor conocido${claimableMeta}`
-    : `equity = caja + MTM | operable ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${claimableMeta}`;
+    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo valor conocido${pendingMeta}${claimableMeta}`
+    : `equity = caja + MTM | operable ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${pendingMeta}${claimableMeta}`;
   document.getElementById("heroCashBalance").textContent = isPublicRuntime()
     ? fmtUsdPlain(totalExposure, 2)
     : hasLiveBalanceSnapshot
@@ -2283,8 +2289,8 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("heroCashMeta").textContent = isPublicRuntime()
     ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones visibles | wallet ${shortWallet(watchedWallet)}`
     : liveBalanceStale
-    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo capital operativo conocido${claimableMeta}`
-    : `operable = min(caja, allowance) | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${claimableMeta}`;
+    ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo capital operativo conocido${pendingMeta}${claimableMeta}`
+    : `operable = min(caja, allowance) | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${pendingMeta}${claimableMeta}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
@@ -2403,7 +2409,6 @@ function paintSummary(summary, items = lastPositions) {
   document.getElementById("runtimeBadge").textContent = modeLabel();
   const lastLiveExecution = Number(summary.last_live_activity_ts || summary.last_live_execution_ts || 0);
   const lastLiveText = lastLiveExecution > 0 ? tsToIso(lastLiveExecution) : "sin operaciones live";
-  const pendingLiveOrders = Number(summary?.live_pending_orders_count || 0);
   const observedLiveTrades = Number(summary?.live_observed_trades_count || 0);
   const backendWarning = backendWarningText();
   const strategySummary = isPublicRuntime()
@@ -2412,7 +2417,7 @@ function paintSummary(summary, items = lastPositions) {
     ? currentMarketExposure > 0
       ? `${windowState.label}. Objetivo ${desiredRatio}, actual ${actualRatio}, restan ${timingInfo.remaining}s. Exposicion ${fmtUsdPlain(currentMarketExposure, 2)} y capital ${fmtUsdPlain(liveEquityEstimate, 2)}.`
       : `${windowState.label}. ${operability.label}. Capital ${fmtUsdPlain(liveEquityEstimate, 2)} y caja ${fmtUsdPlain(liveAvailableToTrade, 2)}.`
-    : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}.${pendingLiveOrders > 0 ? ` ${pendingLiveOrders} ${pendingLiveOrders === 1 ? "orden pendiente de confirmacion" : "ordenes pendientes de confirmacion"}.` : ""}${observedLiveTrades > 0 ? ` ${observedLiveTrades} ${observedLiveTrades === 1 ? "movimiento observado fuera del bot" : "movimientos observados fuera del bot"}.` : ""} ${strategyNoteText}.`;
+    : `Modo ${tradingModeLabel(summary)}. Disponible ${fmtUsdPlain(liveAvailableToTrade, 2)}.${pendingLiveOrders > 0 ? ` ${pendingLiveOrders} ${pendingLiveOrders === 1 ? "orden pendiente de confirmacion" : "ordenes pendientes de confirmacion"} reservando ${fmtUsdPlain(pendingLiveNotional, 2)}.` : ""}${observedLiveTrades > 0 ? ` ${observedLiveTrades} ${observedLiveTrades === 1 ? "movimiento observado fuera del bot" : "movimientos observados fuera del bot"}.` : ""} ${strategyNoteText}.`;
   const incubationText = incubationMeta(summary);
   const researchText = [transitionText, backtestText, datasetText].filter(Boolean).join(". ");
   document.getElementById("systemNotice").textContent = backendWarning
@@ -2988,7 +2993,10 @@ function paintOperationPnl(items) {
 
   const sum = latest.reduce((acc, item) => acc + Number(item.pnl_delta || 0), 0);
   const invested = latest.reduce((acc, item) => acc + Math.abs(Number(item.notional || 0)), 0);
-  const submittedCount = latest.filter((item) => String(item?.status || "").trim().toLowerCase() === "submitted").length;
+  const submittedCount = latest.filter((item) => {
+    const status = String(item?.status || "").trim().toLowerCase();
+    return status === "submitted" || status === "partial";
+  }).length;
   const observedItemCount = latest.filter((item) => Boolean(item?.observed_live_activity)).length;
   meta.textContent = `ultimos ${latest.length}: metido ${fmtUsdPlain(invested, 2)} | resultado ${fmtUsd(sum, 4)}${submittedCount > 0 ? ` | ${submittedCount} ${submittedCount === 1 ? "pendiente" : "pendientes"}` : ""}${observedItemCount > 0 ? ` | ${observedItemCount} ${observedItemCount === 1 ? "observado fuera del bot" : "observados fuera del bot"}` : ""}`;
 }

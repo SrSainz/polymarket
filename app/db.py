@@ -550,6 +550,15 @@ class Database:
         with self.conn:
             self.conn.execute("DELETE FROM bot_state WHERE key = ?", (key,))
 
+    def list_bot_state_by_prefix(self, prefix: str) -> list[sqlite3.Row]:
+        safe_prefix = str(prefix or "").strip()
+        if not safe_prefix:
+            return []
+        return self.conn.execute(
+            "SELECT key, value FROM bot_state WHERE key LIKE ? ORDER BY key ASC",
+            (f"{safe_prefix}%",),
+        ).fetchall()
+
     def insert_signal(self, signal: NormalizedSignal) -> bool:
         try:
             with self.conn:

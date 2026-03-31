@@ -411,7 +411,7 @@ class BTC5mStrategyService:
             "skipped": 0,
             "opportunities": 0,
         }
-        total_exposure = self.db.get_total_exposure()
+        total_exposure = self._total_exposure_with_pending()
         cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         live_total_capital = cash_balance + total_exposure
         operating_bankroll, reserved_profit = self._operating_bankroll_snapshot(
@@ -602,7 +602,7 @@ class BTC5mStrategyService:
         }
         resolution_mode = self._strategy_resolution_mode_label(mode=mode)
         self._settle_resolved_paper_positions(mode=mode, stats=stats)
-        total_exposure = self.db.get_total_exposure()
+        total_exposure = self._total_exposure_with_pending()
         cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
         live_total_capital = cash_balance + marked_exposure
@@ -865,7 +865,7 @@ class BTC5mStrategyService:
                 notes=note,
             )
 
-        total_exposure = self.db.get_total_exposure()
+        total_exposure = self._total_exposure_with_pending()
         cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
         live_total_capital = cash_balance + marked_exposure
@@ -3049,6 +3049,17 @@ class BTC5mStrategyService:
                 up_exposure += exposure
             elif outcome == "down":
                 down_exposure += exposure
+        for pending in self._pending_live_orders():
+            if str(pending.get("condition_id") or "") != condition_id:
+                continue
+            remaining_notional = self._pending_live_order_remaining_notional(pending)
+            if remaining_notional <= 0:
+                continue
+            outcome = str(pending.get("outcome") or "").strip().lower()
+            if outcome == "up":
+                up_exposure += remaining_notional
+            elif outcome == "down":
+                down_exposure += remaining_notional
         return up_exposure, down_exposure
 
     def _arb_mark_price(self, outcome: MarketOutcome) -> float:
@@ -5575,6 +5586,9 @@ class BTC5mStrategyService:
         self.db.set_bot_state("strategy_feed_age_ms", str(int(status["age_ms"])))
         self.db.set_bot_state("strategy_feed_tracked_assets", str(int(status["tracked_assets"])))
 
+    def _total_exposure_with_pending(self) -> float:
+        return self.db.get_total_exposure() + self._pending_live_total_exposure()
+
     def _has_condition_conflict(self, condition_id: str) -> bool:
         for row in self.db.list_copy_positions():
             if str(row["condition_id"] or "") != condition_id:
@@ -5582,17 +5596,33 @@ class BTC5mStrategyService:
             if float(row["size"] or 0.0) <= 0:
                 continue
             return True
+        for pending in self._pending_live_orders():
+            if str(pending.get("condition_id") or "") != condition_id:
+                continue
+            if self._pending_live_order_remaining_notional(pending) <= 0:
+                continue
+            return True
         return False
 
     def _get_open_btc5m_positions_count(self) -> int:
-        total = 0
+        condition_ids: set[str] = set()
         for row in self.db.list_copy_positions():
             if "btc-updown-5m-" not in str(row["slug"] or ""):
                 continue
             if float(row["size"] or 0.0) <= 0:
                 continue
-            total += 1
-        return total
+            condition_id = str(row["condition_id"] or "").strip()
+            if condition_id:
+                condition_ids.add(condition_id)
+        for pending in self._pending_live_orders():
+            if "btc-updown-5m-" not in str(pending.get("slug") or ""):
+                continue
+            if self._pending_live_order_remaining_notional(pending) <= 0:
+                continue
+            condition_id = str(pending.get("condition_id") or "").strip()
+            if condition_id:
+                condition_ids.add(condition_id)
+        return len(condition_ids)
 
     def _get_open_btc5m_condition_ids(self) -> set[str]:
         condition_ids: set[str] = set()
@@ -5602,6 +5632,14 @@ class BTC5mStrategyService:
             if float(row["size"] or 0.0) <= 0:
                 continue
             condition_id = str(row["condition_id"] or "")
+            if condition_id:
+                condition_ids.add(condition_id)
+        for pending in self._pending_live_orders():
+            if "btc-updown-5m-" not in str(pending.get("slug") or ""):
+                continue
+            if self._pending_live_order_remaining_notional(pending) <= 0:
+                continue
+            condition_id = str(pending.get("condition_id") or "").strip()
             if condition_id:
                 condition_ids.add(condition_id)
         return condition_ids
@@ -6011,6 +6049,31 @@ class BTC5mStrategyService:
             if condition_id:
                 active_condition_ids.add(condition_id)
 
+        for pending in self._pending_live_orders():
+            slug = str(pending.get("slug") or "")
+            if "btc-updown-5m-" not in slug:
+                continue
+            remaining_notional = self._pending_live_order_remaining_notional(pending)
+            if remaining_notional <= 0:
+                continue
+            condition_id = str(pending.get("condition_id") or "")
+            if condition_id:
+                open_condition_ids.add(condition_id)
+            if condition_id == current_condition_id:
+                current_market_exposure += remaining_notional
+                if condition_id:
+                    active_condition_ids.add(condition_id)
+                continue
+            row_start_ts = self._btc5m_slug_start_ts(slug)
+            is_previous_window = current_market_start_ts > 0 and row_start_ts > 0 and row_start_ts < current_market_start_ts
+            if is_previous_window:
+                carry_exposure += remaining_notional
+                if condition_id:
+                    previous_condition_ids.add(condition_id)
+                continue
+            if condition_id:
+                active_condition_ids.add(condition_id)
+
         return ArbCarryState(
             total_open_windows=len(open_condition_ids),
             active_open_windows=len(active_condition_ids),
@@ -6029,6 +6092,10 @@ class BTC5mStrategyService:
             if size <= 0:
                 continue
             exposure += abs(size * avg_price)
+        for pending in self._pending_live_orders():
+            if str(pending.get("condition_id") or "") != condition_id:
+                continue
+            exposure += self._pending_live_order_remaining_notional(pending)
         return exposure
 
     def _arb_carry_note(self, *, carry_exposure: float, carry_window_count: int) -> str:
@@ -6393,6 +6460,40 @@ class BTC5mStrategyService:
             return None
         return payload if isinstance(payload, dict) else None
 
+    def _pending_live_orders(self) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for row in self.db.list_bot_state_by_prefix("live_pending_order:"):
+            try:
+                payload = json.loads(row["value"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                items.append(payload)
+        return items
+
+    def _pending_live_order_remaining_size(self, pending: Mapping[str, object]) -> float:
+        original_size = max(_safe_float(pending.get("size")), 0.0)
+        if original_size <= 0:
+            return 0.0
+        reconciled_size = max(_safe_float(pending.get("reconciled_size")), 0.0)
+        return max(original_size - min(reconciled_size, original_size), 0.0)
+
+    def _pending_live_order_remaining_notional(self, pending: Mapping[str, object]) -> float:
+        remaining_size = self._pending_live_order_remaining_size(pending)
+        if remaining_size <= 0:
+            return 0.0
+        original_size = max(_safe_float(pending.get("size")), 0.0)
+        original_notional = abs(_safe_float(pending.get("notional")))
+        if original_size > 0 and original_notional > 0:
+            return abs(original_notional * (remaining_size / original_size))
+        price = max(_safe_float(pending.get("price")), 0.0)
+        if price > 0:
+            return abs(remaining_size * price)
+        return 0.0
+
+    def _pending_live_total_exposure(self) -> float:
+        return sum(self._pending_live_order_remaining_notional(pending) for pending in self._pending_live_orders())
+
     def _record_observed_live_trade(
         self,
         *,
@@ -6524,6 +6625,17 @@ class BTC5mStrategyService:
                 up_exposure += notional
             elif outcome == "down":
                 down_exposure += notional
+        for pending in self._pending_live_orders():
+            if str(pending.get("slug") or "").strip() != slug:
+                continue
+            remaining_notional = self._pending_live_order_remaining_notional(pending)
+            if remaining_notional <= 0:
+                continue
+            outcome = str(pending.get("outcome") or "").strip().lower()
+            if outcome == "up":
+                up_exposure += remaining_notional
+            elif outcome == "down":
+                down_exposure += remaining_notional
         return up_exposure, down_exposure
 
     def _log_cycle_summary(

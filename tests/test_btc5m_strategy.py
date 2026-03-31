@@ -3434,6 +3434,88 @@ def test_arb_micro_caps_market_exposure_and_cools_down_same_window(tmp_path: Pat
     db.close()
 
 
+def test_arb_micro_live_pending_orders_reserve_market_cap_before_fill(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=50)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Pending Cap",
+        "slug": "btc-updown-5m-pending-cap",
+        "conditionId": "cond-arb-pending-cap",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    db.set_bot_state(
+        "live_pending_order:pending-cap",
+        json.dumps(
+            {
+                "order_id": "pending-cap",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-down",
+                "condition_id": market["conditionId"],
+                "size": 45.4545,
+                "price": 0.55,
+                "notional": 24.999975,
+                "source_wallet": "strategy-live",
+                "source_signal_id": 0,
+                "title": market["question"],
+                "slug": market["slug"],
+                "outcome": "Down",
+                "reason": "fase abrir",
+                "execution_profile": "taker_fak",
+                "response_status": "live",
+                "submitted_at": int(datetime.now(timezone.utc).timestamp()),
+            },
+            separators=(",", ":"),
+        ),
+    )
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {
+                "bids": [{"price": "0.39"}],
+                "asks": [{"price": "0.40", "size": "300"}],
+            },
+            "asset-down": {
+                "bids": [{"price": "0.54"}],
+                "asks": [{"price": "0.55", "size": "300"}],
+            },
+        },
+        balance=100.0,
+        feed_mode="websocket",
+        feed_connected=True,
+    )
+    broker = _FakeBroker()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=broker,
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=97.72,
+            live_btc5m_ticket_allocation_pct=0.25,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-pending-cap"),
+    )
+
+    stats = service.run(mode="live")
+
+    assert stats["filled"] == 0
+    assert broker.instructions == []
+    assert "market cap exhausted" in str(db.get_bot_state("strategy_last_note") or "")
+    assert float(db.get_bot_state("strategy_total_exposure") or 0.0) >= 24.99
+    db.close()
+
+
 def test_arb_micro_does_not_stop_only_because_window_already_has_many_fills(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

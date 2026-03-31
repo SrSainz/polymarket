@@ -220,6 +220,59 @@ def test_summary_payload_exposes_pending_live_orders(tmp_path: Path) -> None:
     assert summary["live_pending_orders"][0]["status"] == "submitted"
 
 
+def test_summary_payload_uses_outstanding_pending_notional_and_current_market_pending_exposure(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("live_cash_balance", "97.72")
+    db.set_bot_state("live_cash_allowance", "97.72")
+    db.set_bot_state("live_total_capital", "97.72")
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-1774910400")
+    db.set_bot_state("strategy_market_title", "BTC Up or Down")
+    db.set_bot_state(
+        "live_pending_order:partial-1",
+        json.dumps(
+            {
+                "order_id": "partial-1",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-live-2",
+                "condition_id": "cond-live-2",
+                "size": 10.0,
+                "reconciled_size": 4.0,
+                "price": 0.41,
+                "notional": 4.10,
+                "source_wallet": "strategy-live",
+                "source_signal_id": 21,
+                "title": "BTC Up or Down",
+                "slug": "btc-updown-5m-1774910400",
+                "outcome": "Down",
+                "reason": "fase abrir",
+                "execution_profile": "taker_fak",
+                "response_status": "matched",
+                "submitted_at": 1774910402,
+            },
+            separators=(",", ":"),
+        ),
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="live",
+        live_trading_enabled=True,
+    )
+
+    assert summary["live_pending_orders_count"] == 1
+    assert summary["live_pending_orders_total_notional"] == 2.46
+    assert summary["live_pending_orders"][0]["size"] == 6.0
+    assert summary["live_pending_orders"][0]["status"] == "partial"
+    assert summary["strategy_pending_total_exposure"] == 2.46
+    assert summary["strategy_pending_market_exposure"] == 2.46
+    assert summary["strategy_current_market_total_exposure"] == 2.46
+
+
 def test_executions_payload_includes_pending_live_orders_before_fills(tmp_path: Path) -> None:
     db_path = tmp_path / "bot_live.db"
     db = Database(db_path)
