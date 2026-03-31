@@ -42,7 +42,7 @@ _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _CLAIMABLE_CACHE: dict[str, tuple[dict, float]] = {}
 _CLAIMABLE_CACHE_TTL_SECONDS = 30.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-31-shadow-home12"
+_DASHBOARD_BUILD = "2026-03-31-shadow-home13"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),

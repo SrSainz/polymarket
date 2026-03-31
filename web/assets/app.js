@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-31-shadow-home12";
+const UI_BUILD = "2026-03-31-shadow-home13";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -2204,6 +2204,7 @@ function paintSummary(summary, items = lastPositions) {
     snapshotInfo.hasLiveBalanceSnapshot,
     LIVE_BALANCE_STALE_SECONDS
   );
+  const hasLiveBalanceSnapshot = Boolean(snapshotInfo.hasLiveBalanceSnapshot);
   const strategySnapshotStale = !isPublicRuntime() && isMetricSnapshotStale(
     snapshotInfo.strategyAgeSeconds,
     snapshotInfo.hasStrategySnapshot,
@@ -2255,6 +2256,11 @@ function paintSummary(summary, items = lastPositions) {
   const liveCashBalance = Number(summary.live_cash_balance ?? 0);
   const liveAvailableToTrade = Number(summary.live_available_to_trade ?? liveCashBalance);
   const liveEquityEstimate = Number(summary.live_equity_estimate ?? summary.live_total_capital ?? liveCashBalance);
+  const claimable = claimableContext(summary);
+  const claimableMeta =
+    claimable.usdcEstimate > 0
+      ? ` | claim pendiente ${fmtUsdPlain(claimable.usdcEstimate, 2)} en ${claimable.positionsCount} ${claimable.positionsCount === 1 ? "posicion" : "posiciones"}`
+      : "";
   const liveBalanceUpdatedAt = Number(summary.live_balance_updated_at ?? 0);
   const liveSnapshotText = liveBalanceUpdatedAt > 0 ? tsToIso(liveBalanceUpdatedAt) : "sin snapshot";
   toggleClosestClass("liveCashBalance", ".card", "is-stale", liveBalanceStale);
