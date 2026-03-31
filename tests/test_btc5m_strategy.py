@@ -771,6 +771,76 @@ def test_live_user_trade_without_pending_order_is_recorded_as_observed_activity(
     db.close()
 
 
+def test_cleanup_stale_pending_live_orders_removes_expired_window_and_keeps_current(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    stale_slug = f"btc-updown-5m-{now_ts - 900}"
+    fresh_slug = f"btc-updown-5m-{now_ts}"
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-cleanup-stale-pending"),
+    )
+    db.set_bot_state(
+        "live_pending_order:stale-order",
+        json.dumps(
+            {
+                "order_id": "stale-order",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-stale",
+                "condition_id": "cond-stale",
+                "size": 5.0,
+                "price": 0.30,
+                "notional": 1.5,
+                "slug": stale_slug,
+                "outcome": "Down",
+                "submitted_at": now_ts - 300,
+                "response_status": "matched",
+            },
+            separators=(",", ":"),
+        ),
+    )
+    db.set_bot_state(
+        "live_pending_order:fresh-order",
+        json.dumps(
+            {
+                "order_id": "fresh-order",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-fresh",
+                "condition_id": "cond-fresh",
+                "size": 5.0,
+                "price": 0.30,
+                "notional": 1.5,
+                "slug": fresh_slug,
+                "outcome": "Down",
+                "submitted_at": now_ts,
+                "response_status": "matched",
+            },
+            separators=(",", ":"),
+        ),
+    )
+
+    removed = service._cleanup_stale_pending_live_orders()  # noqa: SLF001
+
+    assert removed == 1
+    assert db.get_bot_state("live_pending_order:stale-order") is None
+    assert db.get_bot_state("live_pending_order:fresh-order") is not None
+    assert db.get_bot_state("live_last_stale_pending_order_id") == "stale-order"
+    assert db.get_bot_state("live_last_stale_pending_reason") == "window_expired"
+    db.close()
+
+
 def test_live_blocks_flat_single_side_open_when_second_leg_is_not_viable(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

@@ -151,6 +151,8 @@ _ARB_BURST_COOLDOWN_MIN_SECONDS = 0.8
 _ARB_BURST_COOLDOWN_MAX_SECONDS = 2.6
 _ARB_MAX_PLAN_INSTRUCTIONS = 72
 _ARB_NO_NEW_ENTRY_SECONDS_REMAINING = 25
+_LIVE_PENDING_ORDER_CONFIRMATION_GRACE_SECONDS = 90
+_LIVE_PENDING_ORDER_WINDOW_CLOSE_GRACE_SECONDS = 30
 _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING = 90
 _ARB_LATE_DIRECTIONAL_MAX_SPOT_AGE_MS = 600
 _ARB_LATE_DIRECTIONAL_MIN_DELTA_BPS = 5.0
@@ -411,6 +413,7 @@ class BTC5mStrategyService:
             "skipped": 0,
             "opportunities": 0,
         }
+        self._cleanup_stale_pending_live_orders()
         total_exposure = self._total_exposure_with_pending()
         cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         live_total_capital = cash_balance + total_exposure
@@ -602,6 +605,7 @@ class BTC5mStrategyService:
         }
         resolution_mode = self._strategy_resolution_mode_label(mode=mode)
         self._settle_resolved_paper_positions(mode=mode, stats=stats)
+        self._cleanup_stale_pending_live_orders()
         total_exposure = self._total_exposure_with_pending()
         cash_balance, allowance = self._live_cash_snapshot(mode=mode)
         marked_exposure, unrealized_pnl = self._paper_mark_to_market_snapshot()
@@ -949,6 +953,7 @@ class BTC5mStrategyService:
             "skipped": 0,
             "opportunities": 0,
         }
+        self._cleanup_stale_pending_live_orders()
         if mode == "live":
             total_exposure = self.db.get_total_exposure()
             cash_balance, allowance = self._live_cash_snapshot(mode="paper")
@@ -6493,6 +6498,67 @@ class BTC5mStrategyService:
 
     def _pending_live_total_exposure(self) -> float:
         return sum(self._pending_live_order_remaining_notional(pending) for pending in self._pending_live_orders())
+
+    def _cleanup_stale_pending_live_orders(self) -> int:
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        removed = 0
+        for row in self.db.list_bot_state_by_prefix("live_pending_order:"):
+            try:
+                payload = json.loads(row["value"])
+            except (TypeError, json.JSONDecodeError):
+                self.db.delete_bot_state(str(row["key"]))
+                removed += 1
+                continue
+            if not isinstance(payload, dict):
+                self.db.delete_bot_state(str(row["key"]))
+                removed += 1
+                continue
+            order_id = str(payload.get("order_id") or str(row["key"]).split(":", 1)[-1]).strip()
+            remaining_notional = self._pending_live_order_remaining_notional(payload)
+            if remaining_notional <= 0:
+                self.db.delete_bot_state(self._pending_live_order_key(order_id))
+                removed += 1
+                continue
+
+            submitted_at = int(_safe_float(payload.get("submitted_at")))
+            slug = str(payload.get("slug") or "").strip()
+            stale_reason = ""
+
+            if slug.startswith("btc-updown-5m-"):
+                start_ts = self._btc5m_slug_start_ts(slug)
+                if start_ts > 0 and now_ts >= start_ts + 300 + _LIVE_PENDING_ORDER_WINDOW_CLOSE_GRACE_SECONDS:
+                    stale_reason = "window_expired"
+
+            if not stale_reason and slug:
+                try:
+                    market = self.gamma_client.get_market_by_slug(slug)
+                except Exception:  # noqa: BLE001
+                    market = None
+                if isinstance(market, dict) and bool(market.get("closed")):
+                    stale_reason = "market_closed"
+
+            if (
+                not stale_reason
+                and submitted_at > 0
+                and now_ts - submitted_at >= _LIVE_PENDING_ORDER_CONFIRMATION_GRACE_SECONDS
+            ):
+                stale_reason = "confirmation_timeout"
+
+            if not stale_reason:
+                continue
+
+            self.db.delete_bot_state(self._pending_live_order_key(order_id))
+            self.db.set_bot_state("live_last_stale_pending_order_id", order_id)
+            self.db.set_bot_state("live_last_stale_pending_reason", stale_reason)
+            self.logger.info(
+                "cleared stale pending live order order_id=%s reason=%s slug=%s remaining_notional=%.4f",
+                order_id,
+                stale_reason,
+                slug or "-",
+                remaining_notional,
+            )
+            removed += 1
+        return removed
 
     def _record_observed_live_trade(
         self,
