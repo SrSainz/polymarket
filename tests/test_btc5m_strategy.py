@@ -5023,6 +5023,212 @@ def test_arb_stabilize_catchup_still_operates_with_live_small_25_usdc_budget(tmp
     db.close()
 
 
+def test_live_repair_does_not_rebalance_when_market_leg_is_already_extreme(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=200)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Extreme Repair Guard",
+        "slug": "btc-updown-5m-live-extreme-repair",
+        "conditionId": "cond-arb-live-extreme-repair",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {
+                    "min_order_size": "5.0",
+                    "bids": [{"price": "0.90"}],
+                    "asks": [{"price": "0.91", "size": "500"}],
+                },
+                "asset-down": {
+                    "min_order_size": "5.0",
+                    "bids": [{"price": "0.08"}],
+                    "asks": [{"price": "0.09", "size": "500"}],
+                },
+            },
+            balance=114.14,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            min_trade_amount=5.0,
+            live_small_target_capital=97.72,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-extreme-repair"),
+    )
+
+    plan = service._build_arb_repair_plan(  # noqa: SLF001
+        mode="live",
+        market=market,
+        up_outcome=MarketOutcome(
+            label="Up",
+            asset_id="asset-up",
+            best_ask=0.91,
+            best_bid=0.90,
+            best_ask_size=500.0,
+            ask_levels=(AskLevel(price=0.91, size=500.0),),
+        ),
+        down_outcome=MarketOutcome(
+            label="Down",
+            asset_id="asset-down",
+            best_ask=0.09,
+            best_bid=0.08,
+            best_ask_size=500.0,
+            ask_levels=(AskLevel(price=0.09, size=500.0),),
+        ),
+        pair_sum=1.00,
+        fair_up=0.93,
+        fair_down=0.07,
+        up_net_edge=0.018,
+        down_net_edge=-0.03,
+        desired_up_ratio=0.80,
+        current_up_ratio=0.40,
+        timing_regime="late",
+        cycle_budget=25.0,
+        cash_balance=114.14,
+        remaining_instruction_capacity=12,
+        current_up_notional=8.0,
+        current_down_notional=12.0,
+        spot_context=ArbSpotContext(
+            current_price=67285.0,
+            reference_price=67285.0,
+            lead_price=67285.0,
+            anchor_price=67200.0,
+            local_anchor_price=67200.0,
+            official_price_to_beat=0.0,
+            anchor_source="polymarket-rtds-anchor",
+            fair_up=0.93,
+            fair_down=0.07,
+            delta_bps=12.0,
+            price_mode="reference",
+            source="polymarket-rtds+binance",
+            age_ms=15,
+            binance_price=67285.0,
+            chainlink_price=67200.0,
+        ),
+        bracket_phase="redistribuir",
+    )
+
+    assert plan is None
+    db.close()
+
+
+def test_live_stabilize_catchup_does_not_buy_when_market_leg_is_already_extreme(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=200)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Extreme Catch-up Guard",
+        "slug": "btc-updown-5m-live-extreme-catchup",
+        "conditionId": "cond-arb-live-extreme-catchup",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {
+                    "min_order_size": "5.0",
+                    "bids": [{"price": "0.01"}],
+                    "asks": [{"price": "0.02", "size": "500"}],
+                },
+                "asset-down": {
+                    "min_order_size": "5.0",
+                    "bids": [{"price": "0.97"}],
+                    "asks": [{"price": "0.98", "size": "500"}],
+                },
+            },
+            balance=114.14,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            bankroll=10000.0,
+            min_trade_amount=5.0,
+            live_small_target_capital=97.72,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-extreme-catchup"),
+    )
+
+    plan = service._build_arb_stabilize_plan(  # noqa: SLF001
+        mode="live",
+        market=market,
+        up_outcome=MarketOutcome(
+            label="Up",
+            asset_id="asset-up",
+            best_ask=0.02,
+            best_bid=0.01,
+            best_ask_size=500.0,
+            ask_levels=(AskLevel(price=0.02, size=500.0),),
+        ),
+        down_outcome=MarketOutcome(
+            label="Down",
+            asset_id="asset-down",
+            best_ask=0.98,
+            best_bid=0.97,
+            best_ask_size=500.0,
+            ask_levels=(AskLevel(price=0.98, size=500.0),),
+        ),
+        pair_sum=1.00,
+        fair_up=0.02,
+        fair_down=0.98,
+        up_net_edge=-0.02,
+        down_net_edge=0.01,
+        desired_up_ratio=0.20,
+        current_up_ratio=1.0,
+        timing_regime="late",
+        cycle_budget=25.0,
+        cash_balance=114.14,
+        remaining_instruction_capacity=12,
+        current_up_notional=9.0,
+        current_down_notional=0.0,
+        spot_context=ArbSpotContext(
+            current_price=67282.0,
+            reference_price=67282.0,
+            lead_price=67282.0,
+            anchor_price=67446.06,
+            local_anchor_price=67446.06,
+            official_price_to_beat=0.0,
+            anchor_source="polymarket-rtds-anchor",
+            fair_up=0.02,
+            fair_down=0.98,
+            delta_bps=-24.0,
+            price_mode="reference",
+            source="polymarket-rtds+binance",
+            age_ms=10,
+            binance_price=67282.0,
+            chainlink_price=67446.06,
+        ),
+        bracket_phase="redistribuir",
+    )
+
+    assert plan is None
+    db.close()
+
+
 def test_arb_stabilize_residual_catchup_completes_tiny_orphan_leg_in_shadow_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

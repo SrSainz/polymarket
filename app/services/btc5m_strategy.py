@@ -143,6 +143,7 @@ _ARB_STABILIZE_CATCHUP_PROGRESS_FRACTION = 0.24
 _ARB_STABILIZE_CATCHUP_BUDGET_FRACTION = 0.14
 _ARB_STABILIZE_RESIDUAL_MAX_CARRY_FRACTION = 0.75
 _ARB_STABILIZE_RESIDUAL_MAX_TARGET_FRACTION = 0.25
+_ARB_LIVE_REBALANCE_EXTREME_LEG_PRICE = 0.90
 _ARB_MIN_OPERABLE_BUDGET_SLACK = 0.05
 _ARB_CARRY_BUDGET_FLOOR_RATIO = 0.80
 _ARB_OPENING_BUDGET_FLOOR_RATIO = 0.92
@@ -2181,6 +2182,7 @@ class BTC5mStrategyService:
                             reference_state,
                         )
         repair_plan = self._build_arb_repair_plan(
+            mode=mode,
             market=market,
             up_outcome=up_outcome,
             down_outcome=down_outcome,
@@ -3308,6 +3310,17 @@ class BTC5mStrategyService:
             )
         return False
 
+    def _arb_live_extreme_leg_rebalance_blocked(
+        self,
+        *,
+        mode: str,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+    ) -> bool:
+        if str(mode or "").strip().lower() != "live":
+            return False
+        return max(float(up_outcome.best_ask), float(down_outcome.best_ask)) >= _ARB_LIVE_REBALANCE_EXTREME_LEG_PRICE
+
     def _arb_live_like_second_leg_viability(
         self,
         *,
@@ -3978,6 +3991,7 @@ class BTC5mStrategyService:
     def _build_arb_repair_plan(
         self,
         *,
+        mode: str = "paper",
         market: dict,
         up_outcome: MarketOutcome,
         down_outcome: MarketOutcome,
@@ -3999,6 +4013,12 @@ class BTC5mStrategyService:
         carry_note: str = "",
     ) -> StrategyPlan | None:
         if bracket_phase != "redistribuir":
+            return None
+        if self._arb_live_extreme_leg_rebalance_blocked(
+            mode=mode,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+        ):
             return None
         seconds_remaining = max(300 - self._seconds_into_window(market), 0)
         directional_target = self._arb_directional_target(
@@ -4168,6 +4188,12 @@ class BTC5mStrategyService:
         carry_note: str = "",
     ) -> StrategyPlan | None:
         if bracket_phase != "redistribuir" or spot_context is None:
+            return None
+        if self._arb_live_extreme_leg_rebalance_blocked(
+            mode=mode,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+        ):
             return None
         ratio_gap = desired_up_ratio - current_up_ratio
         ratio_gap_abs = abs(ratio_gap)
