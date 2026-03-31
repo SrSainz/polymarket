@@ -14,7 +14,7 @@ from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.polymarket.spot_feed import SpotSnapshot
 from app.polymarket.fee_model import effective_taker_fee_rate, fee_per_share
-from app.services.btc5m_strategy import ArbSpotContext, AskLevel, BTC5mStrategyService, MarketOutcome
+from app.services.btc5m_strategy import ArbSingleSideSignal, ArbSpotContext, AskLevel, BTC5mStrategyService, MarketOutcome
 from app.settings import AppPaths, AppSettings, BotConfig, EnvSettings
 
 
@@ -768,6 +768,86 @@ def test_live_user_trade_without_pending_order_is_recorded_as_observed_activity(
     assert observed["title"] == "Bitcoin Up or Down - Test"
     assert observed["outcome"] == "Down"
     assert "fuera del bot" in observed["notes"]
+    db.close()
+
+
+def test_live_blocks_flat_single_side_open_even_with_strong_edge(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Flat Single Side",
+        "slug": "btc-updown-5m-flat-single-side",
+        "conditionId": "cond-flat-single-side",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {"asks": [{"price": 0.73, "size": 50}], "bids": [{"price": 0.72, "size": 50}]},
+                "asset-down": {"asks": [{"price": 0.28, "size": 50}], "bids": [{"price": 0.27, "size": 50}]},
+            },
+            balance=97.72,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72),
+        logger=logging.getLogger("test-btc5m-live-flat-single-side-block"),
+    )
+
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.73,
+        best_bid=0.72,
+        best_ask_size=50.0,
+        ask_levels=(AskLevel(price=0.73, size=50.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.28,
+        best_bid=0.27,
+        best_ask_size=50.0,
+        ask_levels=(AskLevel(price=0.28, size=50.0),),
+    )
+    signal = ArbSingleSideSignal(
+        target=down_outcome,
+        fair_value=0.40,
+        raw_edge=0.12,
+        net_edge=0.08,
+        edge_source="spot",
+    )
+
+    blocked, reason = service._arb_should_block_flat_single_side_open(  # noqa: SLF001
+        mode="live",
+        bracket_phase="abrir",
+        current_up_notional=0.0,
+        current_down_notional=0.0,
+        signal=signal,
+        pair_sum=1.01,
+        cycle_budget=25.0,
+        cash_balance=97.72,
+        single_budget=8.0,
+        seconds_into_window=35,
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        fair_up=0.60,
+        fair_down=0.40,
+        delta_bps=-7.4,
+    )
+
+    assert blocked is True
+    assert "dos patas" in reason
     db.close()
 
 
