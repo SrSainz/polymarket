@@ -851,6 +851,107 @@ def test_live_blocks_flat_single_side_open_even_with_strong_edge(tmp_path: Path)
     db.close()
 
 
+def test_live_biased_bracket_anchors_on_strong_edge_side_when_ratio_side_is_weak(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Live Strong Down",
+        "slug": "btc-updown-5m-live-strong-down",
+        "conditionId": "cond-live-strong-down",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": (datetime.now(timezone.utc) - timedelta(seconds=18)).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {"asks": [{"price": 0.51, "size": 120}], "bids": [{"price": 0.50, "size": 120}]},
+                "asset-down": {"asks": [{"price": 0.50, "size": 120}], "bids": [{"price": 0.39, "size": 120}]},
+            },
+            balance=97.72,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72, live_btc5m_cycle_budget_usdc=25.0),
+        logger=logging.getLogger("test-btc5m-live-strong-down-biased-bracket"),
+    )
+
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.51,
+        best_bid=0.50,
+        best_ask_size=120.0,
+        ask_levels=(AskLevel(price=0.51, size=120.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.50,
+        best_bid=0.39,
+        best_ask_size=120.0,
+        ask_levels=(AskLevel(price=0.50, size=120.0),),
+    )
+    spot_context = ArbSpotContext(
+        current_price=66819.0,
+        reference_price=66744.5386,
+        lead_price=66819.0,
+        anchor_price=66744.5386,
+        local_anchor_price=66744.5386,
+        official_price_to_beat=66744.5386,
+        anchor_source="captured-chainlink",
+        fair_up=0.51,
+        fair_down=0.61,
+        delta_bps=11.2,
+        price_mode="captured-chainlink",
+        source="polymarket-rtds+binance",
+        age_ms=1,
+        binance_price=66819.0,
+        chainlink_price=66819.0,
+        captured_price_to_beat=66744.5386,
+        effective_price_to_beat=66744.5386,
+        effective_price_source="captured-chainlink",
+    )
+
+    plan = service._build_arb_biased_bracket_plan(  # noqa: SLF001
+        mode="live",
+        market=market,
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        pair_sum=1.01,
+        fair_up=0.51,
+        fair_down=0.61,
+        up_net_edge=-0.0167,
+        down_net_edge=0.1003,
+        desired_up_ratio=0.62,
+        current_up_ratio=0.5,
+        timing_regime="early",
+        cycle_budget=25.0,
+        cash_balance=97.72,
+        remaining_instruction_capacity=6,
+        current_up_notional=0.0,
+        current_down_notional=0.0,
+        spot_context=spot_context,
+        bracket_phase="abrir",
+    )
+
+    assert plan is not None
+    assert plan.price_mode == "biased-bracket"
+    assert plan.trigger.label == "Down"
+    assert {instruction.outcome for instruction in plan.instructions} == {"Up", "Down"}
+    assert any(instruction.outcome == "Up" and abs(float(instruction.price) - 0.51) < 1e-9 for instruction in plan.instructions)
+    assert "pata fuerte Down" in plan.note
+    db.close()
+
+
 def test_shadow_ignores_live_control_even_in_live_like_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

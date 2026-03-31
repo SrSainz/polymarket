@@ -1980,6 +1980,7 @@ class BTC5mStrategyService:
                         )
 
         bracket_plan = self._build_arb_biased_bracket_plan(
+            mode=mode,
             market=market,
             up_outcome=up_outcome,
             down_outcome=down_outcome,
@@ -3549,6 +3550,7 @@ class BTC5mStrategyService:
     def _build_arb_biased_bracket_plan(
         self,
         *,
+        mode: str,
         market: dict,
         up_outcome: MarketOutcome,
         down_outcome: MarketOutcome,
@@ -3593,187 +3595,213 @@ class BTC5mStrategyService:
             return None
 
         ratio_gap_abs = abs(desired_up_ratio - current_up_ratio)
-        if desired_up_ratio >= 0.5:
-            primary_target = up_outcome
-            hedge_target = down_outcome
-            primary_fair = fair_up
-            hedge_fair = fair_down
-            primary_net_edge = up_net_edge
-            hedge_net_edge = down_net_edge
-            desired_primary_ratio = desired_up_ratio
-        else:
-            primary_target = down_outcome
-            hedge_target = up_outcome
-            primary_fair = fair_down
-            hedge_fair = fair_up
-            primary_net_edge = down_net_edge
-            hedge_net_edge = up_net_edge
-            desired_primary_ratio = 1.0 - desired_up_ratio
+        mode_text = str(mode or "").strip().lower()
+        live_bracket_fallback = mode_text == "live"
+        preferred_primary_is_up = desired_up_ratio >= 0.5
+        primary_min_edge = max(_ARB_CHEAP_SIDE_NET_EDGE_MIN * 0.75, 0.01)
+        primary_is_up_candidates = [preferred_primary_is_up]
+        strong_edge_primary_is_up = up_net_edge >= down_net_edge
+        if live_bracket_fallback and strong_edge_primary_is_up not in primary_is_up_candidates:
+            primary_is_up_candidates.append(strong_edge_primary_is_up)
 
-        if primary_net_edge < max(_ARB_CHEAP_SIDE_NET_EDGE_MIN * 0.75, 0.01):
-            return None
-        if hedge_net_edge < _ARB_BIASED_BRACKET_HEDGE_TOLERANCE:
-            return None
+        for primary_is_up in primary_is_up_candidates:
+            if primary_is_up:
+                primary_target = up_outcome
+                hedge_target = down_outcome
+                primary_fair = fair_up
+                hedge_fair = fair_down
+                primary_net_edge = up_net_edge
+                hedge_net_edge = down_net_edge
+                desired_primary_ratio = desired_up_ratio
+            else:
+                primary_target = down_outcome
+                hedge_target = up_outcome
+                primary_fair = fair_down
+                hedge_fair = fair_up
+                primary_net_edge = down_net_edge
+                hedge_net_edge = up_net_edge
+                desired_primary_ratio = 1.0 - desired_up_ratio
 
-        hedge_floor = _ARB_BRACKET_HEDGE_FLOOR_MID_LATE if timing_regime == "mid-late" else _ARB_BRACKET_HEDGE_FLOOR_EARLY
-        desired_hedge_ratio = max(1.0 - desired_primary_ratio, 0.0)
-        hedge_ratio = max(desired_hedge_ratio, hedge_floor)
-        if hedge_net_edge < 0:
-            shrink = min(abs(hedge_net_edge) / abs(_ARB_BIASED_BRACKET_HEDGE_TOLERANCE), 1.0) * 0.65
-            hedge_ratio = max(hedge_floor, desired_hedge_ratio * (1.0 - shrink))
-        primary_ratio = min(max(1.0 - hedge_ratio, 0.52), 0.88)
-        hedge_ratio = max(1.0 - primary_ratio, hedge_floor)
-        total_ratio = primary_ratio + hedge_ratio
-        if total_ratio <= 0:
-            return None
-        primary_ratio /= total_ratio
-        hedge_ratio /= total_ratio
+            if primary_net_edge < primary_min_edge:
+                continue
 
-        primary_budget = _round_down(cycle_budget * primary_ratio, "0.01")
-        hedge_budget = _round_down(min(cycle_budget - primary_budget, cash_balance - primary_budget), "0.01")
-        if primary_budget < self._arb_min_notional(primary_target) or hedge_budget < self._arb_min_notional(hedge_target):
-            return None
+            hedge_tolerance = _ARB_BIASED_BRACKET_HEDGE_TOLERANCE
+            if live_bracket_fallback and pair_net_edge >= max(_ARB_BIASED_BRACKET_NET_EDGE_MIN * 2.0, 0.02):
+                hedge_tolerance = min(hedge_tolerance, -0.02)
+            if hedge_net_edge < hedge_tolerance:
+                continue
 
-        primary_capacity = max(1, min(int(round(remaining_instruction_capacity * primary_ratio)), remaining_instruction_capacity - 1))
-        hedge_capacity = max(1, remaining_instruction_capacity - primary_capacity)
-        delta_bps = spot_context.delta_bps if spot_context is not None else 0.0
+            hedge_floor = _ARB_BRACKET_HEDGE_FLOOR_MID_LATE if timing_regime == "mid-late" else _ARB_BRACKET_HEDGE_FLOOR_EARLY
+            desired_hedge_ratio = max(1.0 - desired_primary_ratio, 0.0)
+            hedge_ratio = max(desired_hedge_ratio, hedge_floor)
+            if hedge_net_edge < 0:
+                shrink = min(abs(hedge_net_edge) / max(abs(hedge_tolerance), 1e-9), 1.0) * 0.65
+                hedge_ratio = max(hedge_floor, desired_hedge_ratio * (1.0 - shrink))
+            primary_ratio = min(max(1.0 - hedge_ratio, 0.52), 0.88)
+            hedge_ratio = max(1.0 - primary_ratio, hedge_floor)
+            total_ratio = primary_ratio + hedge_ratio
+            if total_ratio <= 0:
+                continue
+            primary_ratio /= total_ratio
+            hedge_ratio /= total_ratio
 
-        primary_levels = self._build_arb_single_side_levels(
-            target=primary_target,
-            budget=primary_budget,
-            fair_value=primary_fair,
-            timing_regime=timing_regime,
-            relative_edge=primary_net_edge,
-            pair_sum=pair_sum,
-            delta_bps=delta_bps,
-            ratio_gap=ratio_gap_abs,
-        )
-        hedge_levels = self._build_arb_single_side_levels(
-            target=hedge_target,
-            budget=hedge_budget,
-            fair_value=hedge_fair,
-            timing_regime=timing_regime,
-            relative_edge=max(hedge_net_edge, 0.0),
-            pair_sum=pair_sum,
-            delta_bps=delta_bps,
-            ratio_gap=ratio_gap_abs,
-        )
-        if not primary_levels or not hedge_levels:
-            return None
+            primary_budget = _round_down(cycle_budget * primary_ratio, "0.01")
+            hedge_budget = _round_down(min(cycle_budget - primary_budget, cash_balance - primary_budget), "0.01")
+            if primary_budget < self._arb_min_notional(primary_target) or hedge_budget < self._arb_min_notional(hedge_target):
+                continue
 
-        primary_instructions: list[CopyInstruction] = []
-        for idx, level in enumerate(primary_levels[:primary_capacity], start=1):
-            instruction = self._build_arb_instruction(
-                market=market,
+            primary_capacity = max(1, min(int(round(remaining_instruction_capacity * primary_ratio)), remaining_instruction_capacity - 1))
+            hedge_capacity = max(1, remaining_instruction_capacity - primary_capacity)
+            delta_bps = spot_context.delta_bps if spot_context is not None else 0.0
+
+            primary_levels = self._build_arb_single_side_levels(
                 target=primary_target,
-                shares=level.shares,
-                price=level.price,
+                budget=primary_budget,
+                fair_value=primary_fair,
+                timing_regime=timing_regime,
+                relative_edge=primary_net_edge,
                 pair_sum=pair_sum,
-                tranche_index=idx,
+                delta_bps=delta_bps,
+                ratio_gap=ratio_gap_abs,
             )
-            if instruction is not None:
-                primary_instructions.append(instruction)
+            if hedge_net_edge < 0:
+                hedge_levels = self._build_arb_repair_levels(
+                    target=hedge_target,
+                    budget=hedge_budget,
+                    fair_value=hedge_fair,
+                )
+            else:
+                hedge_levels = self._build_arb_single_side_levels(
+                    target=hedge_target,
+                    budget=hedge_budget,
+                    fair_value=hedge_fair,
+                    timing_regime=timing_regime,
+                    relative_edge=max(hedge_net_edge, 0.0),
+                    pair_sum=pair_sum,
+                    delta_bps=delta_bps,
+                    ratio_gap=ratio_gap_abs,
+                )
+            if not primary_levels or not hedge_levels:
+                continue
 
-        hedge_instructions: list[CopyInstruction] = []
-        for idx, level in enumerate(hedge_levels[:hedge_capacity], start=1):
-            instruction = self._build_arb_instruction(
-                market=market,
-                target=hedge_target,
-                shares=level.shares,
-                price=level.price,
+            primary_instructions: list[CopyInstruction] = []
+            for idx, level in enumerate(primary_levels[:primary_capacity], start=1):
+                instruction = self._build_arb_instruction(
+                    market=market,
+                    target=primary_target,
+                    shares=level.shares,
+                    price=level.price,
+                    pair_sum=pair_sum,
+                    tranche_index=idx,
+                )
+                if instruction is not None:
+                    primary_instructions.append(instruction)
+
+            hedge_instructions: list[CopyInstruction] = []
+            for idx, level in enumerate(hedge_levels[:hedge_capacity], start=1):
+                instruction = self._build_arb_instruction(
+                    market=market,
+                    target=hedge_target,
+                    shares=level.shares,
+                    price=level.price,
+                    pair_sum=pair_sum,
+                    tranche_index=primary_capacity + idx,
+                )
+                if instruction is not None:
+                    hedge_instructions.append(instruction)
+
+            if not primary_instructions or not hedge_instructions:
+                continue
+
+            instructions: list[CopyInstruction] = []
+            max_len = max(len(primary_instructions), len(hedge_instructions))
+            for index in range(max_len):
+                if index < len(primary_instructions):
+                    instructions.append(primary_instructions[index])
+                if index < len(hedge_instructions):
+                    instructions.append(hedge_instructions[index])
+
+            primary_notional = sum(item.notional for item in primary_instructions)
+            hedge_notional = sum(item.notional for item in hedge_instructions)
+            if primary_notional < self._arb_min_notional(primary_target) or hedge_notional < self._arb_min_notional(hedge_target):
+                continue
+
+            terminal_ev_pct = self._arb_terminal_ev_pct_for_instructions(
+                instructions=instructions,
+                fair_by_asset={
+                    str(primary_target.asset_id): primary_fair,
+                    str(hedge_target.asset_id): hedge_fair,
+                },
+            )
+            if terminal_ev_pct < _ARB_TERMINAL_EV_MIN_BRACKET:
+                continue
+
+            added_up_notional = primary_notional if primary_target.asset_id == up_outcome.asset_id else hedge_notional
+            added_down_notional = hedge_notional if primary_target.asset_id == up_outcome.asset_id else primary_notional
+            current_ratio_after = self._arb_current_up_ratio(
+                up_exposure=current_up_notional + added_up_notional,
+                down_exposure=current_down_notional + added_down_notional,
+            )
+            ordered_primary, ordered_secondary = self._ordered_targets_by_notional(
+                up_outcome=up_outcome,
+                down_outcome=down_outcome,
+                up_notional=added_up_notional,
+                down_notional=added_down_notional,
+            )
+            ordered_primary_notional = added_up_notional if ordered_primary.asset_id == up_outcome.asset_id else added_down_notional
+            ordered_secondary_notional = added_down_notional if ordered_primary.asset_id == up_outcome.asset_id else added_up_notional
+            ordered_primary_ratio = ordered_primary_notional / max(ordered_primary_notional + ordered_secondary_notional, 1e-9)
+            orientation_note = ""
+            if primary_is_up != preferred_primary_is_up:
+                orientation_note = f" | bracket anclado en pata fuerte {primary_target.label}"
+            note = (
+                f"biased bracket {pair_sum:.3f} | net {pair_net_edge * 100:.2f}% | ev {terminal_ev_pct * 100:.2f}% | "
+                f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=max(1.0 - desired_up_ratio, 0.0))} | "
+                f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
+                f"fase {bracket_phase}{carry_note}{orientation_note}"
+            )
+            if spot_context is not None:
+                note += f" | delta {spot_context.delta_bps:+.1f}bps"
+
+            return StrategyPlan(
+                instructions=tuple(instructions),
+                note=note,
+                primary_target=ordered_primary,
+                secondary_target=ordered_secondary,
+                trigger=primary_target,
+                window_seconds=self._seconds_into_window(market),
+                cycle_budget=round(primary_notional + hedge_notional, 6),
+                market_bias=(
+                    f"Bracket sesgado {ordered_primary.label} {ordered_primary_ratio * 100:.0f}% / "
+                    f"{ordered_secondary.label} {max((1.0 - ordered_primary_ratio) * 100, 0.0):.0f}%"
+                ),
+                timing_regime=timing_regime,
+                price_mode="biased-bracket",
+                primary_ratio=ordered_primary_ratio,
+                primary_notional=ordered_primary_notional,
+                secondary_notional=ordered_secondary_notional,
+                replenishment_count=0,
+                trigger_value=pair_sum,
                 pair_sum=pair_sum,
-                tranche_index=primary_capacity + idx,
+                edge_pct=pair_net_edge,
+                fair_value=max(fair_up, fair_down, 0.0),
+                spot_price=spot_context.current_price if spot_context is not None else 0.0,
+                spot_anchor=spot_context.anchor_price if spot_context is not None else 0.0,
+                spot_delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
+                spot_fair_up=spot_context.fair_up if spot_context is not None else 0.0,
+                spot_fair_down=spot_context.fair_down if spot_context is not None else 0.0,
+                spot_source=spot_context.source if spot_context is not None else "",
+                spot_price_mode=spot_context.price_mode if spot_context is not None else "",
+                spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
+                spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
+                spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
+                desired_up_ratio=desired_up_ratio,
+                current_up_ratio=current_ratio_after,
+                bracket_phase=bracket_phase,
+                terminal_ev_pct=terminal_ev_pct,
             )
-            if instruction is not None:
-                hedge_instructions.append(instruction)
 
-        if not primary_instructions or not hedge_instructions:
-            return None
-
-        instructions: list[CopyInstruction] = []
-        max_len = max(len(primary_instructions), len(hedge_instructions))
-        for index in range(max_len):
-            if index < len(primary_instructions):
-                instructions.append(primary_instructions[index])
-            if index < len(hedge_instructions):
-                instructions.append(hedge_instructions[index])
-
-        primary_notional = sum(item.notional for item in primary_instructions)
-        hedge_notional = sum(item.notional for item in hedge_instructions)
-        if primary_notional < self._arb_min_notional(primary_target) or hedge_notional < self._arb_min_notional(hedge_target):
-            return None
-
-        terminal_ev_pct = self._arb_terminal_ev_pct_for_instructions(
-            instructions=instructions,
-            fair_by_asset={
-                str(primary_target.asset_id): primary_fair,
-                str(hedge_target.asset_id): hedge_fair,
-            },
-        )
-        if terminal_ev_pct < _ARB_TERMINAL_EV_MIN_BRACKET:
-            return None
-
-        added_up_notional = primary_notional if primary_target.asset_id == up_outcome.asset_id else hedge_notional
-        added_down_notional = hedge_notional if primary_target.asset_id == up_outcome.asset_id else primary_notional
-        current_ratio_after = self._arb_current_up_ratio(
-            up_exposure=current_up_notional + added_up_notional,
-            down_exposure=current_down_notional + added_down_notional,
-        )
-        ordered_primary, ordered_secondary = self._ordered_targets_by_notional(
-            up_outcome=up_outcome,
-            down_outcome=down_outcome,
-            up_notional=added_up_notional,
-            down_notional=added_down_notional,
-        )
-        ordered_primary_notional = added_up_notional if ordered_primary.asset_id == up_outcome.asset_id else added_down_notional
-        ordered_secondary_notional = added_down_notional if ordered_primary.asset_id == up_outcome.asset_id else added_up_notional
-        ordered_primary_ratio = ordered_primary_notional / max(ordered_primary_notional + ordered_secondary_notional, 1e-9)
-        note = (
-            f"biased bracket {pair_sum:.3f} | net {pair_net_edge * 100:.2f}% | ev {terminal_ev_pct * 100:.2f}% | "
-            f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=max(1.0 - desired_up_ratio, 0.0))} | "
-            f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
-            f"fase {bracket_phase}{carry_note}"
-        )
-        if spot_context is not None:
-            note += f" | delta {spot_context.delta_bps:+.1f}bps"
-
-        return StrategyPlan(
-            instructions=tuple(instructions),
-            note=note,
-            primary_target=ordered_primary,
-            secondary_target=ordered_secondary,
-            trigger=primary_target,
-            window_seconds=self._seconds_into_window(market),
-            cycle_budget=round(primary_notional + hedge_notional, 6),
-            market_bias=(
-                f"Bracket sesgado {ordered_primary.label} {ordered_primary_ratio * 100:.0f}% / "
-                f"{ordered_secondary.label} {max((1.0 - ordered_primary_ratio) * 100, 0.0):.0f}%"
-            ),
-            timing_regime=timing_regime,
-            price_mode="biased-bracket",
-            primary_ratio=ordered_primary_ratio,
-            primary_notional=ordered_primary_notional,
-            secondary_notional=ordered_secondary_notional,
-            replenishment_count=0,
-            trigger_value=pair_sum,
-            pair_sum=pair_sum,
-            edge_pct=pair_net_edge,
-            fair_value=max(fair_up, fair_down, 0.0),
-            spot_price=spot_context.current_price if spot_context is not None else 0.0,
-            spot_anchor=spot_context.anchor_price if spot_context is not None else 0.0,
-            spot_delta_bps=spot_context.delta_bps if spot_context is not None else 0.0,
-            spot_fair_up=spot_context.fair_up if spot_context is not None else 0.0,
-            spot_fair_down=spot_context.fair_down if spot_context is not None else 0.0,
-            spot_source=spot_context.source if spot_context is not None else "",
-            spot_price_mode=spot_context.price_mode if spot_context is not None else "",
-            spot_age_ms=spot_context.age_ms if spot_context is not None else 0,
-            spot_binance_price=spot_context.binance_price or 0.0 if spot_context is not None else 0.0,
-            spot_chainlink_price=spot_context.chainlink_price or 0.0 if spot_context is not None else 0.0,
-            desired_up_ratio=desired_up_ratio,
-            current_up_ratio=current_ratio_after,
-            bracket_phase=bracket_phase,
-            terminal_ev_pct=terminal_ev_pct,
-        )
+        return None
 
     def _build_arb_repair_plan(
         self,
