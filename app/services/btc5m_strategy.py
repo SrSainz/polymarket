@@ -92,6 +92,7 @@ _ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN = 0.001
 _ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN = 0.02
 _ARB_CHEAP_SIDE_MICRO_RATIO_GAP = 0.055
 _ARB_CHEAP_SIDE_MICRO_PAIR_MAX = 1.012
+_ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR = 0.58
 _ARB_CHEAP_SIDE_OVERROUND_DRAG_WEIGHT = 0.65
 _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT = 0.35
 _ARB_CHEAP_SIDE_FEE_ESTIMATE = 0.0025
@@ -2062,6 +2063,19 @@ class BTC5mStrategyService:
             )
             if should_block_cheap_side:
                 cheap_side = None
+            elif (
+                str(mode or "").strip().lower() == "live"
+                and self._arb_has_single_leg_inventory(
+                    up_notional=current_up_notional,
+                    down_notional=current_down_notional,
+                )
+            ):
+                dominant_target = up_outcome if current_up_notional > current_down_notional else down_outcome
+                if cheap_side.target.asset_id == dominant_target.asset_id:
+                    cheap_side_block_reason = (
+                        "cheap-side bloqueado en live: una pata sola debe cubrirse antes de ampliar inventario"
+                    )
+                    cheap_side = None
         if cheap_side is not None:
             target = cheap_side.target
             fair_value = cheap_side.fair_value
@@ -2485,6 +2499,16 @@ class BTC5mStrategyService:
         if spot_context is None:
             return None
 
+        up_countertrend_blocked = self._arb_live_countertrend_single_side_blocked(
+            mode=mode,
+            target=up_outcome,
+            spot_context=spot_context,
+        )
+        down_countertrend_blocked = self._arb_live_countertrend_single_side_blocked(
+            mode=mode,
+            target=down_outcome,
+            spot_context=spot_context,
+        )
         fair_up_book = max(1.0 - down_outcome.best_bid, 0.0)
         fair_down_book = max(1.0 - up_outcome.best_bid, 0.0)
         fair_up = fair_up_book
@@ -2566,6 +2590,7 @@ class BTC5mStrategyService:
         if (
             desired_up_ratio > current_up_ratio + strong_ratio_gap
             and up_net_edge >= directional_required_net_edge
+            and not up_countertrend_blocked
             and (
                 spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
                 or (spot_context.delta_bps >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS and up_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
@@ -2583,6 +2608,7 @@ class BTC5mStrategyService:
         if (
             desired_up_ratio < current_up_ratio - strong_ratio_gap
             and down_net_edge >= directional_required_net_edge
+            and not down_countertrend_blocked
             and (
                 spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
                 or (spot_context.delta_bps <= -_ARB_CHEAP_SIDE_SOFT_DELTA_BPS and down_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
@@ -2607,6 +2633,7 @@ class BTC5mStrategyService:
         if (
             up_net_edge >= down_net_edge
             and up_net_edge >= required_net_edge
+            and not up_countertrend_blocked
             and (
                 spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
                 or (spot_context.delta_bps >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS and up_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
@@ -2623,6 +2650,7 @@ class BTC5mStrategyService:
         if (
             down_net_edge > up_net_edge
             and down_net_edge >= required_net_edge
+            and not down_countertrend_blocked
             and (
                 spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
                 or (spot_context.delta_bps <= -_ARB_CHEAP_SIDE_SOFT_DELTA_BPS and down_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
@@ -3257,6 +3285,28 @@ class BTC5mStrategyService:
         up_live = max(float(up_notional), 0.0) > _ARB_MIN_OPERABLE_BUDGET_SLACK
         down_live = max(float(down_notional), 0.0) > _ARB_MIN_OPERABLE_BUDGET_SLACK
         return up_live ^ down_live
+
+    def _arb_live_countertrend_single_side_blocked(
+        self,
+        *,
+        mode: str,
+        target: MarketOutcome,
+        spot_context: ArbSpotContext | None,
+    ) -> bool:
+        if str(mode or "").strip().lower() != "live" or spot_context is None:
+            return False
+        label = str(target.label or "").strip().lower()
+        if label == "down":
+            return (
+                spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                and spot_context.fair_up >= _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR
+            )
+        if label == "up":
+            return (
+                spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                and spot_context.fair_down >= _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR
+            )
+        return False
 
     def _arb_live_like_second_leg_viability(
         self,

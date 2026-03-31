@@ -1186,6 +1186,185 @@ def test_live_flat_cheap_side_probe_uses_single_instruction(tmp_path: Path) -> N
     db.close()
 
 
+def test_live_countertrend_cheap_side_is_blocked_when_spot_points_up(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=114.14),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72),
+        logger=logging.getLogger("test-btc5m-live-countertrend-cheap-side"),
+    )
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.65,
+        best_bid=0.55,
+        best_ask_size=200.0,
+        ask_levels=(AskLevel(price=0.65, size=200.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.25,
+        best_bid=0.24,
+        best_ask_size=200.0,
+        ask_levels=(AskLevel(price=0.25, size=200.0),),
+    )
+    spot_context = ArbSpotContext(
+        current_price=67615.88,
+        reference_price=67285.61,
+        lead_price=67615.88,
+        anchor_price=67285.61,
+        local_anchor_price=67285.61,
+        official_price_to_beat=67285.61,
+        anchor_source="captured-chainlink",
+        fair_up=0.72,
+        fair_down=0.28,
+        delta_bps=49.0,
+        price_mode="captured-chainlink",
+        source="polymarket-rtds+binance",
+        age_ms=1,
+        binance_price=67615.88,
+        chainlink_price=67615.88,
+        captured_price_to_beat=67285.61,
+        effective_price_to_beat=67285.61,
+        effective_price_source="captured-chainlink",
+    )
+
+    signal = service._select_cheap_side_target(  # noqa: SLF001
+        mode="live",
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        pair_sum=0.90,
+        spot_context=spot_context,
+        desired_up_ratio=0.50,
+        current_up_ratio=0.80,
+    )
+
+    assert signal is None
+    db.close()
+
+
+def test_live_does_not_expand_same_single_leg_inventory_with_cheap_side(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    start_time = (datetime.now(timezone.utc) - timedelta(seconds=35)).isoformat().replace("+00:00", "Z")
+    market = {
+        "question": "Bitcoin Up or Down - Live One Leg",
+        "slug": "btc-updown-5m-live-one-leg",
+        "conditionId": "cond-live-one-leg",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": start_time}],
+    }
+    clob = _FakeCLOBClient(
+        books={
+            "asset-up": {"bids": [{"price": "0.73"}], "asks": [{"price": "0.74", "size": "300"}]},
+            "asset-down": {"bids": [{"price": "0.26"}], "asks": [{"price": "0.27", "size": "300"}]},
+        },
+        balance=114.14,
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        clob,
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=97.72,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-one-leg-no-expand"),
+    )
+    db.upsert_copy_position(
+        asset="asset-down",
+        condition_id=market["conditionId"],
+        size=30.0,
+        avg_price=0.27,
+        realized_pnl=0.0,
+        title=market["question"],
+        slug=market["slug"],
+        outcome="Down",
+        category="crypto",
+    )
+    spot_context = ArbSpotContext(
+        current_price=66710.0,
+        reference_price=66744.5386,
+        lead_price=66710.0,
+        anchor_price=66744.5386,
+        local_anchor_price=66744.5386,
+        official_price_to_beat=66744.5386,
+        anchor_source="captured-chainlink",
+        fair_up=0.55,
+        fair_down=0.40,
+        delta_bps=-8.0,
+        price_mode="captured-chainlink",
+        source="polymarket-rtds+binance",
+        age_ms=1,
+        binance_price=66710.0,
+        chainlink_price=66710.0,
+        captured_price_to_beat=66744.5386,
+        effective_price_to_beat=66744.5386,
+        effective_price_source="captured-chainlink",
+    )
+    service._arb_spot_context = lambda **kwargs: spot_context  # type: ignore[method-assign]
+    service._arb_reference_state = lambda **kwargs: ArbReferenceState(  # type: ignore[method-assign]
+        comparable=True,
+        quality="captured-chainlink",
+        note="ok",
+        budget_scale=1.0,
+    )
+    forced_down = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.27,
+        best_bid=0.26,
+        best_ask_size=300.0,
+        ask_levels=(AskLevel(price=0.27, size=300.0),),
+    )
+    service._select_cheap_side_target = lambda **kwargs: ArbSingleSideSignal(  # type: ignore[method-assign]
+        target=forced_down,
+        fair_value=0.40,
+        raw_edge=0.13,
+        net_edge=0.1175,
+        edge_source="spot",
+    )
+    service._build_arb_biased_bracket_plan = lambda **kwargs: None  # type: ignore[method-assign]
+    service._build_arb_repair_plan = lambda **kwargs: None  # type: ignore[method-assign]
+    service._build_arb_stabilize_plan = lambda **kwargs: None  # type: ignore[method-assign]
+    service._build_arb_inventory_unwind_plan = lambda **kwargs: None  # type: ignore[method-assign]
+
+    plan = service._build_arb_micro_plan(  # noqa: SLF001
+        mode="live",
+        market=market,
+        cash_balance=114.14,
+        effective_bankroll=97.72,
+        live_total_capital=114.14,
+        current_total_exposure=8.1,
+        carry_exposure=0.0,
+        carry_window_count=0,
+    )
+
+    assert plan is None
+    assert "debe cubrirse antes de ampliar inventario" in str(db.get_bot_state("strategy_last_note") or "")
+    db.close()
+
+
 def test_live_inventory_unwind_does_not_sell_single_leg_probe(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
