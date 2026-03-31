@@ -5465,6 +5465,17 @@ class BTC5mStrategyService:
                 reason="Acaba de ejecutar y deja una pausa muy corta para no sobrerreaccionar.",
                 blocking=True,
             )
+        if "cheap-side bloqueado" in note_lower:
+            blocked_detail = "Hace falta un bracket de dos patas viable antes de abrir."
+            blocked_index = note_lower.find("cheap-side bloqueado")
+            if blocked_index >= 0:
+                blocked_detail = note_text[blocked_index:].strip() or blocked_detail
+            return StrategyOperabilityState(
+                state="waiting_bracket",
+                label="Esperando bracket",
+                reason=blocked_detail,
+                blocking=True,
+            )
         if "no locked edge" in note_lower:
             return StrategyOperabilityState(
                 state="waiting_edge",

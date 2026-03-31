@@ -952,6 +952,38 @@ def test_live_biased_bracket_anchors_on_strong_edge_side_when_ratio_side_is_weak
     db.close()
 
 
+def test_operability_state_prefers_waiting_bracket_over_waiting_edge_for_live_cheap_side_block(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=97.72),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72),
+        logger=logging.getLogger("test-btc5m-operability-waiting-bracket"),
+    )
+
+    state = service._derive_strategy_operability_state(  # noqa: SLF001
+        note=(
+            "arb_micro no locked edge: pair sum 1.010 | Up edge 0.00% net -1.67% | "
+            "Down edge 11.28% net 10.03% | cheap-side bloqueado en live: "
+            "la primera entrada debe abrir el bracket con dos patas"
+        ),
+        extra_state={},
+    )
+
+    assert state.state == "waiting_bracket"
+    assert state.label == "Esperando bracket"
+    assert "cheap-side bloqueado en live" in state.reason
+    db.close()
+
+
 def test_shadow_ignores_live_control_even_in_live_like_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
