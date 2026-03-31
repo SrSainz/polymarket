@@ -2953,7 +2953,15 @@ class BTC5mStrategyService:
             0.0,
         )
         target_tolerance = max(_ARB_SMALL_CAPITAL_TARGET_TOLERANCE_USDC, configured_target * 0.0025)
-        if configured_target <= 0 or capital_now <= configured_target + target_tolerance:
+        compounding_buffer = target_tolerance
+        if mode in {"live", "shadow"}:
+            live_cycle_budget = self._live_cycle_budget_target(
+                mode=mode,
+                live_total_capital=capital_now,
+            )
+            if live_cycle_budget > 0:
+                compounding_buffer = max(compounding_buffer, live_cycle_budget)
+        if configured_target <= 0 or capital_now <= configured_target + compounding_buffer:
             return "fixed-cycle"
         return "percent-after-compounding"
 
