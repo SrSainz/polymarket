@@ -4367,7 +4367,7 @@ class BTC5mStrategyService:
             extreme_imbalance = False
         if not extreme_imbalance:
             return None
-        relaxed_live_catchup = str(mode or "").strip().lower() in {"live", "shadow"}
+        shadow_relaxed_catchup = str(mode or "").strip().lower() == "shadow"
 
         seconds_remaining = max(300 - self._seconds_into_window(market), 0)
         directional_target = self._arb_directional_target(
@@ -4401,7 +4401,7 @@ class BTC5mStrategyService:
             and desired_target_ratio >= _ARB_STABILIZE_CATCHUP_TARGET_MIN_RATIO
             and current_target_ratio <= max(desired_target_ratio * 0.5, 0.20)
         )
-        if relaxed_live_catchup:
+        if shadow_relaxed_catchup:
             normal_stabilize_viable = (
                 delta_supports_target
                 and pair_sum <= _ARB_STABILIZE_MAX_PAIR_SUM
@@ -4418,7 +4418,7 @@ class BTC5mStrategyService:
             return None
         max_pair_sum = (
             _ARB_STABILIZE_CATCHUP_MAX_PAIR_SUM
-            if catchup_rebalance and relaxed_live_catchup
+            if catchup_rebalance and shadow_relaxed_catchup
             else _ARB_STABILIZE_MAX_PAIR_SUM
         )
         if pair_sum > max_pair_sum:
@@ -4432,7 +4432,7 @@ class BTC5mStrategyService:
             return None
         allowed_negative_edge = (
             _ARB_STABILIZE_CATCHUP_MAX_NEG_NET_EDGE
-            if catchup_rebalance and relaxed_live_catchup
+            if catchup_rebalance and shadow_relaxed_catchup
             else _ARB_STABILIZE_MAX_NEG_NET_EDGE
         )
         if net_edge < allowed_negative_edge:
@@ -4445,7 +4445,7 @@ class BTC5mStrategyService:
 
         min_operable_budget = self._arb_min_operable_budget(target)
         residual_completion = (
-            relaxed_live_catchup
+            shadow_relaxed_catchup
             and catchup_rebalance
             and seconds_remaining > _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING
             and needed_notional < min_operable_budget

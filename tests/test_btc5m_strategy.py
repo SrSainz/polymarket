@@ -5269,7 +5269,7 @@ def test_arb_micro_catchup_rebalances_extreme_one_sided_inventory_even_if_spot_s
     db.close()
 
 
-def test_arb_stabilize_catchup_still_operates_with_live_small_25_usdc_budget(tmp_path: Path) -> None:
+def test_live_stabilize_does_not_use_catchup_with_small_budget(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     start_time = (datetime.now(timezone.utc) - timedelta(seconds=145)).isoformat().replace("+00:00", "Z")
@@ -5368,11 +5368,7 @@ def test_arb_stabilize_catchup_still_operates_with_live_small_25_usdc_budget(tmp
         bracket_phase="redistribuir",
     )
 
-    assert plan is not None
-    assert plan.price_mode == "stabilize-catchup"
-    assert plan.primary_target.label == "Up"
-    assert plan.primary_notional >= 2.89
-    assert plan.primary_notional <= 3.05
+    assert plan is None
     db.close()
 
 
