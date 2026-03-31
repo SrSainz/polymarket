@@ -6454,7 +6454,18 @@ class BTC5mStrategyService:
         for order_id in self._live_user_payload_order_ids(payload):
             if not order_id:
                 continue
-            self.db.delete_bot_state(self._pending_live_order_key(order_id))
+            if status in {"cancelled", "canceled", "failed", "rejected", "expired"}:
+                self.db.delete_bot_state(self._pending_live_order_key(order_id))
+                continue
+            pending = self._load_pending_live_order(order_id)
+            if pending is None:
+                continue
+            pending["response_status"] = status
+            pending["last_order_update_at"] = int(time.time())
+            self.db.set_bot_state(
+                self._pending_live_order_key(order_id),
+                json.dumps(pending, separators=(",", ":"), sort_keys=True),
+            )
 
     def _reconcile_live_trade_payload(self, *, payload: dict[str, object]) -> None:
         for trade in self._iter_live_trade_payloads(payload):
@@ -6658,6 +6669,17 @@ class BTC5mStrategyService:
                 items.append(payload)
         return items
 
+    def _observed_live_activities(self) -> list[dict[str, object]]:
+        items: list[dict[str, object]] = []
+        for row in self.db.list_bot_state_by_prefix("live_observed_activity:"):
+            try:
+                payload = json.loads(row["value"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict):
+                items.append(payload)
+        return items
+
     def _pending_live_order_remaining_size(self, pending: Mapping[str, object]) -> float:
         original_size = max(_safe_float(pending.get("size")), 0.0)
         if original_size <= 0:
@@ -6836,6 +6858,8 @@ class BTC5mStrategyService:
             self._observed_live_activity_key(order_id=order_id, trade_id=trade_id),
             json.dumps(observed_payload, separators=(",", ":"), sort_keys=True),
         )
+        self.db.set_bot_state("position_ledger_mode", "external")
+        self.db.set_bot_state("position_ledger_preflight", "blocked")
 
     def _instruction_from_pending_live_order(self, pending: dict[str, object]) -> CopyInstruction:
         return CopyInstruction(
@@ -6961,6 +6985,15 @@ class BTC5mStrategyService:
         if mode != "live" or not self.settings.config.live_preflight_require_clean_ledger:
             self.db.set_bot_state("position_ledger_preflight", "disabled" if mode != "live" else "not-required")
             return True, ""
+        observed_live_activity = self._observed_live_activities()
+        if observed_live_activity:
+            message = (
+                f"live preflight: detected {len(observed_live_activity)} live trade(s) outside bot ledger; "
+                "reconcile manually or run clear-ledger before live"
+            )
+            self.db.set_bot_state("position_ledger_preflight", "blocked")
+            self.db.set_bot_state("position_ledger_mode", "external")
+            return False, message
         positions = self.db.list_copy_positions()
         if not positions:
             self.db.set_bot_state("position_ledger_mode", "")

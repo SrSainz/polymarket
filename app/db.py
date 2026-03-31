@@ -570,6 +570,13 @@ class Database:
         with self.conn:
             self.conn.execute("DELETE FROM bot_state WHERE key = ?", (key,))
 
+    def delete_bot_state_by_prefix(self, prefix: str) -> None:
+        safe_prefix = str(prefix or "").strip()
+        if not safe_prefix:
+            return
+        with self.conn:
+            self.conn.execute("DELETE FROM bot_state WHERE key LIKE ?", (f"{safe_prefix}%",))
+
     def list_bot_state_by_prefix(self, prefix: str) -> list[sqlite3.Row]:
         safe_prefix = str(prefix or "").strip()
         if not safe_prefix:

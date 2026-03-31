@@ -630,6 +630,95 @@ def test_live_user_trade_reconciliation_updates_live_position_from_pending_order
     db.close()
 
 
+def test_live_order_update_does_not_drop_pending_before_trade_reconciliation(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={"asset-up": {"asks": [{"price": 0.42, "size": 50}], "bids": [{"price": 0.41, "size": 50}]}, "asset-down": {"asks": [{"price": 0.58, "size": 50}], "bids": [{"price": 0.57, "size": 50}]}}),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-live-order-update"),
+    )
+    db.set_bot_state(
+        "live_pending_order:order-1",
+        json.dumps(
+            {
+                "order_id": "order-1",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-up",
+                "condition_id": "cond-1",
+                "size": 10.0,
+                "price": 0.42,
+                "notional": 4.2,
+                "source_wallet": "strategy:test",
+                "source_signal_id": 1,
+                "title": "Bitcoin Up or Down - Test",
+                "slug": "btc-updown-5m-test",
+                "outcome": "Up",
+                "category": "crypto",
+                "reason": "pending-live-order",
+                "execution_profile": "maker_post_only_gtc",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+    service._handle_user_payload(  # noqa: SLF001
+        {
+            "event_type": "order",
+            "status": "CONFIRMED",
+            "order_id": "order-1",
+        }
+    )
+
+    pending_after_order = db.get_bot_state("live_pending_order:order-1")
+    assert pending_after_order is not None
+    assert db.get_recent_executions(limit=5) == []
+
+    service._handle_user_payload(  # noqa: SLF001
+        {
+            "event_type": "trade",
+            "status": "MATCHED",
+            "id": "trade-1",
+            "maker_orders": [
+                {
+                    "order_id": "order-1",
+                    "matched_amount": "10",
+                    "price": "0.43",
+                }
+            ],
+        }
+    )
+
+    position = db.get_copy_position("asset-up")
+    executions = db.get_recent_executions(limit=5)
+
+    assert position is not None
+    assert float(position["size"]) == 10.0
+    assert executions[0]["mode"] == "live"
+    assert db.get_bot_state("live_pending_order:order-1") is None
+    db.close()
+
+
 def test_live_user_trade_failure_clears_pending_order_without_mutating_position(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -774,6 +863,65 @@ def test_live_user_trade_without_pending_order_is_recorded_as_observed_activity(
     assert observed["title"] == "Bitcoin Up or Down - Test"
     assert observed["outcome"] == "Down"
     assert "fuera del bot" in observed["notes"]
+    db.close()
+
+
+def test_live_position_ledger_preflight_blocks_on_observed_external_activity(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Test",
+        "slug": "btc-updown-5m-test",
+        "conditionId": "cond-1",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={"asset-up": {"asks": [{"price": 0.42, "size": 50}], "bids": [{"price": 0.41, "size": 50}]}, "asset-down": {"asks": [{"price": 0.58, "size": 50}], "bids": [{"price": 0.57, "size": 50}]}}),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_preflight_require_clean_ledger=True),
+        logger=logging.getLogger("test-btc5m-live-ledger-preflight"),
+    )
+    db.set_bot_state(
+        "live_observed_activity:manual-order:trade-manual",
+        json.dumps(
+            {
+                "order_id": "manual-order",
+                "trade_id": "trade-manual",
+                "asset": "asset-up",
+                "condition_id": "cond-1",
+                "size": 5.0,
+                "price": 0.44,
+                "notional": 2.2,
+                "title": "Bitcoin Up or Down - Test",
+                "slug": "btc-updown-5m-test",
+                "outcome": "Up",
+                "category": "crypto",
+                "status": "confirmed",
+                "observed_live_activity": True,
+                "notes": "movimiento live observado fuera del bot",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+    allowed, note = service._position_ledger_can_run(mode="live")  # noqa: SLF001
+
+    assert allowed is False
+    assert "outside bot ledger" in note
+    assert db.get_bot_state("position_ledger_preflight") == "blocked"
+    assert db.get_bot_state("position_ledger_mode") == "external"
     db.close()
 
 
