@@ -1190,6 +1190,141 @@ def test_cheap_side_selector_accepts_strong_net_edge_even_when_raw_edge_is_below
     db.close()
 
 
+def test_cheap_side_selector_accepts_micro_probe_signal_with_positive_net_edge(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=114.14),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72, live_btc5m_cycle_budget_usdc=25.0),
+        logger=logging.getLogger("test-btc5m-cheap-side-micro-probe"),
+    )
+
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.73,
+        best_bid=0.72,
+        best_ask_size=100.0,
+        ask_levels=(AskLevel(price=0.73, size=100.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.28,
+        best_bid=0.25,
+        best_ask_size=100.0,
+        ask_levels=(AskLevel(price=0.28, size=100.0),),
+    )
+    spot_context = ArbSpotContext(
+        current_price=66731.86,
+        reference_price=66744.54,
+        lead_price=66731.86,
+        anchor_price=66744.54,
+        local_anchor_price=66744.54,
+        official_price_to_beat=66744.54,
+        anchor_source="captured-chainlink",
+        fair_up=0.70,
+        fair_down=0.3023,
+        delta_bps=-1.9,
+        price_mode="captured-chainlink",
+        source="polymarket-rtds+binance",
+        age_ms=1,
+        binance_price=66731.86,
+        chainlink_price=66731.86,
+        captured_price_to_beat=66744.54,
+        effective_price_to_beat=66744.54,
+        effective_price_source="captured-chainlink",
+    )
+
+    signal = service._select_cheap_side_target(  # noqa: SLF001
+        mode="live",
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        pair_sum=1.01,
+        spot_context=spot_context,
+        desired_up_ratio=0.43,
+        current_up_ratio=0.50,
+    )
+
+    assert signal is not None
+    assert signal.target.label == "Down"
+    assert signal.raw_edge > 0.02
+    assert signal.net_edge > 0.0
+    db.close()
+
+
+def test_live_allows_micro_probe_flat_cheap_side_open_when_second_leg_is_viable(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=114.14),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72, live_btc5m_cycle_budget_usdc=25.0),
+        logger=logging.getLogger("test-btc5m-live-cheap-micro-probe-allow"),
+    )
+
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.73,
+        best_bid=0.72,
+        best_ask_size=100.0,
+        ask_levels=(AskLevel(price=0.73, size=100.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.28,
+        best_bid=0.25,
+        best_ask_size=100.0,
+        ask_levels=(AskLevel(price=0.28, size=100.0),),
+    )
+    signal = ArbSingleSideSignal(
+        target=down_outcome,
+        fair_value=0.3023,
+        raw_edge=0.0223,
+        net_edge=0.0013,
+        edge_source="spot",
+    )
+
+    blocked, reason = service._arb_should_block_flat_single_side_open(  # noqa: SLF001
+        mode="live",
+        bracket_phase="abrir",
+        current_up_notional=0.0,
+        current_down_notional=0.0,
+        signal=signal,
+        pair_sum=1.01,
+        cycle_budget=25.0,
+        cash_balance=114.14,
+        single_budget=1.05,
+        seconds_into_window=40,
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        fair_up=0.74,
+        fair_down=0.3023,
+        delta_bps=-1.9,
+    )
+
+    assert blocked is False
+    assert reason == ""
+    db.close()
+
+
 def test_shadow_ignores_live_control_even_in_live_like_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

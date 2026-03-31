@@ -87,6 +87,11 @@ _ARB_CHEAP_SIDE_STRONG_EDGE_MIN = 0.11
 _ARB_CHEAP_SIDE_SOFT_DELTA_BPS = 0.75
 _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN = 0.04
 _ARB_CHEAP_SIDE_NET_EDGE_MIN = 0.025
+_ARB_CHEAP_SIDE_MICRO_DELTA_BPS = 1.5
+_ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN = 0.001
+_ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN = 0.02
+_ARB_CHEAP_SIDE_MICRO_RATIO_GAP = 0.055
+_ARB_CHEAP_SIDE_MICRO_PAIR_MAX = 1.012
 _ARB_CHEAP_SIDE_OVERROUND_DRAG_WEIGHT = 0.65
 _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT = 0.35
 _ARB_CHEAP_SIDE_FEE_ESTIMATE = 0.0025
@@ -2020,6 +2025,7 @@ class BTC5mStrategyService:
         cheap_side_block_reason = ""
         if _ARB_ENABLE_CHEAP_SIDE:
             cheap_side = self._select_cheap_side_target(
+                mode=mode,
                 up_outcome=up_outcome,
                 down_outcome=down_outcome,
                 pair_sum=pair_sum,
@@ -2458,6 +2464,7 @@ class BTC5mStrategyService:
     def _select_cheap_side_target(
         self,
         *,
+        mode: str = "paper",
         up_outcome: MarketOutcome,
         down_outcome: MarketOutcome,
         pair_sum: float,
@@ -2517,11 +2524,22 @@ class BTC5mStrategyService:
             and max_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN
             and abs(spot_context.delta_bps) >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS
         )
+        ratio_gap_abs = abs(desired_up_ratio - current_up_ratio)
+        micro_probe_signal = (
+            str(mode or "").strip().lower() == "live"
+            and
+            pair_sum <= min(_ARB_CHEAP_SIDE_MICRO_PAIR_MAX, _ARB_CHEAP_SIDE_SUM_MAX)
+            and ratio_gap_abs >= _ARB_CHEAP_SIDE_MICRO_RATIO_GAP
+            and max_edge >= _ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN
+            and max_net_edge >= _ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN
+            and abs(spot_context.delta_bps) >= _ARB_CHEAP_SIDE_MICRO_DELTA_BPS
+        )
         if (
             abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS
             and max_edge < 0.10
             and not strong_single_side_signal
             and not soft_single_side_signal
+            and not micro_probe_signal
         ):
             return None
 
@@ -2529,13 +2547,19 @@ class BTC5mStrategyService:
         required_net_edge = _ARB_CHEAP_SIDE_NET_EDGE_MIN + min(max(pair_sum - 1.0, 0.0) * 0.35, 0.01)
         if abs(spot_context.delta_bps) < _ARB_CHEAP_SIDE_MIN_DELTA_BPS:
             required_net_edge = max(required_net_edge, _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
+        directional_required_net_edge = (
+            min(required_net_edge, _ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN)
+            if micro_probe_signal
+            else required_net_edge
+        )
 
         if (
             desired_up_ratio > current_up_ratio + strong_ratio_gap
-            and up_net_edge >= required_net_edge
+            and up_net_edge >= directional_required_net_edge
             and (
                 spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
                 or (spot_context.delta_bps >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS and up_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
+                or micro_probe_signal
                 or (strong_single_side_signal and up_net_edge >= down_net_edge)
             )
         ):
@@ -2545,13 +2569,14 @@ class BTC5mStrategyService:
                 raw_edge=up_edge,
                 net_edge=up_net_edge,
                 edge_source=edge_source_up,
-            )
+        )
         if (
             desired_up_ratio < current_up_ratio - strong_ratio_gap
-            and down_net_edge >= required_net_edge
+            and down_net_edge >= directional_required_net_edge
             and (
                 spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
                 or (spot_context.delta_bps <= -_ARB_CHEAP_SIDE_SOFT_DELTA_BPS and down_net_edge >= _ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN)
+                or micro_probe_signal
                 or (strong_single_side_signal and down_net_edge > up_net_edge)
             )
         ):
@@ -3319,7 +3344,15 @@ class BTC5mStrategyService:
                 or signal.raw_edge >= _ARB_CHEAP_SIDE_STRONG_EDGE_MIN
             )
         )
-        if not strong_flat_signal:
+        micro_flat_signal = (
+            str(mode or "").strip().lower() == "live"
+            and
+            pair_sum <= min(_ARB_CHEAP_SIDE_MICRO_PAIR_MAX, _ARB_CHEAP_SIDE_SUM_MAX)
+            and abs(delta_bps) >= _ARB_CHEAP_SIDE_MICRO_DELTA_BPS
+            and signal.raw_edge >= _ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN
+            and signal.net_edge >= _ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN
+        )
+        if not strong_flat_signal and not micro_flat_signal:
             return (
                 True,
                 "cheap-side bloqueado en live-like: apertura plana solo con edge fuerte, ventana temprana y presupuesto de pareja",
