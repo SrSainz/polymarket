@@ -2455,7 +2455,10 @@ class BTC5mStrategyService:
             return None
         strong_single_side_signal = (
             pair_sum <= min(_ARB_CHEAP_SIDE_BASE_PAIR_MAX, _ARB_CHEAP_SIDE_SUM_MAX)
-            and max_edge >= _ARB_CHEAP_SIDE_STRONG_EDGE_MIN
+            and (
+                max_edge >= _ARB_CHEAP_SIDE_STRONG_EDGE_MIN
+                or max_net_edge >= max(_ARB_CHEAP_SIDE_SOFT_NET_EDGE_MIN * 2.0, 0.08)
+            )
         )
         soft_single_side_signal = (
             pair_sum <= min(_ARB_CHEAP_SIDE_MID_PAIR_MAX, _ARB_CHEAP_SIDE_SUM_MAX)

@@ -1051,6 +1051,75 @@ def test_operability_state_prefers_waiting_bracket_over_waiting_edge_for_live_ch
     db.close()
 
 
+def test_cheap_side_selector_accepts_strong_net_edge_even_when_raw_edge_is_below_strong_threshold(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=100.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-cheap-side-strong-net-edge"),
+    )
+
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.50,
+        best_bid=0.40,
+        best_ask_size=100.0,
+        ask_levels=(AskLevel(price=0.50, size=100.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.50,
+        best_bid=0.50,
+        best_ask_size=100.0,
+        ask_levels=(AskLevel(price=0.50, size=100.0),),
+    )
+    spot_context = ArbSpotContext(
+        current_price=66819.0,
+        reference_price=66744.5386,
+        lead_price=66819.0,
+        anchor_price=66744.5386,
+        local_anchor_price=66744.5386,
+        official_price_to_beat=66744.5386,
+        anchor_source="captured-chainlink",
+        fair_up=0.50,
+        fair_down=0.60,
+        delta_bps=10.5,
+        price_mode="captured-chainlink",
+        source="polymarket-rtds+binance",
+        age_ms=1,
+        binance_price=66819.0,
+        chainlink_price=66819.0,
+        captured_price_to_beat=66744.5386,
+        effective_price_to_beat=66744.5386,
+        effective_price_source="captured-chainlink",
+    )
+
+    signal = service._select_cheap_side_target(  # noqa: SLF001
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        pair_sum=1.01,
+        spot_context=spot_context,
+        desired_up_ratio=0.62,
+        current_up_ratio=0.5,
+    )
+
+    assert signal is not None
+    assert signal.target.label == "Down"
+    assert signal.net_edge > 0.08
+    db.close()
+
+
 def test_shadow_ignores_live_control_even_in_live_like_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
