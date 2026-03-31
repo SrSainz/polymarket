@@ -6365,7 +6365,7 @@ class BTC5mStrategyService:
             dedupe_key = self._processed_live_trade_key(order_id=order_id or "external", trade_id=synthetic_trade_id)
             pending = self._load_pending_live_order(order_id) if order_id else None
             if pending is None:
-                if status not in {"confirmed"}:
+                if status not in {"confirmed", "filled", "matched"}:
                     continue
                 if size <= 0 or price <= 0:
                     continue
@@ -6387,7 +6387,7 @@ class BTC5mStrategyService:
                 self.db.delete_bot_state(self._pending_live_order_key(order_id))
                 self.db.set_bot_state("live_last_failed_order_id", order_id)
                 continue
-            if status not in {"confirmed"}:
+            if status not in {"confirmed", "filled", "matched"}:
                 continue
             if size <= 0 or price <= 0:
                 continue

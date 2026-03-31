@@ -2369,7 +2369,8 @@ def _executions_payload(db_path: Path, limit: int) -> dict:
         rows = conn.execute(
             """
             SELECT id, ts, mode, status, action, side, asset, condition_id, size, price, notional,
-                   source_wallet, source_signal_id, strategy_variant, notes, pnl_delta
+                   source_wallet, source_signal_id, strategy_variant, notes, pnl_delta,
+                   title, slug, outcome, category
             FROM executions
             ORDER BY ts DESC
             LIMIT ?
@@ -2407,9 +2408,10 @@ def _executions_payload(db_path: Path, limit: int) -> dict:
                 "strategy_variant": row["strategy_variant"] or "",
                 "notes": row["notes"] or "",
                 "pnl_delta": float(row["pnl_delta"]),
-                "slug": "",
-                "title": "",
-                "outcome": "",
+                "slug": row["slug"] or "",
+                "title": row["title"] or "",
+                "outcome": row["outcome"] or "",
+                "category": row["category"] or "",
                 "pending_live_order": False,
                 "observed_live_activity": False,
             }

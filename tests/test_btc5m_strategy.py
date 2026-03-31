@@ -593,9 +593,15 @@ def test_live_user_trade_reconciliation_updates_live_position_from_pending_order
         }
     )
 
-    assert db.get_copy_position("asset-up") is None
-    assert db.get_recent_executions(limit=5) == []
-    assert db.get_bot_state("live_pending_order:order-1") is not None
+    position = db.get_copy_position("asset-up")
+    executions = db.get_recent_executions(limit=5)
+
+    assert position is not None
+    assert float(position["size"]) == 10.0
+    assert abs(float(position["avg_price"]) - 0.43) < 1e-9
+    assert executions[0]["mode"] == "live"
+    assert "live_user_feed_reconciled" in str(executions[0]["notes"])
+    assert db.get_bot_state("live_pending_order:order-1") is None
 
     service._handle_user_payload(  # noqa: SLF001
         {
@@ -612,15 +618,8 @@ def test_live_user_trade_reconciliation_updates_live_position_from_pending_order
         }
     )
 
-    position = db.get_copy_position("asset-up")
-    executions = db.get_recent_executions(limit=5)
-
-    assert position is not None
-    assert float(position["size"]) == 10.0
-    assert abs(float(position["avg_price"]) - 0.43) < 1e-9
-    assert executions[0]["mode"] == "live"
-    assert "live_user_feed_reconciled" in str(executions[0]["notes"])
-    assert db.get_bot_state("live_pending_order:order-1") is None
+    executions_after_repeat = db.get_recent_executions(limit=5)
+    assert len(executions_after_repeat) == 1
     db.close()
 
 

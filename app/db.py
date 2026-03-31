@@ -89,7 +89,11 @@ CREATE TABLE IF NOT EXISTS executions (
     strategy_variant TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
     pnl_delta REAL NOT NULL DEFAULT 0,
-    fee_paid REAL NOT NULL DEFAULT 0
+    fee_paid REAL NOT NULL DEFAULT 0,
+    title TEXT NOT NULL DEFAULT '',
+    slug TEXT NOT NULL DEFAULT '',
+    outcome TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS daily_pnl (
@@ -239,6 +243,22 @@ class Database:
         if "fee_paid" not in execution_columns:
             self.conn.execute(
                 "ALTER TABLE executions ADD COLUMN fee_paid REAL NOT NULL DEFAULT 0"
+            )
+        if "title" not in execution_columns:
+            self.conn.execute(
+                "ALTER TABLE executions ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+            )
+        if "slug" not in execution_columns:
+            self.conn.execute(
+                "ALTER TABLE executions ADD COLUMN slug TEXT NOT NULL DEFAULT ''"
+            )
+        if "outcome" not in execution_columns:
+            self.conn.execute(
+                "ALTER TABLE executions ADD COLUMN outcome TEXT NOT NULL DEFAULT ''"
+            )
+        if "category" not in execution_columns:
+            self.conn.execute(
+                "ALTER TABLE executions ADD COLUMN category TEXT NOT NULL DEFAULT ''"
             )
 
     def _table_columns(self, table_name: str) -> dict[str, str]:
@@ -719,6 +739,10 @@ class Database:
         source_wallet: str,
         source_signal_id: int,
         notes: str,
+        title: str = "",
+        slug: str = "",
+        outcome: str = "",
+        category: str = "",
         strategy_variant: str | None = None,
     ) -> None:
         active_variant = str(strategy_variant or self._current_strategy_variant()).strip()
@@ -727,8 +751,9 @@ class Database:
                 """
                 INSERT INTO executions (
                     ts, mode, status, action, side, asset, condition_id, size, price, notional,
-                    source_wallet, source_signal_id, strategy_variant, notes, pnl_delta, fee_paid
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_wallet, source_signal_id, strategy_variant, notes, pnl_delta, fee_paid,
+                    title, slug, outcome, category
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(time.time()),
@@ -747,6 +772,10 @@ class Database:
                     notes,
                     result.pnl_delta,
                     result.fee_paid,
+                    title,
+                    slug,
+                    outcome,
+                    category,
                 ),
             )
 

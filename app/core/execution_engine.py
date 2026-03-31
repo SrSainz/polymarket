@@ -286,6 +286,10 @@ def apply_fill_to_database(
         source_wallet=instruction.source_wallet,
         source_signal_id=instruction.source_signal_id,
         notes=notes or instruction.reason,
+        title=instruction.title,
+        slug=instruction.slug,
+        outcome=instruction.outcome,
+        category=instruction.category,
     )
     return result
 

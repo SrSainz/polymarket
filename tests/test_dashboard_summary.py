@@ -439,6 +439,37 @@ def test_executions_payload_includes_observed_live_trades(tmp_path: Path) -> Non
     assert payload["items"][1]["observed_live_activity"] is False
 
 
+def test_executions_payload_keeps_execution_market_metadata(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    instruction = CopyInstruction(
+        action=SignalAction.OPEN,
+        side=TradeSide.BUY,
+        asset="asset-meta",
+        condition_id="cond-meta",
+        size=6.0,
+        price=0.37,
+        notional=2.22,
+        source_wallet="strategy:arb_micro",
+        source_signal_id=77,
+        title="Bitcoin Up or Down - March 31",
+        slug="btc-updown-5m-1774920300",
+        outcome="Up",
+        category="crypto",
+        reason="metadata fill",
+    )
+    PaperBroker(db).execute(instruction)
+    db.close()
+
+    payload = _executions_payload(db_path, limit=10)
+
+    assert payload["items"][0]["title"] == "Bitcoin Up or Down - March 31"
+    assert payload["items"][0]["slug"] == "btc-updown-5m-1774920300"
+    assert payload["items"][0]["outcome"] == "Up"
+    assert payload["items"][0]["category"] == "crypto"
+
+
 def test_claimable_positions_snapshot_uses_env_wallet_and_data_api(tmp_path: Path) -> None:
     fake_settings = SimpleNamespace(
         env=SimpleNamespace(
