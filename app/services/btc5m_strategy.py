@@ -399,6 +399,8 @@ class BTC5mStrategyService:
         self._last_cycle_log_at = 0.0
         self._last_market_lookup_warning_signature = ""
         self._last_market_lookup_warning_at = 0.0
+        self._last_strategy_audit_signature = ""
+        self._last_strategy_audit_at = 0.0
         self._attach_runtime_feeds()
 
     def run(self, mode: str = "paper") -> dict[str, int]:
@@ -5686,6 +5688,7 @@ class BTC5mStrategyService:
         if market is not None:
             snapshot_state.setdefault("strategy_market_slug", str(market.get("slug") or ""))
             snapshot_state.setdefault("strategy_market_title", str(market.get("question") or market.get("slug") or ""))
+            snapshot_state.setdefault("strategy_market_condition_id", str(market.get("conditionId") or ""))
         else:
             current_slug = str(self.db.get_bot_state("strategy_market_slug") or "").strip()
             if not current_slug:
@@ -5693,6 +5696,10 @@ class BTC5mStrategyService:
                 current_slug = f"btc-updown-5m-{now_ts - (now_ts % 300)}"
             snapshot_state.setdefault("strategy_market_slug", current_slug)
             snapshot_state.setdefault("strategy_market_title", str(self.db.get_bot_state("strategy_market_title") or ""))
+            snapshot_state.setdefault(
+                "strategy_market_condition_id",
+                str(self.db.get_bot_state("strategy_market_condition_id") or ""),
+            )
         if opportunity is not None:
             snapshot_state.setdefault("strategy_target_outcome", opportunity.target.label)
             snapshot_state.setdefault("strategy_target_price", f"{opportunity.target.best_ask:.6f}")
@@ -5765,6 +5772,110 @@ class BTC5mStrategyService:
             self.db.set_bot_state(key, value)
         for key, value in snapshot_state.items():
             self.db.set_bot_state(key, value)
+        self._record_strategy_window_audit(note=note, operability_state=operability_state)
+
+    def _record_strategy_window_audit(
+        self,
+        *,
+        note: str,
+        operability_state: StrategyOperabilityState,
+    ) -> None:
+        slug = str(self.db.get_bot_state("strategy_market_slug") or "").strip()
+        if not slug:
+            return
+
+        def _state_text(key: str, default: str = "") -> str:
+            return str(self.db.get_bot_state(key) or default).strip()
+
+        def _state_float(key: str) -> float:
+            return _safe_float(self.db.get_bot_state(key))
+
+        snapshot = {
+            "strategy_runtime_mode": _state_text("strategy_runtime_mode"),
+            "strategy_market_slug": slug,
+            "strategy_market_title": _state_text("strategy_market_title"),
+            "strategy_market_condition_id": _state_text("strategy_market_condition_id"),
+            "strategy_last_note": str(note or "").strip(),
+            "strategy_operability_state": operability_state.state,
+            "strategy_operability_label": operability_state.label,
+            "strategy_operability_reason": operability_state.reason,
+            "strategy_operability_blocking": bool(operability_state.blocking),
+            "strategy_bracket_phase": _state_text("strategy_bracket_phase"),
+            "strategy_price_mode": _state_text("strategy_price_mode"),
+            "strategy_target_outcome": _state_text("strategy_target_outcome"),
+            "strategy_trigger_outcome": _state_text("strategy_trigger_outcome"),
+            "strategy_signal_side": _state_text("strategy_signal_side"),
+            "strategy_selected_execution": _state_text("strategy_selected_execution"),
+            "strategy_reference_quality": _state_text("strategy_reference_quality"),
+            "strategy_reference_note": _state_text("strategy_reference_note"),
+            "strategy_pair_sum": round(_state_float("strategy_pair_sum"), 6),
+            "strategy_expected_edge_bps": round(_state_float("strategy_expected_edge_bps"), 4),
+            "strategy_terminal_ev_pct": round(_state_float("strategy_terminal_ev_pct"), 6),
+            "strategy_spot_delta_bps": round(_state_float("strategy_spot_delta_bps"), 4),
+            "strategy_spot_fair_up": round(_state_float("strategy_spot_fair_up"), 6),
+            "strategy_spot_fair_down": round(_state_float("strategy_spot_fair_down"), 6),
+            "strategy_best_ask_up": round(_state_float("strategy_best_ask_up"), 6),
+            "strategy_best_ask_down": round(_state_float("strategy_best_ask_down"), 6),
+            "strategy_cycle_budget": round(_state_float("strategy_cycle_budget"), 6),
+            "strategy_budget_effective_ceiling": round(_state_float("strategy_budget_effective_ceiling"), 6),
+            "strategy_current_market_exposure": round(_state_float("strategy_current_market_exposure"), 6),
+            "strategy_current_up_ratio": round(_state_float("strategy_current_up_ratio"), 6),
+            "strategy_desired_up_ratio": round(_state_float("strategy_desired_up_ratio"), 6),
+            "live_cash_balance": round(_state_float("live_cash_balance"), 6),
+            "live_available_to_trade": round(_state_float("live_cash_allowance"), 6),
+        }
+        if snapshot["live_available_to_trade"] <= 0:
+            snapshot["live_available_to_trade"] = snapshot["live_cash_balance"]
+
+        signature_payload = {
+            "slug": snapshot["strategy_market_slug"],
+            "note": snapshot["strategy_last_note"],
+            "operability_state": snapshot["strategy_operability_state"],
+            "bracket_phase": snapshot["strategy_bracket_phase"],
+            "price_mode": snapshot["strategy_price_mode"],
+            "target_outcome": snapshot["strategy_target_outcome"],
+            "signal_side": snapshot["strategy_signal_side"],
+            "selected_execution": snapshot["strategy_selected_execution"],
+            "reference_quality": snapshot["strategy_reference_quality"],
+            "pair_sum": round(float(snapshot["strategy_pair_sum"]), 3),
+            "expected_edge_bps": round(float(snapshot["strategy_expected_edge_bps"]), 1),
+            "terminal_ev_pct": round(float(snapshot["strategy_terminal_ev_pct"]), 4),
+            "spot_delta_bps": round(float(snapshot["strategy_spot_delta_bps"]), 1),
+            "cycle_budget": round(float(snapshot["strategy_cycle_budget"]), 2),
+            "current_market_exposure": round(float(snapshot["strategy_current_market_exposure"]), 2),
+        }
+        signature = json.dumps(signature_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        now = time.time()
+        if signature == self._last_strategy_audit_signature and (now - self._last_strategy_audit_at) < 20.0:
+            return
+        self._last_strategy_audit_signature = signature
+        self._last_strategy_audit_at = now
+        self.db.record_strategy_window_audit(
+            ts=int(now),
+            slug=str(snapshot["strategy_market_slug"]),
+            condition_id=str(snapshot["strategy_market_condition_id"]),
+            title=str(snapshot["strategy_market_title"]),
+            runtime_mode=str(snapshot["strategy_runtime_mode"]),
+            note=str(snapshot["strategy_last_note"]),
+            operability_state=str(snapshot["strategy_operability_state"]),
+            operability_reason=str(snapshot["strategy_operability_reason"]),
+            bracket_phase=str(snapshot["strategy_bracket_phase"]),
+            price_mode=str(snapshot["strategy_price_mode"]),
+            target_outcome=str(snapshot["strategy_target_outcome"]),
+            signal_side=str(snapshot["strategy_signal_side"]),
+            selected_execution=str(snapshot["strategy_selected_execution"]),
+            pair_sum=float(snapshot["strategy_pair_sum"]),
+            expected_edge_bps=float(snapshot["strategy_expected_edge_bps"]),
+            terminal_ev_pct=float(snapshot["strategy_terminal_ev_pct"]),
+            spot_delta_bps=float(snapshot["strategy_spot_delta_bps"]),
+            cycle_budget=float(snapshot["strategy_cycle_budget"]),
+            budget_effective_ceiling=float(snapshot["strategy_budget_effective_ceiling"]),
+            current_exposure=float(snapshot["strategy_current_market_exposure"]),
+            current_market_total_exposure=float(snapshot["strategy_current_market_exposure"]),
+            live_cash_balance=float(snapshot["live_cash_balance"]),
+            live_available_to_trade=float(snapshot["live_available_to_trade"]),
+            payload_json=json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
+        )
 
     def _derive_strategy_operability_state(
         self,

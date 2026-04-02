@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-03-31-shadow-home14";
+const UI_BUILD = "2026-04-02-shadow-home15";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -15,6 +15,7 @@ let apiBase = "";
 let lastSummary = null;
 let lastPositions = [];
 let lastExecutions = [];
+let lastWindowAudit = [];
 
 function isPublicRuntime() {
   return runtimeMode === "public" || runtimeMode === "public-fallback";
@@ -3196,6 +3197,46 @@ function paintExecutions(items) {
     .join("");
 }
 
+function paintWindowAudit(items) {
+  lastWindowAudit = Array.isArray(items) ? items : [];
+  const body = document.getElementById("windowAuditBody");
+  if (!body) return;
+  if (!items.length) {
+    body.innerHTML = `<tr><td colspan="8">No hay auditoria local todavia.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = items
+    .map((item) => {
+      const phaseBits = [item.bracket_phase, item.price_mode].filter(Boolean);
+      const signalBits = [item.target_outcome, item.signal_side, item.selected_execution].filter(Boolean);
+      const edgeBits = [
+        `pair ${fmt(Number(item.pair_sum || 0), 3)}`,
+        `edge ${fmtBps(Number(item.expected_edge_bps || 0), 1)}`,
+        `ev ${fmtPct(Number(item.terminal_ev_pct || 0) * 100, 2)}`,
+        `delta ${fmtBps(Number(item.spot_delta_bps || 0) * 100, 1)}`,
+      ];
+      const budgetBits = [
+        `ciclo ${fmtUsdPlain(Number(item.cycle_budget || 0), 2)}`,
+        `techo ${fmtUsdPlain(Number(item.budget_effective_ceiling || 0), 2)}`,
+        `exp ${fmtUsdPlain(Number(item.current_market_total_exposure || item.current_exposure || 0), 2)}`,
+      ];
+      return `
+      <tr>
+        <td data-label="Hora UTC">${tsToIso(item.ts)}</td>
+        <td data-label="Ventana">${escapeHtml(item.title || item.slug || "-")}</td>
+        <td data-label="Estado">${escapeHtml(item.operability_state || "-")}</td>
+        <td data-label="Fase">${escapeHtml(phaseBits.join(" | ") || "-")}</td>
+        <td data-label="Senal">${escapeHtml(signalBits.join(" | ") || "-")}</td>
+        <td data-label="Edge / EV">${escapeHtml(edgeBits.join(" | "))}</td>
+        <td data-label="Budget / Expo">${escapeHtml(budgetBits.join(" | "))}</td>
+        <td data-label="Nota">${escapeHtml(String(item.note || item.operability_reason || "-"))}</td>
+      </tr>
+    `;
+    })
+    .join("");
+}
+
 function paintSignals(items) {
   const body = document.getElementById("signalsBody");
   if (!items.length) {
@@ -3222,13 +3263,15 @@ function paintSignals(items) {
 async function refreshAll() {
   try {
     if (runtimeMode === "local") {
-      const [summary, positions, executions] = await Promise.all([
+      const [summary, positions, executions, audit] = await Promise.all([
         getJson(withCacheBust(buildApiUrl("/api/summary"))),
         getJson(withCacheBust(buildApiUrl("/api/positions"))),
         getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
+        getJson(withCacheBust(buildApiUrl("/api/window-audit?limit=60"))),
       ]);
 
       paintExecutions(executions.items || []);
+      paintWindowAudit(audit.items || []);
       paintSummary(summary, positions.items || []);
       paintPositions(positions.items || []);
       paintSignals([]);
@@ -3244,6 +3287,7 @@ async function refreshAll() {
     if (isBackendDisconnectedRuntime()) {
       const summary = disconnectedSummary();
       paintExecutions([]);
+      paintWindowAudit([]);
       paintSummary(summary, []);
       paintPositions([]);
       paintSignals([]);
@@ -3307,6 +3351,7 @@ async function refreshAll() {
     };
 
     paintExecutions(executions);
+    paintWindowAudit([]);
     paintSummary(summary, positions);
     paintPositions(positions);
     paintSignals([]);
@@ -3317,6 +3362,7 @@ async function refreshAll() {
     paintStrategySetups(summary);
     paintWalletHypotheses(summary);
   } catch (error) {
+    paintWindowAudit([]);
     document.getElementById("lastUpdated").textContent = `Error de actualizacion: ${error.message}`;
   }
 }

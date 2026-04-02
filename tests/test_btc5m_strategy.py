@@ -1867,6 +1867,79 @@ def test_operability_state_prefers_waiting_bracket_over_waiting_edge_for_live_ch
     db.close()
 
 
+def test_record_strategy_snapshot_persists_local_window_audit_and_deduplicates(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=97.72),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72),
+        logger=logging.getLogger("test-btc5m-window-audit"),
+    )
+    db.set_bot_state("strategy_runtime_mode", "live")
+    db.set_bot_state("strategy_market_slug", "btc-updown-5m-1775050500")
+    db.set_bot_state("strategy_market_title", "Bitcoin Up or Down - Audit Window")
+    db.set_bot_state("live_cash_balance", "97.720000")
+    db.set_bot_state("live_cash_allowance", "0.000000")
+
+    snapshot_state = {
+        "strategy_target_outcome": "Down",
+        "strategy_trigger_outcome": "Down",
+        "strategy_signal_side": "down",
+        "strategy_selected_execution": "taker_fak",
+        "strategy_bracket_phase": "abrir",
+        "strategy_price_mode": "cheap-side",
+        "strategy_reference_quality": "captured-chainlink",
+        "strategy_reference_note": "captura local",
+        "strategy_pair_sum": "1.010000",
+        "strategy_expected_edge_bps": "27.4000",
+        "strategy_terminal_ev_pct": "0.041200",
+        "strategy_spot_delta_bps": "-8.5000",
+        "strategy_cycle_budget": "25.000000",
+        "strategy_budget_effective_ceiling": "25.000000",
+        "strategy_current_market_exposure": "0.000000",
+        "strategy_current_up_ratio": "0.500000",
+        "strategy_desired_up_ratio": "0.430000",
+    }
+
+    service._record_strategy_snapshot(  # noqa: SLF001
+        market=None,
+        note="arb_micro no locked edge: pair sum 1.010",
+        extra_state=snapshot_state,
+    )
+    service._record_strategy_snapshot(  # noqa: SLF001
+        market=None,
+        note="arb_micro no locked edge: pair sum 1.010",
+        extra_state=snapshot_state,
+    )
+
+    rows = db.list_strategy_window_audit(limit=10)
+    assert len(rows) == 1
+    assert rows[0]["slug"] == "btc-updown-5m-1775050500"
+    assert rows[0]["operability_state"] == "waiting_edge"
+    payload = json.loads(rows[0]["payload_json"])
+    assert payload["strategy_target_outcome"] == "Down"
+    assert payload["strategy_reference_quality"] == "captured-chainlink"
+
+    service._record_strategy_snapshot(  # noqa: SLF001
+        market=None,
+        note="arb_micro too late para abrir con cabeza",
+        extra_state={**snapshot_state, "strategy_bracket_phase": "cerrar"},
+    )
+
+    rows = db.list_strategy_window_audit(limit=10)
+    assert len(rows) == 2
+    assert rows[0]["operability_state"] == "late_window"
+    db.close()
+
+
 def test_cheap_side_selector_accepts_strong_net_edge_even_when_raw_edge_is_below_strong_threshold(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

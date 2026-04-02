@@ -796,6 +796,33 @@
             <details class="panel panel-details noise-section">
               <summary class="panel-head">
                 <div>
+                  <h2>Auditoria local por ventana</h2>
+                  <p class="panel-copy">Decision por decision del bot en local: edge, EV, fase, budget y motivo del skip o la entrada.</p>
+                </div>
+                <span class="badge">ultimas 60</span>
+              </summary>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Hora UTC</th>
+                      <th>Ventana</th>
+                      <th>Estado</th>
+                      <th>Fase</th>
+                      <th>Senal</th>
+                      <th>Edge / EV</th>
+                      <th>Budget / Expo</th>
+                      <th>Nota</th>
+                    </tr>
+                  </thead>
+                  <tbody id="windowAuditBody"></tbody>
+                </table>
+              </div>
+            </details>
+
+            <details class="panel panel-details noise-section">
+              <summary class="panel-head">
+                <div>
                   <h2>Senales</h2>
                   <p class="panel-copy">Registro tecnico interno del motor.</p>
                 </div>
@@ -825,6 +852,6 @@
         <p id="lastUpdated">Ultima actualizacion: -</p>
       </footer>
     </div>
-    <script src="/assets/app.js?v=20260331-shadow-home14"></script>
+    <script src="/assets/app.js?v=20260402-shadow-home15"></script>
   </body>
 </html>

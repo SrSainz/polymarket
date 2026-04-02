@@ -42,7 +42,7 @@ _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _CLAIMABLE_CACHE: dict[str, tuple[dict, float]] = {}
 _CLAIMABLE_CACHE_TTL_SECONDS = 30.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-03-31-shadow-home14"
+_DASHBOARD_BUILD = "2026-04-02-shadow-home15"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -843,6 +843,12 @@ def _build_handler(
                 query = parse_qs(parsed.query)
                 limit = _safe_int(query.get("limit", ["50"])[0], default=50, minimum=1, maximum=500)
                 self._json(_executions_payload(db_path, limit=limit))
+                return
+            if path == "/api/window-audit":
+                query = parse_qs(parsed.query)
+                limit = _safe_int(query.get("limit", ["50"])[0], default=50, minimum=1, maximum=500)
+                slug = str(query.get("slug", [""])[0] or "").strip()
+                self._json(_window_audit_payload(db_path, limit=limit, slug=slug))
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
@@ -2425,6 +2431,74 @@ def _executions_payload(db_path: Path, limit: int) -> dict:
         reverse=True,
     )
     return {"items": items[:limit]}
+
+
+def _window_audit_payload(db_path: Path, *, limit: int, slug: str = "") -> dict:
+    safe_slug = str(slug or "").strip()
+    with _connect(db_path) as conn:
+        if safe_slug:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM strategy_window_audit
+                WHERE slug = ?
+                ORDER BY ts DESC, id DESC
+                LIMIT ?
+                """,
+                (safe_slug, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM strategy_window_audit
+                ORDER BY ts DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+    items: list[dict] = []
+    for row in rows:
+        snapshot: dict = {}
+        raw_snapshot = str(row["payload_json"] or "").strip()
+        if raw_snapshot:
+            try:
+                parsed_snapshot = json.loads(raw_snapshot)
+            except json.JSONDecodeError:
+                parsed_snapshot = {}
+            if isinstance(parsed_snapshot, dict):
+                snapshot = parsed_snapshot
+        items.append(
+            {
+                "id": int(row["id"]),
+                "ts": int(row["ts"]),
+                "slug": str(row["slug"] or ""),
+                "condition_id": str(row["condition_id"] or ""),
+                "title": str(row["title"] or ""),
+                "runtime_mode": str(row["runtime_mode"] or ""),
+                "note": str(row["note"] or ""),
+                "operability_state": str(row["operability_state"] or ""),
+                "operability_reason": str(row["operability_reason"] or ""),
+                "bracket_phase": str(row["bracket_phase"] or ""),
+                "price_mode": str(row["price_mode"] or ""),
+                "target_outcome": str(row["target_outcome"] or ""),
+                "signal_side": str(row["signal_side"] or ""),
+                "selected_execution": str(row["selected_execution"] or ""),
+                "pair_sum": float(row["pair_sum"] or 0.0),
+                "expected_edge_bps": float(row["expected_edge_bps"] or 0.0),
+                "terminal_ev_pct": float(row["terminal_ev_pct"] or 0.0),
+                "spot_delta_bps": float(row["spot_delta_bps"] or 0.0),
+                "cycle_budget": float(row["cycle_budget"] or 0.0),
+                "budget_effective_ceiling": float(row["budget_effective_ceiling"] or 0.0),
+                "current_exposure": float(row["current_exposure"] or 0.0),
+                "current_market_total_exposure": float(row["current_market_total_exposure"] or 0.0),
+                "live_cash_balance": float(row["live_cash_balance"] or 0.0),
+                "live_available_to_trade": float(row["live_available_to_trade"] or 0.0),
+                "snapshot": snapshot,
+            }
+        )
+    return {"items": items}
 
 
 def _signals_payload(db_path: Path, limit: int) -> dict:

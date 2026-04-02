@@ -179,6 +179,40 @@ CREATE TABLE IF NOT EXISTS strategy_windows (
     winning_outcome TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS strategy_window_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    slug TEXT NOT NULL,
+    condition_id TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    runtime_mode TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    operability_state TEXT NOT NULL DEFAULT '',
+    operability_reason TEXT NOT NULL DEFAULT '',
+    bracket_phase TEXT NOT NULL DEFAULT '',
+    price_mode TEXT NOT NULL DEFAULT '',
+    target_outcome TEXT NOT NULL DEFAULT '',
+    signal_side TEXT NOT NULL DEFAULT '',
+    selected_execution TEXT NOT NULL DEFAULT '',
+    pair_sum REAL NOT NULL DEFAULT 0,
+    expected_edge_bps REAL NOT NULL DEFAULT 0,
+    terminal_ev_pct REAL NOT NULL DEFAULT 0,
+    spot_delta_bps REAL NOT NULL DEFAULT 0,
+    cycle_budget REAL NOT NULL DEFAULT 0,
+    budget_effective_ceiling REAL NOT NULL DEFAULT 0,
+    current_exposure REAL NOT NULL DEFAULT 0,
+    current_market_total_exposure REAL NOT NULL DEFAULT 0,
+    live_cash_balance REAL NOT NULL DEFAULT 0,
+    live_available_to_trade REAL NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_window_audit_slug_ts
+ON strategy_window_audit(slug, ts DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_strategy_window_audit_ts
+ON strategy_window_audit(ts DESC, id DESC);
 """
 
 
@@ -1092,6 +1126,105 @@ class Database:
                     slug,
                 ),
             )
+
+    def record_strategy_window_audit(
+        self,
+        *,
+        ts: int,
+        slug: str,
+        condition_id: str,
+        title: str,
+        runtime_mode: str,
+        note: str,
+        operability_state: str,
+        operability_reason: str,
+        bracket_phase: str,
+        price_mode: str,
+        target_outcome: str,
+        signal_side: str,
+        selected_execution: str,
+        pair_sum: float,
+        expected_edge_bps: float,
+        terminal_ev_pct: float,
+        spot_delta_bps: float,
+        cycle_budget: float,
+        budget_effective_ceiling: float,
+        current_exposure: float,
+        current_market_total_exposure: float,
+        live_cash_balance: float,
+        live_available_to_trade: float,
+        payload_json: str,
+    ) -> None:
+        safe_slug = str(slug or "").strip()
+        if not safe_slug:
+            return
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO strategy_window_audit (
+                    ts, slug, condition_id, title, runtime_mode, note, operability_state, operability_reason,
+                    bracket_phase, price_mode, target_outcome, signal_side, selected_execution, pair_sum,
+                    expected_edge_bps, terminal_ev_pct, spot_delta_bps, cycle_budget, budget_effective_ceiling,
+                    current_exposure, current_market_total_exposure, live_cash_balance, live_available_to_trade,
+                    payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(ts),
+                    safe_slug,
+                    str(condition_id or ""),
+                    str(title or ""),
+                    str(runtime_mode or ""),
+                    str(note or ""),
+                    str(operability_state or ""),
+                    str(operability_reason or ""),
+                    str(bracket_phase or ""),
+                    str(price_mode or ""),
+                    str(target_outcome or ""),
+                    str(signal_side or ""),
+                    str(selected_execution or ""),
+                    float(pair_sum),
+                    float(expected_edge_bps),
+                    float(terminal_ev_pct),
+                    float(spot_delta_bps),
+                    float(cycle_budget),
+                    float(budget_effective_ceiling),
+                    float(current_exposure),
+                    float(current_market_total_exposure),
+                    float(live_cash_balance),
+                    float(live_available_to_trade),
+                    str(payload_json or "{}"),
+                ),
+            )
+
+    def list_strategy_window_audit(
+        self,
+        *,
+        limit: int = 50,
+        slug: str | None = None,
+    ) -> list[sqlite3.Row]:
+        safe_limit = max(int(limit), 1)
+        safe_slug = str(slug or "").strip()
+        if safe_slug:
+            return self.conn.execute(
+                """
+                SELECT *
+                FROM strategy_window_audit
+                WHERE slug = ?
+                ORDER BY ts DESC, id DESC
+                LIMIT ?
+                """,
+                (safe_slug, safe_limit),
+            ).fetchall()
+        return self.conn.execute(
+            """
+            SELECT *
+            FROM strategy_window_audit
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
 
     def get_strategy_setup_stats(self, *, price_mode: str, timing_regime: str) -> dict[str, float]:
         row = self.conn.execute(

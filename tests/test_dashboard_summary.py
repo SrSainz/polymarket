@@ -23,6 +23,7 @@ from app.services.dashboard_server import (
     _restart_runtime_state,
     _reset_runtime_state,
     _summary_payload,
+    _window_audit_payload,
 )
 
 
@@ -468,6 +469,47 @@ def test_executions_payload_keeps_execution_market_metadata(tmp_path: Path) -> N
     assert payload["items"][0]["slug"] == "btc-updown-5m-1774920300"
     assert payload["items"][0]["outcome"] == "Up"
     assert payload["items"][0]["category"] == "crypto"
+
+
+def test_window_audit_payload_exposes_recent_strategy_snapshots(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.record_strategy_window_audit(
+        ts=1775050505,
+        slug="btc-updown-5m-1775050500",
+        condition_id="cond-audit",
+        title="Bitcoin Up or Down - March 31, 10:35AM-10:40AM ET",
+        runtime_mode="live",
+        note="arb_micro no locked edge: pair sum 1.010",
+        operability_state="waiting_bracket",
+        operability_reason="Hace falta un bracket ejecutable antes de abrir.",
+        bracket_phase="abrir",
+        price_mode="cheap-side",
+        target_outcome="Down",
+        signal_side="down",
+        selected_execution="taker_fak",
+        pair_sum=1.01,
+        expected_edge_bps=27.4,
+        terminal_ev_pct=0.0412,
+        spot_delta_bps=-8.5,
+        cycle_budget=25.0,
+        budget_effective_ceiling=25.0,
+        current_exposure=0.0,
+        current_market_total_exposure=0.0,
+        live_cash_balance=97.72,
+        live_available_to_trade=97.72,
+        payload_json=json.dumps({"strategy_reference_quality": "captured-chainlink"}),
+    )
+    db.close()
+
+    payload = _window_audit_payload(db_path, limit=10)
+
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["slug"] == "btc-updown-5m-1775050500"
+    assert payload["items"][0]["operability_state"] == "waiting_bracket"
+    assert payload["items"][0]["terminal_ev_pct"] == 0.0412
+    assert payload["items"][0]["snapshot"]["strategy_reference_quality"] == "captured-chainlink"
 
 
 def test_claimable_positions_snapshot_uses_env_wallet_and_data_api(tmp_path: Path) -> None:
