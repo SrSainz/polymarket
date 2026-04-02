@@ -10,7 +10,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-02-shadow-home18";
+const UI_BUILD = "2026-04-02-shadow-home19";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -19,6 +19,10 @@ let lastSummary = null;
 let lastPositions = [];
 let lastExecutions = [];
 let lastWindowAudit = [];
+let backendFailureStreak = 0;
+let backendConnectedOnce = false;
+
+const BACKEND_FAILURES_BEFORE_DISCONNECT = 3;
 
 function isPublicRuntime() {
   return runtimeMode === "public" || runtimeMode === "public-fallback";
@@ -2291,7 +2295,23 @@ async function getJson(url) {
   return response.json();
 }
 
-async function probeBackendConnection() {
+function markBackendHealthy() {
+  backendFailureStreak = 0;
+  backendConnectedOnce = true;
+  runtimeMode = "local";
+}
+
+function markBackendFailure({ allowGrace = false } = {}) {
+  backendFailureStreak += 1;
+  if (allowGrace && backendConnectedOnce && backendFailureStreak < BACKEND_FAILURES_BEFORE_DISCONNECT) {
+    runtimeMode = "local";
+    return true;
+  }
+  runtimeMode = "backend-unreachable";
+  return false;
+}
+
+async function probeBackendConnection({ allowGrace = false } = {}) {
   if (!apiBase) {
     runtimeMode = "backend-unreachable";
     return false;
@@ -2299,14 +2319,13 @@ async function probeBackendConnection() {
   for (const path of ["/api/health", "/api/summary"]) {
     try {
       await getJson(withCacheBust(buildApiUrl(path)));
-      runtimeMode = "local";
+      markBackendHealthy();
       return true;
     } catch (_error) {
       continue;
     }
   }
-  runtimeMode = "backend-unreachable";
-  return false;
+  return markBackendFailure({ allowGrace });
 }
 
 function applyBackendConnectionUi(connected, failureMessage = "") {
@@ -3535,7 +3554,7 @@ function paintSignals(items) {
 async function refreshAll() {
   try {
     if (runtimeMode === "backend-unreachable" && apiBase) {
-      const reconnected = await probeBackendConnection();
+      const reconnected = await probeBackendConnection({ allowGrace: true });
       applyBackendConnectionUi(
         reconnected,
         `No conecta con el backend del NAS (${apiBase}). Seguimos en modo backend desconectado.`
@@ -3549,6 +3568,9 @@ async function refreshAll() {
         getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
         getJson(withCacheBust(buildApiUrl("/api/window-audit?limit=60"))),
       ]);
+
+      markBackendHealthy();
+      applyBackendConnectionUi(true);
 
       paintExecutions(executions.items || []);
       paintWindowAudit(audit.items || []);
@@ -3642,6 +3664,13 @@ async function refreshAll() {
     paintStrategySetups(summary);
     paintWalletHypotheses(summary);
   } catch (error) {
+    if (apiBase) {
+      const stillConnected = markBackendFailure({ allowGrace: true });
+      applyBackendConnectionUi(
+        stillConnected,
+        `No conecta con el backend del NAS (${apiBase}). Seguimos en modo backend desconectado.`
+      );
+    }
     paintWindowAudit([]);
     document.getElementById("lastUpdated").textContent = `Error de actualizacion: ${error.message}`;
   }
