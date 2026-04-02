@@ -93,6 +93,8 @@ _ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN = 0.02
 _ARB_CHEAP_SIDE_MICRO_RATIO_GAP = 0.055
 _ARB_CHEAP_SIDE_MICRO_PAIR_MAX = 1.012
 _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR = 0.58
+_ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR = 0.64
+_ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS = 4.0
 _ARB_CHEAP_SIDE_OVERROUND_DRAG_WEIGHT = 0.65
 _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT = 0.35
 _ARB_CHEAP_SIDE_FEE_ESTIMATE = 0.0025
@@ -3342,6 +3344,31 @@ class BTC5mStrategyService:
             )
         return False
 
+    def _arb_live_countertrend_biased_bracket_anchor_blocked(
+        self,
+        *,
+        mode: str,
+        primary_target: MarketOutcome,
+        desired_up_ratio: float,
+        spot_context: ArbSpotContext | None,
+    ) -> bool:
+        if str(mode or "").strip().lower() != "live" or spot_context is None:
+            return False
+        label = str(primary_target.label or "").strip().lower()
+        if label == "down":
+            return (
+                desired_up_ratio >= 0.5
+                and spot_context.delta_bps >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS
+                and spot_context.fair_up >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR
+            )
+        if label == "up":
+            return (
+                desired_up_ratio <= 0.5
+                and spot_context.delta_bps <= -_ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS
+                and spot_context.fair_down >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR
+            )
+        return False
+
     def _arb_live_extreme_leg_rebalance_blocked(
         self,
         *,
@@ -3978,6 +4005,14 @@ class BTC5mStrategyService:
                 primary_net_edge = down_net_edge
                 hedge_net_edge = up_net_edge
                 desired_primary_ratio = 1.0 - desired_up_ratio
+
+            if self._arb_live_countertrend_biased_bracket_anchor_blocked(
+                mode=mode,
+                primary_target=primary_target,
+                desired_up_ratio=desired_up_ratio,
+                spot_context=spot_context,
+            ):
+                continue
 
             if primary_net_edge < primary_min_edge:
                 continue

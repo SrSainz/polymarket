@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 import time
 from pathlib import Path
 
@@ -216,11 +217,67 @@ ON strategy_window_audit(ts DESC, id DESC);
 """
 
 
+class _SerializedConnection:
+    def __init__(self, conn: sqlite3.Connection, lock: threading.RLock) -> None:
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_lock", lock)
+
+    def __enter__(self) -> "_SerializedConnection":
+        self._lock.acquire()
+        try:
+            self._conn.__enter__()
+        except Exception:
+            self._lock.release()
+            raise
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool | None:
+        try:
+            return self._conn.__exit__(exc_type, exc, tb)
+        finally:
+            self._lock.release()
+
+    def execute(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        with self._lock:
+            return self._conn.executescript(*args, **kwargs)
+
+    def commit(self) -> None:
+        with self._lock:
+            self._conn.commit()
+
+    def rollback(self) -> None:
+        with self._lock:
+            self._conn.rollback()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if name in {"_conn", "_lock"}:
+            object.__setattr__(self, name, value)
+            return
+        setattr(self._conn, name, value)
+
+
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
-        self.conn = self._connect_with_retry(db_path)
-        self.conn.row_factory = sqlite3.Row
+        self._conn_lock = threading.RLock()
+        raw_conn = self._connect_with_retry(db_path)
+        raw_conn.row_factory = sqlite3.Row
+        self.conn = _SerializedConnection(raw_conn, self._conn_lock)
         self._configure_connection()
 
     def init_schema(self) -> None:
@@ -235,7 +292,7 @@ class Database:
         last_error: sqlite3.OperationalError | None = None
         for attempt in range(1, attempts + 1):
             try:
-                return sqlite3.connect(str(db_path), timeout=30.0)
+                return sqlite3.connect(str(db_path), timeout=30.0, check_same_thread=False)
             except sqlite3.OperationalError as error:
                 last_error = error
                 if attempt >= attempts:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
@@ -630,6 +631,90 @@ def test_live_user_trade_reconciliation_updates_live_position_from_pending_order
     db.close()
 
 
+def test_live_user_trade_reconciliation_from_user_feed_thread_updates_position(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Threaded Feed",
+        "slug": "btc-updown-5m-threaded-feed",
+        "conditionId": "cond-threaded",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={"asset-up": {"asks": [{"price": 0.42, "size": 50}], "bids": [{"price": 0.41, "size": 50}]}, "asset-down": {"asks": [{"price": 0.58, "size": 50}], "bids": [{"price": 0.57, "size": 50}]}}),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-live-threaded-reconcile"),
+    )
+    db.set_bot_state(
+        "live_pending_order:order-threaded",
+        json.dumps(
+            {
+                "order_id": "order-threaded",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-up",
+                "condition_id": "cond-threaded",
+                "size": 10.0,
+                "price": 0.42,
+                "notional": 4.2,
+                "source_wallet": "strategy:test",
+                "source_signal_id": 1,
+                "title": "Bitcoin Up or Down - Threaded Feed",
+                "slug": "btc-updown-5m-threaded-feed",
+                "outcome": "Up",
+                "category": "crypto",
+                "reason": "pending-live-order",
+                "execution_profile": "maker_post_only_gtc",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+    thread = threading.Thread(
+        target=lambda: service._handle_user_payload(  # noqa: SLF001
+            {
+                "event_type": "trade",
+                "status": "MATCHED",
+                "id": "trade-threaded",
+                "maker_orders": [
+                    {
+                        "order_id": "order-threaded",
+                        "matched_amount": "10",
+                        "price": "0.43",
+                    }
+                ],
+            }
+        )
+    )
+    thread.start()
+    thread.join(timeout=5)
+
+    position = db.get_copy_position("asset-up")
+    executions = db.get_recent_executions(limit=5)
+
+    assert thread.is_alive() is False
+    assert position is not None
+    assert float(position["size"]) == 10.0
+    assert abs(float(position["avg_price"]) - 0.43) < 1e-9
+    assert executions[0]["mode"] == "live"
+    assert "live_user_feed_reconciled" in str(executions[0]["notes"])
+    assert db.get_bot_state("live_pending_order:order-threaded") is None
+    db.close()
+
+
 def test_live_order_update_does_not_drop_pending_before_trade_reconciliation(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -1173,6 +1258,102 @@ def test_live_biased_bracket_anchors_on_strong_edge_side_when_ratio_side_is_weak
     assert {instruction.outcome for instruction in plan.instructions} == {"Up", "Down"}
     assert any(instruction.outcome == "Up" and abs(float(instruction.price) - 0.51) < 1e-9 for instruction in plan.instructions)
     assert "pata fuerte Down" in plan.note
+    db.close()
+
+
+def test_live_biased_bracket_does_not_anchor_countertrend_when_spot_is_strongly_up(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Countertrend Bracket Block",
+        "slug": "btc-updown-5m-live-countertrend-bracket",
+        "conditionId": "cond-live-countertrend-bracket",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": (datetime.now(timezone.utc) - timedelta(seconds=40)).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {"asks": [{"price": 0.78, "size": 120}], "bids": [{"price": 0.77, "size": 120}]},
+                "asset-down": {"asks": [{"price": 0.23, "size": 120}], "bids": [{"price": 0.22, "size": 120}]},
+            },
+            balance=67.94,
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72, live_btc5m_cycle_budget_usdc=25.0),
+        logger=logging.getLogger("test-btc5m-live-countertrend-bracket-block"),
+    )
+
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.78,
+        best_bid=0.77,
+        best_ask_size=120.0,
+        ask_levels=(AskLevel(price=0.78, size=120.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.23,
+        best_bid=0.22,
+        best_ask_size=120.0,
+        ask_levels=(AskLevel(price=0.23, size=120.0),),
+    )
+    spot_context = ArbSpotContext(
+        current_price=66278.12,
+        reference_price=66012.88,
+        lead_price=66278.12,
+        anchor_price=66012.88,
+        local_anchor_price=66012.88,
+        official_price_to_beat=66012.88,
+        anchor_source="polymarket-official",
+        fair_up=0.9702,
+        fair_down=0.0298,
+        delta_bps=7.5,
+        price_mode="official",
+        source="polymarket-rtds+binance",
+        age_ms=1,
+        binance_price=66278.12,
+        chainlink_price=66278.12,
+        captured_price_to_beat=0.0,
+        effective_price_to_beat=66012.88,
+        effective_price_source="official",
+    )
+
+    plan = service._build_arb_biased_bracket_plan(  # noqa: SLF001
+        mode="live",
+        market=market,
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        pair_sum=1.01,
+        fair_up=0.79,
+        fair_down=0.60,
+        up_net_edge=0.005,
+        down_net_edge=0.1003,
+        desired_up_ratio=0.54,
+        current_up_ratio=0.23,
+        timing_regime="early",
+        cycle_budget=18.92,
+        cash_balance=54.29,
+        remaining_instruction_capacity=6,
+        current_up_notional=0.0,
+        current_down_notional=0.0,
+        spot_context=spot_context,
+        bracket_phase="abrir",
+    )
+
+    assert plan is None
     db.close()
 
 
