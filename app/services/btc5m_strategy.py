@@ -4647,6 +4647,12 @@ class BTC5mStrategyService:
         ratio_gap = target_ratio - desired_target_ratio
         if ratio_gap < _ARB_UNWIND_RATIO_TRIGGER:
             return None
+        if (
+            str(mode or "").strip().lower() == "live"
+            and float(target.best_bid or 0.0) >= _ARB_LIVE_REBALANCE_EXTREME_LEG_PRICE
+            and float(other_notional or 0.0) > _ARB_MIN_OPERABLE_BUDGET_SLACK
+        ):
+            return None
 
         directional_target = self._arb_directional_target(
             up_outcome=up_outcome,

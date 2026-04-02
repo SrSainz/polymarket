@@ -6178,6 +6178,74 @@ def test_arb_micro_unwinds_extreme_wrong_side_inventory_when_repair_is_too_expen
     db.close()
 
 
+def test_live_inventory_unwind_does_not_sell_extreme_winning_leg_while_other_leg_still_open(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", bankroll=1000.0, strategy_trade_allocation_pct=0.05),
+        logger=logging.getLogger("test-btc5m-live-extreme-unwind-guard"),
+    )
+
+    plan = service._build_arb_inventory_unwind_plan(  # noqa: SLF001
+        mode="live",
+        market={"slug": "btc-updown-5m-live-extreme-unwind", "conditionId": "cond-live-extreme-unwind"},
+        up_outcome=MarketOutcome(
+            label="Up",
+            asset_id="asset-up",
+            best_ask=0.995,
+            best_bid=0.99,
+            best_ask_size=400.0,
+            ask_levels=(AskLevel(price=0.995, size=400.0),),
+        ),
+        down_outcome=MarketOutcome(
+            label="Down",
+            asset_id="asset-down",
+            best_ask=0.02,
+            best_bid=0.01,
+            best_ask_size=400.0,
+            ask_levels=(AskLevel(price=0.02, size=400.0),),
+        ),
+        pair_sum=1.015,
+        fair_up=0.96,
+        fair_down=0.04,
+        desired_up_ratio=0.55,
+        current_up_ratio=0.94,
+        timing_regime="late",
+        cycle_budget=25.0,
+        current_up_notional=30.0,
+        current_down_notional=3.0,
+        spot_context=ArbSpotContext(
+            current_price=67100.0,
+            reference_price=67100.0,
+            lead_price=67100.0,
+            anchor_price=67200.0,
+            local_anchor_price=67200.0,
+            official_price_to_beat=0.0,
+            anchor_source="polymarket-rtds-anchor",
+            fair_up=0.96,
+            fair_down=0.04,
+            delta_bps=-10.0,
+            price_mode="reference",
+            source="polymarket-rtds+binance",
+            age_ms=15,
+            binance_price=67100.0,
+            chainlink_price=67200.0,
+        ),
+        bracket_phase="redistribuir",
+    )
+
+    assert plan is None
+    db.close()
+
+
 def test_btc5m_operating_bankroll_keeps_reserved_profit_out_of_reinvestment(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
