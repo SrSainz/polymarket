@@ -10,7 +10,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-02-shadow-home17";
+const UI_BUILD = "2026-04-02-shadow-home18";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
