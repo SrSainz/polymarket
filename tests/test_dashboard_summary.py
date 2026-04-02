@@ -221,6 +221,37 @@ def test_summary_payload_exposes_pending_live_orders(tmp_path: Path) -> None:
     assert summary["live_pending_orders"][0]["status"] == "submitted"
 
 
+def test_summary_payload_exposes_live_ledger_sync_state(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_runtime_mode", "live")
+    db.set_bot_state("position_ledger_mode", "live")
+    db.set_bot_state("position_ledger_preflight", "ready")
+    db.set_bot_state("live_wallet_sync_status", "ok")
+    db.set_bot_state("live_wallet_sync_reason", "")
+    db.set_bot_state("live_wallet_sync_at", "1775132817")
+    db.set_bot_state("live_wallet_sync_imported", "216")
+    db.set_bot_state("live_wallet_sync_duplicates", "0")
+    db.set_bot_state("live_wallet_sync_closed_imported", "5")
+    db.set_bot_state("live_wallet_sync_closed_duplicates", "0")
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="live",
+        live_trading_enabled=True,
+    )
+
+    assert summary["position_ledger_mode"] == "live"
+    assert summary["position_ledger_preflight"] == "ready"
+    assert summary["live_wallet_sync_status"] == "ok"
+    assert summary["live_wallet_sync_at"] == 1775132817
+    assert summary["live_wallet_sync_imported"] == 216
+    assert summary["live_wallet_sync_closed_imported"] == 5
+
+
 def test_summary_payload_uses_outstanding_pending_notional_and_current_market_pending_exposure(tmp_path: Path) -> None:
     db_path = tmp_path / "bot_live.db"
     db = Database(db_path)

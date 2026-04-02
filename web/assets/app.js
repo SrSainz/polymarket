@@ -7,7 +7,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-02-shadow-home15";
+const UI_BUILD = "2026-04-02-shadow-home16";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -1837,6 +1837,36 @@ function operabilityInfo(summary) {
   };
 }
 
+function ledgerSyncInfo(summary) {
+  const preflight = String(summary?.position_ledger_preflight || "").trim().toLowerCase();
+  const ledgerMode = String(summary?.position_ledger_mode || "").trim();
+  const syncStatus = String(summary?.live_wallet_sync_status || "").trim().toLowerCase();
+  const syncReason = String(summary?.live_wallet_sync_reason || "").trim();
+  const syncAt = Number(summary?.live_wallet_sync_at || 0);
+  const importedTrades = Number(summary?.live_wallet_sync_imported || 0);
+  const importedClosures = Number(summary?.live_wallet_sync_closed_imported || 0);
+  const duplicates = Number(summary?.live_wallet_sync_duplicates || 0) + Number(summary?.live_wallet_sync_closed_duplicates || 0);
+  const parts = [];
+  if (preflight) parts.push(`ledger ${preflight}`);
+  if (ledgerMode) parts.push(`modo ${ledgerMode}`);
+  if (syncStatus) parts.push(`sync ${syncStatus}`);
+  if (syncAt > 0) parts.push(`sync ${fmtAgeCompact(Math.max((Date.now() / 1000) - syncAt, 0))}`);
+  if (importedTrades > 0 || importedClosures > 0) {
+    parts.push(`import ${importedTrades} trades + ${importedClosures} cierres`);
+  } else if (duplicates > 0) {
+    parts.push(`backfill sin novedades (${duplicates} duplicados)`);
+  }
+  if (syncReason) parts.push(syncReason);
+  return {
+    preflight,
+    ledgerMode,
+    syncStatus,
+    syncReason,
+    ok: preflight === "ready" && (syncStatus === "" || syncStatus === "ok"),
+    meta: parts.join(" | "),
+  };
+}
+
 function friendlyWindowState(summary) {
   const openExposure = Number(summary?.strategy_current_market_total_exposure || 0);
   const currentLivePnl = Number(summary?.strategy_current_market_live_pnl || 0);
@@ -2260,6 +2290,7 @@ function paintSummary(summary, items = lastPositions) {
   const pendingLiveOrders = Number(summary?.live_pending_orders_count || 0);
   const pendingLiveNotional = Number(summary?.live_pending_orders_total_notional || 0);
   const claimable = claimableContext(summary);
+  const ledgerInfo = ledgerSyncInfo(summary);
   const claimableMeta =
     claimable.usdcEstimate > 0
       ? ` | claim pendiente ${fmtUsdPlain(claimable.usdcEstimate, 2)} en ${claimable.positionsCount} ${claimable.positionsCount === 1 ? "posicion" : "posiciones"}`
@@ -2281,7 +2312,7 @@ function paintSummary(summary, items = lastPositions) {
     ? "requiere backend del NAS para caja, capital y estado reales"
     : liveBalanceStale
     ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo valor conocido${pendingMeta}${claimableMeta}`
-    : `equity = caja + MTM | operable ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${pendingMeta}${claimableMeta}`;
+    : `equity = caja + MTM | operable ${fmtUsdPlain(liveAvailableToTrade, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${pendingMeta}${claimableMeta}${ledgerInfo.meta ? ` | ${ledgerInfo.meta}` : ""}`;
   document.getElementById("heroCashBalance").textContent = isPublicRuntime()
     ? fmtUsdPlain(totalExposure, 2)
     : hasLiveBalanceSnapshot
@@ -2291,7 +2322,7 @@ function paintSummary(summary, items = lastPositions) {
     ? `${summary.open_positions ?? buckets.totalCount ?? 0} posiciones visibles | wallet ${shortWallet(watchedWallet)}`
     : liveBalanceStale
     ? `snapshot de balance viejo (${liveSnapshotText} | ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}); mostrando el ultimo capital operativo conocido${pendingMeta}${claimableMeta}`
-    : `operable = min(caja, allowance) | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${pendingMeta}${claimableMeta}`;
+    : `operable = min(caja, allowance) | equity ${fmtUsdPlain(liveEquityEstimate, 2)} | caja ${fmtUsdPlain(liveCashBalance, 2)} | saldo ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}${pendingMeta}${claimableMeta}${ledgerInfo.meta ? ` | ${ledgerInfo.meta}` : ""}`;
   const liveExecutionsTodayNode = document.getElementById("liveExecutionsToday");
   if (liveExecutionsTodayNode) {
     liveExecutionsTodayNode.textContent = String(summary.live_executions_today ?? 0);
@@ -2532,14 +2563,18 @@ function paintLabOverview(summary) {
   document.getElementById("labEffectiveMin").textContent =
     `${fmtUsdPlain(effectiveMinNotional, 2)}${budgetShortfall > 0 ? ` | faltan ${fmtUsdPlain(budgetShortfall, 2)}` : ""}`;
   document.getElementById("labBlockGate").textContent =
-    Boolean(summary.strategy_operability_blocking)
+    !ledgerInfo.ok
+      ? ledgerInfo.meta || "ledger bloqueado"
+      : Boolean(summary.strategy_operability_blocking)
       ? operability.label
       : String(summary.strategy_last_note || "").trim() || "sin bloqueo";
   document.getElementById("labWindowValue").textContent =
     String(summary.strategy_market_title || summary.strategy_market_slug || "-");
   document.getElementById("labFeedValue").textContent = spotInfo.referenceComparable ? feedInfo.label : `${feedInfo.label} | degradado`;
   document.getElementById("labOperabilityValue").textContent = operability.label;
-  document.getElementById("labOperabilityReason").textContent = operability.reason;
+  document.getElementById("labOperabilityReason").textContent = ledgerInfo.ok
+    ? operability.reason
+    : `${operability.reason}${ledgerInfo.meta ? ` | ${ledgerInfo.meta}` : ""}`;
   document.getElementById("labSpotCurrentLabel").textContent =
     spotInfo.priceMode === "lead-basis"
       ? "Spot comparable usado (lead+basis)"

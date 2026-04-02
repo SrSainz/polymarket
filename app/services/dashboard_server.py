@@ -42,7 +42,7 @@ _PUBLIC_GAMMA_BEAT_CACHE_TTL_SECONDS = 20.0
 _CLAIMABLE_CACHE: dict[str, tuple[dict, float]] = {}
 _CLAIMABLE_CACHE_TTL_SECONDS = 30.0
 _PUBLIC_GAMMA_CLIENT = GammaClient(_PUBLIC_GAMMA_API_HOST)
-_DASHBOARD_BUILD = "2026-04-02-shadow-home15"
+_DASHBOARD_BUILD = "2026-04-02-shadow-home16"
 _PRIVATE_IPV4_NETWORKS = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
@@ -1602,6 +1602,15 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         strategy_variant_thesis = _bot_state_text(conn, "strategy_variant_thesis")
         strategy_variant_tags = _bot_state_text(conn, "strategy_variant_tags")
         strategy_runtime_mode = _bot_state_text(conn, "strategy_runtime_mode")
+        position_ledger_mode = _bot_state_text(conn, "position_ledger_mode")
+        position_ledger_preflight = _bot_state_text(conn, "position_ledger_preflight")
+        live_wallet_sync_status = _bot_state_text(conn, "live_wallet_sync_status")
+        live_wallet_sync_reason = _bot_state_text(conn, "live_wallet_sync_reason")
+        live_wallet_sync_at = _bot_state_int(conn, "live_wallet_sync_at")
+        live_wallet_sync_imported = _bot_state_int(conn, "live_wallet_sync_imported")
+        live_wallet_sync_duplicates = _bot_state_int(conn, "live_wallet_sync_duplicates")
+        live_wallet_sync_closed_imported = _bot_state_int(conn, "live_wallet_sync_closed_imported")
+        live_wallet_sync_closed_duplicates = _bot_state_int(conn, "live_wallet_sync_closed_duplicates")
         strategy_market_slug = _bot_state_text(conn, "strategy_market_slug")
         strategy_market_title = _bot_state_text(conn, "strategy_market_title")
         strategy_target_outcome = _bot_state_text(conn, "strategy_target_outcome")
@@ -2042,6 +2051,15 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_incubation_transition_reason": str(incubation_transition["reason"]),
         "strategy_incubation_auto_apply_ready": bool(incubation_transition["auto_apply_ready"]),
         "strategy_runtime_mode": strategy_runtime_mode,
+        "position_ledger_mode": position_ledger_mode,
+        "position_ledger_preflight": position_ledger_preflight,
+        "live_wallet_sync_status": live_wallet_sync_status,
+        "live_wallet_sync_reason": live_wallet_sync_reason,
+        "live_wallet_sync_at": int(live_wallet_sync_at),
+        "live_wallet_sync_imported": int(live_wallet_sync_imported),
+        "live_wallet_sync_duplicates": int(live_wallet_sync_duplicates),
+        "live_wallet_sync_closed_imported": int(live_wallet_sync_closed_imported),
+        "live_wallet_sync_closed_duplicates": int(live_wallet_sync_closed_duplicates),
         "strategy_market_slug": strategy_market_slug,
         "strategy_market_title": strategy_market_title,
         "strategy_target_outcome": strategy_target_outcome,
@@ -2167,6 +2185,10 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "live_pending_orders_count": "ordenes lanzadas por el bot y aun pendientes de confirmacion segun bot_state live_pending_order:*",
             "live_pending_orders_total_notional": "notional restante reservado por ordenes live pendientes, neto de la parte ya reconciliada por el user feed",
             "live_observed_trades_count": "movimientos confirmados vistos en el user feed que no casaron con una orden pendiente del bot; sirven para visibilidad y auditoria",
+            "position_ledger_preflight": "estado de reconciliacion entre wallet real y ledger local: ready, blocked, not-required o disabled",
+            "position_ledger_mode": "origen operativo actual del ledger de posiciones que usa el runtime",
+            "live_wallet_sync_status": "resultado del ultimo backfill wallet->DB desde activity/positions/closed-positions",
+            "live_wallet_sync_reason": "motivo textual del ultimo bloqueo o mismatch del sync live",
             "claimable_usdc_estimate": "suma del currentValue o size*curPrice de posiciones redeemable devueltas por /positions del Data API para POLYMARKET_FUNDER o BOT_WALLET_ADDRESS",
             "realized_pnl": "SUM(daily_pnl.pnl)",
             "unrealized_pnl": "mark-to-market de copy_positions usando midpoint del libro; si no hay midpoint usa avg_price",
