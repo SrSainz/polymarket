@@ -144,8 +144,12 @@ function normalizeApiBase(raw) {
   return value;
 }
 
+function connectedBackendLabel() {
+  return apiBase ? "Backend NAS" : "Local DB";
+}
+
 function modeLabel() {
-  if (runtimeMode === "local") return "Local DB";
+  if (runtimeMode === "local") return connectedBackendLabel();
   if (runtimeMode === "backend-unreachable") return "NAS desconectado";
   if (runtimeMode === "public-fallback") return "Fallback publico";
   return "Public API";
@@ -2287,6 +2291,43 @@ async function getJson(url) {
   return response.json();
 }
 
+async function probeBackendConnection() {
+  if (!apiBase) {
+    runtimeMode = "backend-unreachable";
+    return false;
+  }
+  for (const path of ["/api/health", "/api/summary"]) {
+    try {
+      await getJson(withCacheBust(buildApiUrl(path)));
+      runtimeMode = "local";
+      return true;
+    } catch (_error) {
+      continue;
+    }
+  }
+  runtimeMode = "backend-unreachable";
+  return false;
+}
+
+function applyBackendConnectionUi(connected, failureMessage = "") {
+  document.querySelector(".kicker").textContent = connected
+    ? `Proyecto principal (${connectedBackendLabel()})`
+    : "Proyecto principal (Backend NAS desconectado)";
+  document.getElementById("runtimeBadge").textContent = modeLabel();
+
+  const controlsEnabled = runtimeMode === "local";
+  const disabledTitle = "Solo disponible cuando el dashboard esta conectado al backend";
+  for (const buttonId of ["resetBtn", "wipeRuntimeBtn", "resetCompareBtn"]) {
+    const button = document.getElementById(buttonId);
+    button.disabled = !controlsEnabled;
+    button.title = controlsEnabled ? "" : disabledTitle;
+  }
+
+  if (!connected && failureMessage) {
+    document.getElementById("lastUpdated").textContent = failureMessage;
+  }
+}
+
 async function postJson(url, payload) {
   const response = await fetch(url, {
     method: "POST",
@@ -3493,6 +3534,14 @@ function paintSignals(items) {
 
 async function refreshAll() {
   try {
+    if (runtimeMode === "backend-unreachable" && apiBase) {
+      const reconnected = await probeBackendConnection();
+      applyBackendConnectionUi(
+        reconnected,
+        `No conecta con el backend del NAS (${apiBase}). Seguimos en modo backend desconectado.`
+      );
+    }
+
     if (runtimeMode === "local") {
       const [summary, positions, executions, audit] = await Promise.all([
         getJson(withCacheBust(buildApiUrl("/api/summary"))),
@@ -3637,33 +3686,15 @@ document.getElementById("apiBaseBtn").addEventListener("click", async () => {
   apiBase = value;
   input.value = apiBase;
   saveApiBase(apiBase);
-  try {
-    await getJson(withCacheBust(buildApiUrl("/api/health")));
-    runtimeMode = "local";
-    document.querySelector(".kicker").textContent = "Proyecto principal (Local DB)";
-    document.getElementById("runtimeBadge").textContent = modeLabel();
+  const connected = await probeBackendConnection();
+  applyBackendConnectionUi(
+    connected,
+    apiBase
+      ? `No conecta con ${apiBase}. La web queda en modo backend desconectado.`
+      : "Backend API borrado. La web queda en modo backend desconectado."
+  );
+  if (connected) {
     document.getElementById("lastUpdated").textContent = `Backend API guardado: ${apiBase || "local"}`;
-    document.getElementById("resetBtn").disabled = false;
-    document.getElementById("resetBtn").title = "";
-    document.getElementById("wipeRuntimeBtn").disabled = false;
-    document.getElementById("wipeRuntimeBtn").title = "";
-    document.getElementById("resetCompareBtn").disabled = false;
-    document.getElementById("resetCompareBtn").title = "";
-  } catch (error) {
-    runtimeMode = apiBase ? "backend-unreachable" : "backend-unreachable";
-    document.querySelector(".kicker").textContent =
-      "Proyecto principal (Backend NAS desconectado)";
-    document.getElementById("runtimeBadge").textContent = modeLabel();
-    document.getElementById("resetBtn").disabled = true;
-    document.getElementById("resetBtn").title = "Solo disponible cuando el dashboard esta conectado al backend local";
-    document.getElementById("wipeRuntimeBtn").disabled = true;
-    document.getElementById("wipeRuntimeBtn").title = "Solo disponible cuando el dashboard esta conectado al backend local";
-    document.getElementById("resetCompareBtn").disabled = true;
-    document.getElementById("resetCompareBtn").title =
-      "Solo disponible cuando el dashboard esta conectado al backend local";
-    document.getElementById("lastUpdated").textContent = apiBase
-      ? `No conecta con ${apiBase}: ${error.message}. La web queda en modo backend desconectado.`
-      : "Backend API borrado. La web queda en modo backend desconectado.";
   }
   await refreshAll();
 });
@@ -3811,40 +3842,11 @@ async function bootstrap() {
   document.getElementById("apiBaseInput").value = apiBase;
   saveApiBase(apiBase);
 
-  try {
-    await getJson(withCacheBust(buildApiUrl("/api/health")));
-    runtimeMode = "local";
-  } catch (error) {
-    runtimeMode = "backend-unreachable";
-    if (apiBase) {
-      document.getElementById("lastUpdated").textContent =
-        `No conecta con el backend del NAS (${apiBase}): ${error.message}.`;
-    }
-  }
-
-  document.querySelector(".kicker").textContent =
-    runtimeMode === "local"
-      ? "Proyecto principal (Local DB)"
-      : "Proyecto principal (Backend NAS desconectado)";
-  document.getElementById("runtimeBadge").textContent = modeLabel();
-  const resetBtn = document.getElementById("resetBtn");
-  const wipeRuntimeBtn = document.getElementById("wipeRuntimeBtn");
-  const resetCompareBtn = document.getElementById("resetCompareBtn");
-  if (runtimeMode !== "local") {
-    resetBtn.disabled = true;
-    resetBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
-    wipeRuntimeBtn.disabled = true;
-    wipeRuntimeBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
-    resetCompareBtn.disabled = true;
-    resetCompareBtn.title = "Solo disponible cuando el dashboard esta conectado al backend local";
-  } else {
-    resetBtn.disabled = false;
-    resetBtn.title = "";
-    wipeRuntimeBtn.disabled = false;
-    wipeRuntimeBtn.title = "";
-    resetCompareBtn.disabled = false;
-    resetCompareBtn.title = "";
-  }
+  const connected = await probeBackendConnection();
+  applyBackendConnectionUi(
+    connected,
+    apiBase ? `No conecta con el backend del NAS (${apiBase}).` : ""
+  );
 
   await refreshAll();
   configureAutoRefresh();
