@@ -10,7 +10,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-02-shadow-home20";
+const UI_BUILD = "2026-04-02-shadow-home21";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -256,6 +256,62 @@ function liveControlInfo(summary = lastSummary) {
     statusSummaryEnabled,
     statusSummaryIntervalMinutes,
     statusSummaryLastSentAt,
+  };
+}
+
+function backendConnectionStateInfo(summary = lastSummary) {
+  const hasSummary = Boolean(summary);
+  const snapshotInfo = hasSummary ? snapshotTiming(summary) : null;
+  if (runtimeMode === "local") {
+    return {
+      label: "NAS conectado",
+      badgeClass: "live-badge",
+      connected: true,
+      stable: true,
+      meta: hasSummary
+        ? `Backend ${snapshotInfo.backendText} | motor ${fmtAgeCompact(snapshotInfo.strategyAgeSeconds)} | balance ${fmtAgeCompact(snapshotInfo.liveBalanceAgeSeconds)}`
+        : "Backend del NAS conectado y listo para leer el runtime real.",
+    };
+  }
+  if (runtimeMode === "backend-stale") {
+    return {
+      label: "NAS inestable",
+      badgeClass: "warning-badge",
+      connected: true,
+      stable: false,
+      meta: hasSummary
+        ? `Ultimo snapshot bueno ${snapshotInfo.backendText} | seguimos reintentando la reconexion con el NAS`
+        : "Mostrando el ultimo snapshot bueno mientras vuelve la conexion del NAS.",
+    };
+  }
+  if (runtimeMode === "backend-unreachable") {
+    return {
+      label: "NAS desconectado",
+      badgeClass: "danger-badge",
+      connected: false,
+      stable: false,
+      meta: apiBase
+        ? `Sin respuesta desde ${apiBase}. La web no puede refrescar ni mandar controles al runtime real.`
+        : "No hay backend del NAS configurado para esta web.",
+    };
+  }
+  if (runtimeMode === "public-fallback") {
+    return {
+      label: "Fallback publico",
+      badgeClass: "warning-badge",
+      connected: false,
+      stable: false,
+      meta: apiBase
+        ? `La URL ${apiBase} no esta devolviendo el bot real y la web cae al perfil publico.`
+        : "La web esta mostrando un fallback publico porque no hay backend real del NAS.",
+    };
+  }
+  return {
+    label: "Modo publico",
+    badgeClass: "paper-badge",
+    connected: false,
+    stable: false,
+    meta: "Conecta el backend del NAS para ver y controlar el runtime real.",
   };
 }
 
@@ -2078,6 +2134,67 @@ function ledgerSyncInfo(summary) {
   };
 }
 
+function liveArmGuardInfo(summary = lastSummary) {
+  const connection = backendConnectionStateInfo(summary);
+  const control = liveControlInfo(summary);
+  const ledger = ledgerSyncInfo(summary);
+  const readiness = summary?.strategy_live_readiness || {};
+  const readinessStatus = String(readiness?.status || "").trim().toLowerCase();
+  const readinessBlockers = Array.isArray(readiness?.blockers) ? readiness.blockers.filter(Boolean) : [];
+  const referenceComparable = Boolean(summary?.strategy_reference_comparable);
+  const referenceQuality = String(summary?.strategy_reference_quality || "").trim().toLowerCase();
+  const openPositions = Math.max(Number(summary?.open_positions || 0), 0);
+  const currentMarketExposure = Math.max(Number(summary?.strategy_current_market_total_exposure || 0), 0);
+  const pendingOrders = Math.max(Number(summary?.live_pending_orders_count || 0), 0);
+  const observedTrades = Math.max(Number(summary?.live_observed_trades_count || 0), 0);
+  const reasons = [];
+
+  if (!connection.stable) {
+    reasons.push(connection.connected ? "backend del NAS inestable" : "backend del NAS desconectado");
+  }
+  if (!control.isLiveSession) {
+    reasons.push("el runtime actual no esta en modo live");
+  }
+  if (control.canExecute) {
+    reasons.push("live ya esta armado");
+  }
+  if (!ledger.ok) {
+    reasons.push(ledger.meta || "wallet sync / ledger todavia no estan listos");
+  }
+  if (readinessStatus !== "ready") {
+    reasons.push(readinessBlockers[0] || String(readiness?.headline || "el gate de live aun no esta en verde"));
+  }
+  if (
+    !referenceComparable ||
+    referenceQuality.includes("missing") ||
+    referenceQuality.includes("degraded") ||
+    referenceQuality.includes("stale") ||
+    referenceQuality.includes("fallback")
+  ) {
+    reasons.push(`referencia ${referenceQuality || "sin calidad"}`);
+  }
+  if (openPositions > 0 || currentMarketExposure > 0) {
+    reasons.push(`quedan ${openPositions} posiciones / ${fmtUsdPlain(currentMarketExposure, 2)} abiertos`);
+  }
+  if (pendingOrders > 0) {
+    reasons.push(`${pendingOrders} ordenes pendientes`);
+  }
+  if (observedTrades > 0 && !ledger.ok) {
+    reasons.push(`${observedTrades} movimientos observados aun no reconciliados`);
+  }
+
+  return {
+    ok: reasons.length === 0,
+    reasons,
+    primaryReason: reasons[0] || "",
+    summary: reasons.length ? reasons.slice(0, 3).join(" | ") : "Backend estable, ledger listo y sin residuos abiertos.",
+    connection,
+    control,
+    ledger,
+    readinessStatus,
+  };
+}
+
 function friendlyWindowState(summary) {
   const openExposure = Number(summary?.strategy_current_market_total_exposure || 0);
   const currentLivePnl = Number(summary?.strategy_current_market_live_pnl || 0);
@@ -2175,11 +2292,19 @@ function setLiveBadge(summary) {
 function applyLiveControlUi(summary = lastSummary) {
   const controlBadge = document.getElementById("liveControlBadge");
   const summaryBadge = document.getElementById("liveSummaryBadge");
+  const backendBadge = document.getElementById("backendConnectionBadge");
+  const backendMeta = document.getElementById("backendConnectionMeta");
   const meta = document.getElementById("liveControlMeta");
   const armBtn = document.getElementById("armLiveBtn");
   const pauseBtn = document.getElementById("pauseLiveBtn");
   const summaryNowBtn = document.getElementById("summaryNowBtn");
-  if (!controlBadge || !summaryBadge || !meta || !armBtn || !pauseBtn || !summaryNowBtn) return;
+  if (!controlBadge || !summaryBadge || !backendBadge || !backendMeta || !meta || !armBtn || !pauseBtn || !summaryNowBtn) return;
+
+  const connectionInfo = backendConnectionStateInfo(summary);
+  backendBadge.textContent = connectionInfo.label.toUpperCase();
+  backendBadge.classList.remove("live-badge", "paper-badge", "warning-badge", "danger-badge");
+  backendBadge.classList.add(connectionInfo.badgeClass);
+  backendMeta.textContent = connectionInfo.meta;
 
   if (isPublicRuntime()) {
     controlBadge.textContent = "PUBLICO";
@@ -2190,10 +2315,14 @@ function applyLiveControlUi(summary = lastSummary) {
     armBtn.disabled = true;
     pauseBtn.disabled = true;
     summaryNowBtn.disabled = true;
+    armBtn.title = "Conecta el backend del NAS para habilitar live.";
+    pauseBtn.title = "Conecta el backend del NAS para habilitar live.";
+    summaryNowBtn.title = "Conecta el backend del NAS para pedir un resumen.";
     return;
   }
 
   const info = liveControlInfo(summary);
+  const armGuard = liveArmGuardInfo(summary);
   const updatedText = info.updatedAt > 0 ? tsToIso(info.updatedAt) : "sin cambios";
   const lastSentText = info.statusSummaryLastSentAt > 0 ? tsToIso(info.statusSummaryLastSentAt) : "sin enviar";
   controlBadge.textContent = info.label.toUpperCase();
@@ -2204,14 +2333,22 @@ function applyLiveControlUi(summary = lastSummary) {
     : "Resumen Telegram: off";
   meta.textContent =
     `${info.reason || (info.isLiveSession ? "sin motivo" : "el bot no esta en live")} | ` +
-    `cambio ${updatedText} | ultimo resumen ${lastSentText}`;
+    `cambio ${updatedText} | ultimo resumen ${lastSentText}` +
+    `${armGuard.ok ? " | gate live listo" : ` | arm bloqueado: ${armGuard.primaryReason}`}`;
+  backendMeta.textContent = armGuard.ok
+    ? `${connectionInfo.meta} | listo para armar live si quieres.`
+    : `${connectionInfo.meta} | arm bloqueado: ${armGuard.summary}`;
 
   const localAvailable = runtimeMode === "local";
-  armBtn.disabled = !localAvailable || !info.isLiveSession || info.canExecute;
+  armBtn.disabled = !localAvailable || !armGuard.ok;
   pauseBtn.disabled = !localAvailable || !info.isLiveSession || !info.canExecute;
   summaryNowBtn.disabled = !localAvailable;
   armBtn.title =
-    !localAvailable ? "Solo disponible con backend local" : !info.isLiveSession ? "Activa run.py live con LIVE_TRADING=true" : "";
+    !localAvailable
+      ? "Solo disponible con backend local"
+      : armGuard.ok
+      ? "Backend estable, referencia util y ledger listo para armar live."
+      : armGuard.summary;
   pauseBtn.title =
     !localAvailable ? "Solo disponible con backend local" : !info.isLiveSession ? "Activa run.py live con LIVE_TRADING=true" : "";
   summaryNowBtn.title = !localAvailable ? "Solo disponible con backend local" : "";
@@ -2345,12 +2482,23 @@ async function probeBackendConnection({ allowGrace = false } = {}) {
 }
 
 function applyBackendConnectionUi(connected, failureMessage = "") {
+  const connectionBadge = document.getElementById("backendConnectionBadge");
+  const connectionMeta = document.getElementById("backendConnectionMeta");
+  const connectionInfo = backendConnectionStateInfo(lastSummary);
   document.querySelector(".kicker").textContent = connected
     ? isBackendStaleRuntime()
       ? "Proyecto principal (Backend NAS inestable)"
       : `Proyecto principal (${connectedBackendLabel()})`
     : "Proyecto principal (Backend NAS desconectado)";
   document.getElementById("runtimeBadge").textContent = modeLabel();
+  if (connectionBadge) {
+    connectionBadge.textContent = connectionInfo.label.toUpperCase();
+    connectionBadge.classList.remove("live-badge", "paper-badge", "warning-badge", "danger-badge");
+    connectionBadge.classList.add(connectionInfo.badgeClass);
+  }
+  if (connectionMeta) {
+    connectionMeta.textContent = failureMessage || connectionInfo.meta;
+  }
 
   const controlsEnabled = runtimeMode === "local";
   const disabledTitle = "Solo disponible cuando el dashboard esta conectado al backend";
@@ -3890,6 +4038,14 @@ async function sendLiveControlAction(action, buttonId, successPrefix) {
     document.getElementById("lastUpdated").textContent =
       "Live control no disponible sin conexion con el backend local.";
     return;
+  }
+  if (action === "arm") {
+    const armGuard = liveArmGuardInfo(lastSummary);
+    if (!armGuard.ok) {
+      document.getElementById("lastUpdated").textContent = `Live no armado: ${armGuard.primaryReason || "faltan checks previos"}.`;
+      applyLiveControlUi(lastSummary);
+      return;
+    }
   }
   const originalLabel = button.textContent;
   button.disabled = true;

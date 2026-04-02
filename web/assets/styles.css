@@ -142,6 +142,18 @@ h1 {
   color: #f4d0aa;
 }
 
+.soft-badge.warning-badge {
+  background: rgba(233, 178, 125, 0.16);
+  border-color: rgba(233, 178, 125, 0.34);
+  color: #ffd8ae;
+}
+
+.soft-badge.danger-badge {
+  background: var(--danger-soft);
+  border-color: rgba(239, 155, 155, 0.34);
+  color: #ffc2c2;
+}
+
 .topbar-note,
 .control-note,
 .mini-meta,
