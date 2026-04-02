@@ -1,13 +1,16 @@
 const DEFAULT_WALLET = "0xa81f087970a7ce196eacb3271e96e89294d91bb8";
 const DATA_API = "https://data-api.polymarket.com";
 const API_BASE_STORAGE_KEY = "polymarket_bot_api_base";
-const DEFAULT_REMOTE_API_BY_HOST = {};
+const DEFAULT_REMOTE_API_BY_HOST = {
+  "polysainz.com": "https://nas.polysainz.com",
+  "www.polysainz.com": "https://nas.polysainz.com",
+};
 const DEPRECATED_REMOTE_APIS = new Set([
   "https://scores-trade-kept-developed.trycloudflare.com",
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-02-shadow-home16";
+const UI_BUILD = "2026-04-02-shadow-home17";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
