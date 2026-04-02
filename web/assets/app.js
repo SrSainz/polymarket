@@ -10,7 +10,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-02-shadow-home19";
+const UI_BUILD = "2026-04-02-shadow-home20";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -30,6 +30,10 @@ function isPublicRuntime() {
 
 function isBackendDisconnectedRuntime() {
   return runtimeMode === "backend-unreachable";
+}
+
+function isBackendStaleRuntime() {
+  return runtimeMode === "backend-stale";
 }
 
 const fmt = (value, digits = 4) => {
@@ -154,12 +158,14 @@ function connectedBackendLabel() {
 
 function modeLabel() {
   if (runtimeMode === "local") return connectedBackendLabel();
+  if (runtimeMode === "backend-stale") return "NAS inestable";
   if (runtimeMode === "backend-unreachable") return "NAS desconectado";
   if (runtimeMode === "public-fallback") return "Fallback publico";
   return "Public API";
 }
 
 function tradingModeLabel(summary) {
+  if (runtimeMode === "backend-stale") return "NAS INESTABLE";
   if (runtimeMode === "backend-unreachable") return "NAS OFF";
   if (isPublicRuntime()) return "PUBLICO";
   const sessionMode = String(summary.strategy_runtime_mode || "").trim().toLowerCase();
@@ -171,6 +177,7 @@ function tradingModeLabel(summary) {
 }
 
 function strategyLabel(summary) {
+  if (runtimeMode === "backend-stale") return "Backend NAS (inestable)";
   if (runtimeMode === "backend-unreachable") return "Backend NAS";
   if (isPublicRuntime()) return "Perfil publico";
   const mode = String(summary.strategy_mode || "").trim();
@@ -2127,6 +2134,11 @@ function friendlyWindowState(summary) {
 
 function backendWarningText() {
   if (runtimeMode === "local") return "";
+  if (runtimeMode === "backend-stale") {
+    return apiBase
+      ? `Aviso: el backend del NAS en ${apiBase} esta inestable. Mostramos el ultimo snapshot bueno mientras vuelve la conexion.`
+      : "Aviso: la conexion con el backend del NAS esta inestable. Mostramos el ultimo snapshot bueno.";
+  }
   if (runtimeMode === "backend-unreachable") {
     return apiBase
       ? `Aviso: la web no puede conectar con el backend del NAS en ${apiBase}. Revisa la URL publica del dashboard o el tunel.`
@@ -2307,6 +2319,10 @@ function markBackendFailure({ allowGrace = false } = {}) {
     runtimeMode = "local";
     return true;
   }
+  if (backendConnectedOnce && lastSummary) {
+    runtimeMode = "backend-stale";
+    return true;
+  }
   runtimeMode = "backend-unreachable";
   return false;
 }
@@ -2330,7 +2346,9 @@ async function probeBackendConnection({ allowGrace = false } = {}) {
 
 function applyBackendConnectionUi(connected, failureMessage = "") {
   document.querySelector(".kicker").textContent = connected
-    ? `Proyecto principal (${connectedBackendLabel()})`
+    ? isBackendStaleRuntime()
+      ? "Proyecto principal (Backend NAS inestable)"
+      : `Proyecto principal (${connectedBackendLabel()})`
     : "Proyecto principal (Backend NAS desconectado)";
   document.getElementById("runtimeBadge").textContent = modeLabel();
 
@@ -2339,10 +2357,14 @@ function applyBackendConnectionUi(connected, failureMessage = "") {
   for (const buttonId of ["resetBtn", "wipeRuntimeBtn", "resetCompareBtn"]) {
     const button = document.getElementById(buttonId);
     button.disabled = !controlsEnabled;
-    button.title = controlsEnabled ? "" : disabledTitle;
+    button.title = controlsEnabled
+      ? ""
+      : isBackendStaleRuntime()
+      ? "Desactivado mientras el backend del NAS esta inestable"
+      : disabledTitle;
   }
 
-  if (!connected && failureMessage) {
+  if ((isBackendStaleRuntime() || !connected) && failureMessage) {
     document.getElementById("lastUpdated").textContent = failureMessage;
   }
 }
@@ -3553,11 +3575,13 @@ function paintSignals(items) {
 
 async function refreshAll() {
   try {
-    if (runtimeMode === "backend-unreachable" && apiBase) {
+    if ((runtimeMode === "backend-unreachable" || runtimeMode === "backend-stale") && apiBase) {
       const reconnected = await probeBackendConnection({ allowGrace: true });
       applyBackendConnectionUi(
         reconnected,
-        `No conecta con el backend del NAS (${apiBase}). Seguimos en modo backend desconectado.`
+        isBackendStaleRuntime()
+          ? `Backend NAS inestable (${apiBase}). Seguimos mostrando el ultimo snapshot valido.`
+          : `No conecta con el backend del NAS (${apiBase}). Seguimos en modo backend desconectado.`
       );
     }
 
@@ -3583,6 +3607,21 @@ async function refreshAll() {
       paintOperationPnl(executions.items || []);
       paintStrategySetups(summary || {});
       paintWalletHypotheses(summary || {});
+      return;
+    }
+
+    if (isBackendStaleRuntime() && lastSummary) {
+      paintExecutions(lastExecutions);
+      paintWindowAudit(lastWindowAudit);
+      paintSummary(lastSummary, lastPositions);
+      paintPositions(lastPositions);
+      paintSignals([]);
+      paintSelectedWallets([]);
+      paintRiskBlocks({});
+      paintExposureDonut(lastSummary || {});
+      paintOperationPnl(lastExecutions || []);
+      paintStrategySetups(lastSummary || {});
+      paintWalletHypotheses(lastSummary || {});
       return;
     }
 
@@ -3668,11 +3707,29 @@ async function refreshAll() {
       const stillConnected = markBackendFailure({ allowGrace: true });
       applyBackendConnectionUi(
         stillConnected,
-        `No conecta con el backend del NAS (${apiBase}). Seguimos en modo backend desconectado.`
+        isBackendStaleRuntime()
+          ? `Backend NAS inestable (${apiBase}). Mostramos el ultimo snapshot bueno mientras vuelve la conexion.`
+          : `No conecta con el backend del NAS (${apiBase}). Seguimos en modo backend desconectado.`
       );
     }
-    paintWindowAudit([]);
-    document.getElementById("lastUpdated").textContent = `Error de actualizacion: ${error.message}`;
+    if (isBackendStaleRuntime() && lastSummary) {
+      paintExecutions(lastExecutions);
+      paintWindowAudit(lastWindowAudit);
+      paintSummary(lastSummary, lastPositions);
+      paintPositions(lastPositions);
+      paintSignals([]);
+      paintSelectedWallets([]);
+      paintRiskBlocks({});
+      paintExposureDonut(lastSummary || {});
+      paintOperationPnl(lastExecutions || []);
+      paintStrategySetups(lastSummary || {});
+      paintWalletHypotheses(lastSummary || {});
+    } else {
+      paintWindowAudit([]);
+    }
+    if (!isBackendStaleRuntime()) {
+      document.getElementById("lastUpdated").textContent = `Error de actualizacion: ${error.message}`;
+    }
   }
 }
 
