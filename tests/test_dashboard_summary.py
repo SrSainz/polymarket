@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 from app.core.paper_broker import PaperBroker
 from app.db import Database
 from app.models import CopyInstruction, ExecutionResult, SignalAction, TradeSide
 from app.services.dashboard_server import (
+    ReusableThreadingHTTPServer,
     _allowed_cors_origin,
     _apply_live_control_action,
+    _build_handler,
     _claimable_positions_snapshot,
     _destructive_request_allowed,
     _executions_payload,
@@ -2545,3 +2550,44 @@ def test_dashboard_payloads_expose_microstructure_runtime_files(tmp_path: Path) 
     metrics = _metrics_payload(db_path)
     assert "pm_readiness_score 81.500000" in metrics
     assert "pm_liq_buy_notional_30s 12000.000000" in metrics
+
+
+def test_dashboard_handler_returns_json_500_when_summary_raises(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.close()
+
+    static_dir = tmp_path / "web"
+    (static_dir / "assets").mkdir(parents=True, exist_ok=True)
+    (static_dir / "index.html").write_text("<html></html>", encoding="utf-8")
+    (static_dir / "assets" / "styles.css").write_text("", encoding="utf-8")
+    (static_dir / "assets" / "app.js").write_text("", encoding="utf-8")
+
+    handler_class = _build_handler(
+        db_path=db_path,
+        static_dir=static_dir,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="live",
+        live_trading_enabled=True,
+    )
+    server = ReusableThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        with patch("app.services.dashboard_server._summary_payload", side_effect=RuntimeError("boom")):
+            try:
+                urlopen(f"http://127.0.0.1:{server.server_port}/api/summary")
+            except HTTPError as error:
+                assert error.code == 500
+                payload = json.loads(error.read().decode("utf-8"))
+                assert payload["ok"] is False
+                assert payload["error"] == "internal server error"
+                assert payload["path"] == "/api/summary"
+            else:
+                raise AssertionError("expected /api/summary to return HTTP 500")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

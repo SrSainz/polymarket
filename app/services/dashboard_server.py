@@ -4,6 +4,7 @@ import json
 import ipaddress
 import sqlite3
 import time
+import traceback
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -783,6 +784,24 @@ def _build_handler(
 ):
     class DashboardHandler(BaseHTTPRequestHandler):
         def do_OPTIONS(self) -> None:  # noqa: N802
+            try:
+                self._handle_options()
+            except Exception:  # noqa: BLE001
+                self._handle_internal_error()
+
+        def do_GET(self) -> None:  # noqa: N802
+            try:
+                self._handle_get()
+            except Exception:  # noqa: BLE001
+                self._handle_internal_error()
+
+        def do_POST(self) -> None:  # noqa: N802
+            try:
+                self._handle_post()
+            except Exception:  # noqa: BLE001
+                self._handle_internal_error()
+
+        def _handle_options(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path.startswith("/api/"):
                 cors_origin = self._cors_origin()
@@ -795,7 +814,7 @@ def _build_handler(
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
-        def do_GET(self) -> None:  # noqa: N802
+        def _handle_get(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
 
@@ -852,7 +871,7 @@ def _build_handler(
                 return
             self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
 
-        def do_POST(self) -> None:  # noqa: N802
+        def _handle_post(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/api/restart-runtime":
                 if not self._allow_destructive_post():
@@ -920,6 +939,27 @@ def _build_handler(
 
         def log_message(self, format: str, *args) -> None:  # noqa: A003
             return
+
+        def _handle_internal_error(self) -> None:
+            path = str(urlparse(self.path).path or "")
+            print(f"dashboard error => path={path}")
+            traceback.print_exc()
+            if self.wfile.closed:
+                return
+            try:
+                if path.startswith("/api/"):
+                    self._json(
+                        {
+                            "ok": False,
+                            "error": "internal server error",
+                            "path": path,
+                        },
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
+                else:
+                    self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Internal Server Error")
+            except Exception:  # noqa: BLE001
+                return
 
         def _serve_file(self, file_path: Path, content_type: str) -> None:
             if not file_path.exists():
