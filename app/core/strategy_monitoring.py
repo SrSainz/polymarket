@@ -9,23 +9,64 @@ def build_recent_resolution_windows(
     *,
     variant: str,
     limit: int,
+    runtime_mode: str = "",
 ) -> list[dict]:
-    strategy_rows = _closed_strategy_windows(conn, variant=variant)
+    safe_runtime_mode = str(runtime_mode or "").strip().lower()
+    execution_rollups = _execution_window_rollups(conn, variant=variant, runtime_mode=safe_runtime_mode)
+    strategy_rows = _closed_strategy_windows(conn, variant=variant, runtime_mode=safe_runtime_mode)
     if strategy_rows:
         ordered = sorted(strategy_rows, key=lambda row: int(row["closed_at"] or 0), reverse=True)[:limit]
         return [
             {
                 "slug": str(row["slug"] or ""),
-                "resolved_at": int(row["closed_at"] or 0),
-                "pnl": round(float(row["realized_pnl"] or 0.0), 4),
-                "notional": round(_window_notional(row), 4),
-                "deployed_notional": round(float(row["deployed_notional"] or 0.0), 4),
+                "resolved_at": int(
+                    execution_rollups.get(str(row["slug"] or ""), {}).get("resolved_at")
+                    or (row["closed_at"] or 0)
+                ),
+                "pnl": round(
+                    float(execution_rollups.get(str(row["slug"] or ""), {}).get("pnl", row["realized_pnl"] or 0.0)),
+                    4,
+                ),
+                "notional": round(
+                    float(
+                        execution_rollups.get(str(row["slug"] or ""), {}).get("deployed_notional")
+                        or _window_notional(row)
+                    ),
+                    4,
+                ),
+                "deployed_notional": round(
+                    float(
+                        execution_rollups.get(str(row["slug"] or ""), {}).get("deployed_notional")
+                        or float(row["deployed_notional"] or 0.0)
+                    ),
+                    4,
+                ),
                 "planned_budget": round(float(row["planned_budget"] or 0.0), 4),
-                "legs": int(row["filled_orders"] or 0),
+                "legs": int(
+                    execution_rollups.get(str(row["slug"] or ""), {}).get("legs")
+                    or int(row["filled_orders"] or 0)
+                ),
                 "winning_outcome": str(row["winning_outcome"] or ""),
                 "strategy_variant": str(row["strategy_variant"] or ""),
             }
             for row in ordered
+        ]
+
+    if safe_runtime_mode == "live" and execution_rollups:
+        ordered = sorted(execution_rollups.values(), key=lambda item: int(item["resolved_at"]), reverse=True)[:limit]
+        return [
+            {
+                "slug": str(item["slug"]),
+                "resolved_at": int(item["resolved_at"]),
+                "pnl": round(float(item["pnl"]), 4),
+                "notional": round(float(item["deployed_notional"]), 4),
+                "deployed_notional": round(float(item["deployed_notional"]), 4),
+                "planned_budget": 0.0,
+                "legs": int(item["legs"]),
+                "winning_outcome": "",
+                "strategy_variant": str(item["strategy_variant"] or ""),
+            }
+            for item in ordered
         ]
 
     rows = _resolution_execution_rows(conn, variant=variant, limit=400)
@@ -79,19 +120,49 @@ def build_resolution_pnl_curve(
     *,
     variant: str,
     limit: int,
+    runtime_mode: str = "",
 ) -> dict:
-    strategy_rows = _closed_strategy_windows(conn, variant=variant)
+    safe_runtime_mode = str(runtime_mode or "").strip().lower()
+    execution_rollups = _execution_window_rollups(conn, variant=variant, runtime_mode=safe_runtime_mode)
+    strategy_rows = _closed_strategy_windows(conn, variant=variant, runtime_mode=safe_runtime_mode)
     if strategy_rows:
         ordered = sorted(strategy_rows, key=lambda row: int(row["closed_at"] or row["opened_at"] or 0))
         cumulative = 0.0
         items: list[dict] = []
         for row in ordered:
-            pnl = float(row["realized_pnl"] or 0.0)
+            rollup = execution_rollups.get(str(row["slug"] or ""), {})
+            pnl = float(rollup.get("pnl", row["realized_pnl"] or 0.0))
             cumulative += pnl
             items.append(
                 {
                     "slug": str(row["slug"] or ""),
-                    "resolved_at": int(row["closed_at"] or row["opened_at"] or 0),
+                    "resolved_at": int(rollup.get("resolved_at") or row["closed_at"] or row["opened_at"] or 0),
+                    "pnl": round(pnl, 4),
+                    "cumulative_pnl": round(cumulative, 4),
+                }
+            )
+        visible_items = items[-limit:] if limit > 0 else items
+        baseline_pnl = 0.0
+        if visible_items:
+            baseline_pnl = float(visible_items[0]["cumulative_pnl"]) - float(visible_items[0]["pnl"])
+        return {
+            "items": visible_items,
+            "window_count": len(items),
+            "baseline_pnl": round(baseline_pnl, 4),
+            "total_realized_pnl": round(cumulative, 4),
+        }
+
+    if safe_runtime_mode == "live" and execution_rollups:
+        ordered = sorted(execution_rollups.values(), key=lambda item: int(item["resolved_at"]))
+        cumulative = 0.0
+        items = []
+        for item in ordered:
+            pnl = float(item["pnl"] or 0.0)
+            cumulative += pnl
+            items.append(
+                {
+                    "slug": str(item["slug"]),
+                    "resolved_at": int(item["resolved_at"]),
                     "pnl": round(pnl, 4),
                     "cumulative_pnl": round(cumulative, 4),
                 }
@@ -155,8 +226,11 @@ def build_setup_performance(
     *,
     variant: str,
     limit: int,
+    runtime_mode: str = "",
 ) -> list[dict]:
-    rows = _closed_strategy_windows(conn, variant=variant)
+    safe_runtime_mode = str(runtime_mode or "").strip().lower()
+    execution_rollups = _execution_window_rollups(conn, variant=variant, runtime_mode=safe_runtime_mode)
+    rows = _closed_strategy_windows(conn, variant=variant, runtime_mode=safe_runtime_mode)
     grouped: dict[tuple[str, str], dict[str, float | int | str]] = {}
     for row in rows:
         price_mode = str(row["price_mode"] or "-")
@@ -175,12 +249,15 @@ def build_setup_performance(
                 "primary_ratio_total": 0.0,
             },
         )
-        pnl = float(row["realized_pnl"] or 0.0)
+        rollup = execution_rollups.get(str(row["slug"] or ""), {})
+        pnl = float(rollup.get("pnl", row["realized_pnl"] or 0.0))
         entry["windows"] = int(entry["windows"]) + 1
         entry["wins"] = int(entry["wins"]) + (1 if pnl > 0 else 0)
         entry["pnl_total"] = float(entry["pnl_total"]) + pnl
         entry["budget_total"] = float(entry["budget_total"]) + float(row["planned_budget"] or 0.0)
-        entry["deployed_total"] = float(entry["deployed_total"]) + _window_notional(row)
+        entry["deployed_total"] = float(entry["deployed_total"]) + float(
+            rollup.get("deployed_notional") or _window_notional(row)
+        )
         entry["primary_ratio_total"] = float(entry["primary_ratio_total"]) + float(row["primary_ratio"] or 0.0)
 
     items: list[dict] = []
@@ -214,8 +291,11 @@ def build_incubation_summary(
     min_days: int,
     min_resolutions: int,
     max_drawdown: float,
+    runtime_mode: str = "",
 ) -> dict[str, float | int | bool | str]:
-    rows = _closed_strategy_windows(conn, variant=variant)
+    safe_runtime_mode = str(runtime_mode or "").strip().lower()
+    execution_rollups = _execution_window_rollups(conn, variant=variant, runtime_mode=safe_runtime_mode)
+    rows = _closed_strategy_windows(conn, variant=variant, runtime_mode=safe_runtime_mode)
     pnl_total = 0.0
     deployed_total = 0.0
     max_drawdown_seen = 0.0
@@ -225,13 +305,32 @@ def build_incubation_summary(
     worst_resolution = 0.0
     wins = 0
     losses = 0
-    first_closed_at = int(rows[0]["closed_at"] or rows[0]["opened_at"] or 0) if rows else 0
-    last_closed_at = int(rows[-1]["closed_at"] or rows[-1]["opened_at"] or 0) if rows else 0
+    if rows:
+        first_closed_at = int(
+            execution_rollups.get(str(rows[0]["slug"] or ""), {}).get("resolved_at")
+            or rows[0]["closed_at"]
+            or rows[0]["opened_at"]
+            or 0
+        )
+        last_closed_at = int(
+            execution_rollups.get(str(rows[-1]["slug"] or ""), {}).get("resolved_at")
+            or rows[-1]["closed_at"]
+            or rows[-1]["opened_at"]
+            or 0
+        )
+    elif safe_runtime_mode == "live" and execution_rollups:
+        ordered_rollups = sorted(execution_rollups.values(), key=lambda item: int(item["resolved_at"]))
+        first_closed_at = int(ordered_rollups[0]["resolved_at"])
+        last_closed_at = int(ordered_rollups[-1]["resolved_at"])
+    else:
+        first_closed_at = 0
+        last_closed_at = 0
 
     for index, row in enumerate(rows):
-        pnl = float(row["realized_pnl"] or 0.0)
+        rollup = execution_rollups.get(str(row["slug"] or ""), {})
+        pnl = float(rollup.get("pnl", row["realized_pnl"] or 0.0))
         pnl_total += pnl
-        deployed_total += _window_notional(row)
+        deployed_total += float(rollup.get("deployed_notional") or _window_notional(row))
         cumulative_pnl += pnl
         equity_peak = max(equity_peak, cumulative_pnl)
         max_drawdown_seen = min(max_drawdown_seen, cumulative_pnl - equity_peak)
@@ -246,7 +345,27 @@ def build_incubation_summary(
             best_resolution = max(best_resolution, pnl)
             worst_resolution = min(worst_resolution, pnl)
 
-    resolutions = len(rows)
+    if not rows and safe_runtime_mode == "live" and execution_rollups:
+        ordered_rollups = sorted(execution_rollups.values(), key=lambda item: int(item["resolved_at"]))
+        for index, item in enumerate(ordered_rollups):
+            pnl = float(item["pnl"] or 0.0)
+            pnl_total += pnl
+            deployed_total += float(item["deployed_notional"] or 0.0)
+            cumulative_pnl += pnl
+            equity_peak = max(equity_peak, cumulative_pnl)
+            max_drawdown_seen = min(max_drawdown_seen, cumulative_pnl - equity_peak)
+            if pnl > 0:
+                wins += 1
+            elif pnl < 0:
+                losses += 1
+            if index == 0:
+                best_resolution = pnl
+                worst_resolution = pnl
+            else:
+                best_resolution = max(best_resolution, pnl)
+                worst_resolution = min(worst_resolution, pnl)
+
+    resolutions = len(rows) if rows else (len(execution_rollups) if safe_runtime_mode == "live" else 0)
     now_ts = int(datetime.now(timezone.utc).timestamp())
     days_observed = ((now_ts - first_closed_at) / 86400.0) if first_closed_at > 0 else 0.0
     avg_pnl = (pnl_total / resolutions) if resolutions > 0 else 0.0
@@ -303,7 +422,7 @@ def build_incubation_summary(
     }
 
 
-def _closed_strategy_windows(conn: sqlite3.Connection, *, variant: str) -> list[sqlite3.Row]:
+def _closed_strategy_windows(conn: sqlite3.Connection, *, variant: str, runtime_mode: str = "") -> list[sqlite3.Row]:
     rows = conn.execute(
         """
         SELECT
@@ -324,7 +443,55 @@ def _closed_strategy_windows(conn: sqlite3.Connection, *, variant: str) -> list[
         ORDER BY COALESCE(closed_at, opened_at, 0) ASC
         """
     ).fetchall()
-    return _filter_rows_by_variant(rows, variant=variant, field="strategy_variant")
+    filtered = _filter_rows_by_variant(rows, variant=variant, field="strategy_variant")
+    if str(runtime_mode or "").strip().lower() != "live":
+        return filtered
+    execution_rollups = _execution_window_rollups(conn, variant=variant, runtime_mode="live")
+    if not execution_rollups:
+        return []
+    return [row for row in filtered if str(row["slug"] or "") in execution_rollups]
+
+
+def _execution_window_rollups(
+    conn: sqlite3.Connection,
+    *,
+    variant: str,
+    runtime_mode: str,
+) -> dict[str, dict[str, float | int | str]]:
+    safe_mode = str(runtime_mode or "").strip().lower()
+    if not safe_mode:
+        return {}
+    rows = conn.execute(
+        """
+        SELECT ts, slug, pnl_delta, notional, strategy_variant
+        FROM executions
+        WHERE mode = ? AND COALESCE(slug, '') != ''
+        ORDER BY ts ASC
+        """,
+        (safe_mode,),
+    ).fetchall()
+    rows = _filter_rows_by_variant(rows, variant=variant, field="strategy_variant")
+    grouped: dict[str, dict[str, float | int | str]] = {}
+    for row in rows:
+        slug = str(row["slug"] or "").strip()
+        if not slug:
+            continue
+        entry = grouped.setdefault(
+            slug,
+            {
+                "slug": slug,
+                "resolved_at": int(row["ts"] or 0),
+                "pnl": 0.0,
+                "deployed_notional": 0.0,
+                "legs": 0,
+                "strategy_variant": str(row["strategy_variant"] or ""),
+            },
+        )
+        entry["resolved_at"] = max(int(entry["resolved_at"]), int(row["ts"] or 0))
+        entry["pnl"] = float(entry["pnl"]) + float(row["pnl_delta"] or 0.0)
+        entry["deployed_notional"] = float(entry["deployed_notional"]) + abs(float(row["notional"] or 0.0))
+        entry["legs"] = int(entry["legs"]) + 1
+    return grouped
 
 
 def _resolution_execution_rows(

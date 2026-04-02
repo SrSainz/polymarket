@@ -785,6 +785,7 @@ class Database:
         outcome: str = "",
         category: str = "",
         strategy_variant: str | None = None,
+        ts: int | None = None,
     ) -> None:
         active_variant = str(strategy_variant or self._current_strategy_variant()).strip()
         with self.conn:
@@ -797,7 +798,7 @@ class Database:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    int(time.time()),
+                    int(ts or time.time()),
                     result.mode,
                     result.status,
                     result.action.value,

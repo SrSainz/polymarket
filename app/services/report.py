@@ -47,7 +47,12 @@ class ReportService:
             min_resolutions=max(incubation_min_resolutions, 1),
             max_drawdown=max(incubation_max_drawdown, 0.0),
         )
-        recent_resolutions = build_recent_resolution_windows(self.db.conn, variant=strategy_variant, limit=5)
+        recent_resolutions = build_recent_resolution_windows(
+            self.db.conn,
+            variant=strategy_variant,
+            limit=5,
+            runtime_mode=str(self.db.get_bot_state("strategy_runtime_mode") or ""),
+        )
         research_root = self.reports_dir.parent / "research"
         experiment_payload = load_experiment_leaderboard(research_root)
         dataset_payload = load_dataset_summary(research_root)

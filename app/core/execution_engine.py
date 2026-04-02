@@ -194,12 +194,15 @@ def apply_fill_to_database(
     message: str,
     status: str = "filled",
     notes: str = "",
+    execution_ts: int | None = None,
 ) -> ExecutionResult:
     existing = db.get_copy_position(instruction.asset)
     current_size = float(existing["size"]) if existing else 0.0
     current_avg = float(existing["avg_price"]) if existing else instruction.price
     current_realized = float(existing["realized_pnl"]) if existing else 0.0
     effective_fee_paid = max(float(fee_paid or 0.0), 0.0)
+    recorded_ts = int(execution_ts or time.time())
+    recorded_day = datetime.fromtimestamp(recorded_ts, timezone.utc).date().isoformat()
 
     if instruction.side == TradeSide.BUY:
         new_size = current_size + filled_size
@@ -265,7 +268,7 @@ def apply_fill_to_database(
             db.set_bot_state("position_ledger_mode", mode)
         else:
             db.set_bot_state("position_ledger_mode", "")
-        db.add_daily_pnl(datetime.now(timezone.utc).date().isoformat(), pnl_delta)
+        db.add_daily_pnl(recorded_day, pnl_delta)
 
     result = ExecutionResult(
         mode=mode,
@@ -290,6 +293,7 @@ def apply_fill_to_database(
         slug=instruction.slug,
         outcome=instruction.outcome,
         category=instruction.category,
+        ts=recorded_ts,
     )
     return result
 

@@ -26,6 +26,7 @@ from app.services.dashboard_server import run_dashboard_server
 from app.services.experiment_runner import ExperimentRunner
 from app.services.historical_dataset_builder import HistoricalDatasetBuilder
 from app.services.liquidation_feed import LiquidationFeed
+from app.services.live_wallet_sync import LiveWalletSyncService
 from app.services.report import ReportService
 from app.services.runtime_diagnostics import RuntimeDiagnosticsService
 from app.services.telegram_daily_summary import TelegramDailySummaryService
@@ -234,6 +235,7 @@ def parse_args() -> argparse.Namespace:
             "diagnostics",
             "replay",
             "clear-ledger",
+            "sync-live-wallet",
             "clone-runtime",
         ],
         help="Command to run",
@@ -258,6 +260,9 @@ def parse_args() -> argparse.Namespace:
         default="shadow",
         help="Runtime destino para clonar estado",
     )
+    parser.add_argument("--wallet", default="", help="Wallet a reconciliar para sync-live-wallet")
+    parser.add_argument("--sync-page-limit", type=int, default=500, help="Tamano de pagina para sync-live-wallet")
+    parser.add_argument("--sync-max-pages", type=int, default=20, help="Numero maximo de paginas para sync-live-wallet")
     return parser.parse_args()
 
 
@@ -379,6 +384,7 @@ def _clear_runtime_ledger(db: Database) -> None:
     db.delete_bot_state_by_prefix("live_pending_order:")
     db.delete_bot_state_by_prefix("live_processed_trade:")
     db.delete_bot_state_by_prefix("live_observed_activity:")
+    db.delete_bot_state_by_prefix("live_imported_activity:")
     db.set_bot_state("position_ledger_mode", "")
     db.set_bot_state("position_ledger_preflight", "ready")
     db.set_bot_state("live_last_observed_trade_id", "")
@@ -527,6 +533,32 @@ def main() -> int:
         if args.command == "clear-ledger":
             _clear_runtime_ledger(db)
             print("ledger => cleared and live armed")
+            return 0
+
+        if args.command == "sync-live-wallet":
+            state = _runtime_session_state(db)
+            now_ts = int(time.time())
+            active, heartbeat_age = _runtime_session_is_active(state, now_ts=now_ts)
+            if active:
+                raise RuntimeError(
+                    f"runtime session active: mode={state['mode']} pid={state['pid']} heartbeat_age={heartbeat_age}s"
+                )
+            wallet = str(args.wallet or settings.env.polymarket_funder or settings.env.bot_wallet_address or "").strip()
+            if not wallet:
+                raise RuntimeError("wallet not configured. Use --wallet or configure POLYMARKET_FUNDER/BOT_WALLET_ADDRESS.")
+            sync_service = LiveWalletSyncService(db, ActivityClient(settings.env.data_api_host))
+            payload = sync_service.sync(
+                wallet=wallet,
+                mode="live",
+                page_limit=max(int(args.sync_page_limit), 1),
+                max_pages=max(int(args.sync_max_pages), 1),
+            )
+            print(
+                "sync-live-wallet => "
+                f"wallet={payload['wallet']} imported={payload['imported']} duplicates={payload['duplicates']} "
+                f"skipped={payload['skipped']} errors={payload['errors']} ok={payload['ok']} "
+                f"mismatch={payload['mismatch_reason'] or '-'}"
+            )
             return 0
 
         if args.command == "dashboard":

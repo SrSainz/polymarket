@@ -1747,9 +1747,24 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         positions = conn.execute(
             "SELECT asset, condition_id, size, avg_price, slug, title, outcome FROM copy_positions"
         ).fetchall()
-        recent_resolution_windows = build_recent_resolution_windows(conn, variant=strategy_variant, limit=8)
-        resolution_pnl_curve = build_resolution_pnl_curve(conn, variant=strategy_variant, limit=24)
-        setup_performance = build_setup_performance(conn, variant=strategy_variant, limit=8)
+        recent_resolution_windows = build_recent_resolution_windows(
+            conn,
+            variant=strategy_variant,
+            limit=8,
+            runtime_mode=strategy_runtime_mode,
+        )
+        resolution_pnl_curve = build_resolution_pnl_curve(
+            conn,
+            variant=strategy_variant,
+            limit=24,
+            runtime_mode=strategy_runtime_mode,
+        )
+        setup_performance = build_setup_performance(
+            conn,
+            variant=strategy_variant,
+            limit=8,
+            runtime_mode=strategy_runtime_mode,
+        )
         incubation = build_incubation_summary(
             conn,
             variant=strategy_variant,
@@ -1757,6 +1772,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             min_days=max(int(strategy_incubation_min_days), 0),
             min_resolutions=max(int(strategy_incubation_min_resolutions), 1),
             max_drawdown=max(float(strategy_incubation_max_drawdown_limit), 0.0),
+            runtime_mode=strategy_runtime_mode,
         )
 
     experiment_payload = load_experiment_leaderboard(research_root)

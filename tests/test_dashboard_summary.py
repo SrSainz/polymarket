@@ -381,6 +381,131 @@ def test_summary_payload_exposes_observed_live_trades(tmp_path: Path) -> None:
     assert summary["live_observed_trades"][0]["observed_live_activity"] is True
 
 
+def test_summary_payload_live_recent_resolutions_require_real_live_executions(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_runtime_mode", "live")
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-live-empty",
+        condition_id="cond-live-empty",
+        title="Bitcoin Up or Down - Empty",
+        price_mode="repair-bracket",
+        timing_regime="mid-late",
+        primary_outcome="Down",
+        hedge_outcome="Up",
+        primary_ratio=0.8,
+        planned_budget=5.0,
+        current_exposure=0.0,
+        notes="window open",
+    )
+    db.close_strategy_window(
+        slug="btc-updown-5m-live-empty",
+        realized_pnl=0.0,
+        winning_outcome="Down",
+        current_exposure=0.0,
+        notes="window closed",
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="live",
+        live_trading_enabled=True,
+    )
+
+    assert summary["strategy_recent_resolutions"] == []
+    assert summary["strategy_resolution_pnl_curve"]["window_count"] == 0
+
+
+def test_summary_payload_live_recent_resolutions_use_execution_rollup_pnl(tmp_path: Path) -> None:
+    db_path = tmp_path / "bot_live.db"
+    db = Database(db_path)
+    db.init_schema()
+    db.set_bot_state("strategy_runtime_mode", "live")
+    db.upsert_strategy_window(
+        slug="btc-updown-5m-live-rollup",
+        condition_id="cond-live-rollup",
+        title="Bitcoin Up or Down - Rollup",
+        price_mode="repair-bracket",
+        timing_regime="mid-late",
+        primary_outcome="Down",
+        hedge_outcome="Up",
+        primary_ratio=0.8,
+        planned_budget=5.0,
+        current_exposure=0.0,
+        notes="window open",
+    )
+    db.close_strategy_window(
+        slug="btc-updown-5m-live-rollup",
+        realized_pnl=0.0,
+        winning_outcome="Down",
+        current_exposure=0.0,
+        notes="window closed",
+    )
+    db.record_execution(
+        result=ExecutionResult(
+            mode="live",
+            status="filled",
+            action=SignalAction.OPEN,
+            asset="asset-live-rollup",
+            size=10.0,
+            price=0.4,
+            notional=4.0,
+            pnl_delta=0.0,
+            message="buy",
+        ),
+        side=TradeSide.BUY.value,
+        condition_id="cond-live-rollup",
+        source_wallet="wallet-sync:test",
+        source_signal_id=0,
+        notes="wallet_activity_import tx=buy",
+        title="Bitcoin Up or Down - Rollup",
+        slug="btc-updown-5m-live-rollup",
+        outcome="Down",
+        category="crypto",
+        ts=1775000000,
+    )
+    db.record_execution(
+        result=ExecutionResult(
+            mode="live",
+            status="filled",
+            action=SignalAction.CLOSE,
+            asset="asset-live-rollup",
+            size=10.0,
+            price=0.55,
+            notional=5.5,
+            pnl_delta=1.5,
+            message="sell",
+        ),
+        side=TradeSide.SELL.value,
+        condition_id="cond-live-rollup",
+        source_wallet="wallet-sync:test",
+        source_signal_id=0,
+        notes="wallet_activity_import tx=sell",
+        title="Bitcoin Up or Down - Rollup",
+        slug="btc-updown-5m-live-rollup",
+        outcome="Down",
+        category="crypto",
+        ts=1775000050,
+    )
+    db.close()
+
+    summary = _summary_payload(
+        db_path,
+        clob_host="https://clob.polymarket.com",
+        execution_mode="live",
+        live_trading_enabled=True,
+    )
+
+    assert summary["strategy_recent_resolutions"][0]["slug"] == "btc-updown-5m-live-rollup"
+    assert summary["strategy_recent_resolutions"][0]["pnl"] == 1.5
+    assert summary["strategy_recent_resolutions"][0]["deployed_notional"] == 9.5
+    assert summary["strategy_resolution_pnl_curve"]["window_count"] == 1
+    assert summary["strategy_resolution_pnl_curve"]["total_realized_pnl"] == 1.5
+
+
 def test_executions_payload_includes_observed_live_trades(tmp_path: Path) -> None:
     db_path = tmp_path / "bot_live.db"
     db = Database(db_path)
@@ -1224,7 +1349,7 @@ def test_summary_payload_exposes_paper_vs_shadow_window_compare(tmp_path: Path) 
     assert compare["available"] is True
     assert compare["same_window"] is True
     assert compare["status"] == "shared"
-    assert summary["dashboard_build"].startswith("2026-03-")
+    assert summary["dashboard_build"].startswith("2026-")
     assert "pnl_total" in summary["dashboard_metric_sources"]
     assert "compare_samples" in summary["dashboard_metric_sources"]
     assert compare["paper"]["runtime_mode"] == "paper"
