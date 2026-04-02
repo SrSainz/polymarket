@@ -1822,7 +1822,13 @@ class BTC5mStrategyService:
         )
         if single_leg_exit_plan is not None:
             return self._with_arb_reference_state(single_leg_exit_plan, reference_state)
-        if pair_sum <= pair_sum_cap and not late_directional_pair_block:
+        live_buy_block_reasons = self._arb_live_buy_block_reasons(
+            mode=mode,
+            market=market,
+            up_outcome=up_outcome,
+            down_outcome=down_outcome,
+        )
+        if not live_buy_block_reasons and pair_sum <= pair_sum_cap and not late_directional_pair_block:
             overlay_reserve_fraction = 0.0
             if _ARB_ENABLE_PAIR_OVERLAY and abs(desired_up_ratio - 0.5) >= _ARB_REBALANCE_RATIO_TRIGGER:
                 overlay_reserve_fraction = _ARB_REBALANCE_BUDGET_FRACTION
@@ -2022,34 +2028,35 @@ class BTC5mStrategyService:
                             reference_state,
                         )
 
-        bracket_plan = self._build_arb_biased_bracket_plan(
-            mode=mode,
-            market=market,
-            up_outcome=up_outcome,
-            down_outcome=down_outcome,
-            pair_sum=pair_sum,
-            fair_up=fair_up,
-            fair_down=fair_down,
-            up_net_edge=up_net_edge,
-            down_net_edge=down_net_edge,
-            desired_up_ratio=desired_up_ratio,
-            current_up_ratio=current_up_ratio,
-            timing_regime=timing_regime,
-            cycle_budget=cycle_budget,
-            cash_balance=cash_balance,
-            remaining_instruction_capacity=remaining_instruction_capacity,
-            current_up_notional=current_up_notional,
-            current_down_notional=current_down_notional,
-            spot_context=spot_context,
-            bracket_phase=bracket_phase,
-            carry_note=carry_note,
-        )
-        if bracket_plan is not None:
-            return self._with_arb_reference_state(bracket_plan, reference_state)
+        if not live_buy_block_reasons:
+            bracket_plan = self._build_arb_biased_bracket_plan(
+                mode=mode,
+                market=market,
+                up_outcome=up_outcome,
+                down_outcome=down_outcome,
+                pair_sum=pair_sum,
+                fair_up=fair_up,
+                fair_down=fair_down,
+                up_net_edge=up_net_edge,
+                down_net_edge=down_net_edge,
+                desired_up_ratio=desired_up_ratio,
+                current_up_ratio=current_up_ratio,
+                timing_regime=timing_regime,
+                cycle_budget=cycle_budget,
+                cash_balance=cash_balance,
+                remaining_instruction_capacity=remaining_instruction_capacity,
+                current_up_notional=current_up_notional,
+                current_down_notional=current_down_notional,
+                spot_context=spot_context,
+                bracket_phase=bracket_phase,
+                carry_note=carry_note,
+            )
+            if bracket_plan is not None:
+                return self._with_arb_reference_state(bracket_plan, reference_state)
 
         cheap_side = None
         cheap_side_block_reason = ""
-        if _ARB_ENABLE_CHEAP_SIDE:
+        if _ARB_ENABLE_CHEAP_SIDE and not live_buy_block_reasons:
             cheap_side = self._select_cheap_side_target(
                 mode=mode,
                 up_outcome=up_outcome,
@@ -2205,54 +2212,55 @@ class BTC5mStrategyService:
                             ),
                             reference_state,
                         )
-        repair_plan = self._build_arb_repair_plan(
-            mode=mode,
-            market=market,
-            up_outcome=up_outcome,
-            down_outcome=down_outcome,
-            pair_sum=pair_sum,
-            fair_up=fair_up,
-            fair_down=fair_down,
-            up_net_edge=up_net_edge,
-            down_net_edge=down_net_edge,
-            desired_up_ratio=desired_up_ratio,
-            current_up_ratio=current_up_ratio,
-            timing_regime=timing_regime,
-            cycle_budget=cycle_budget,
-            cash_balance=cash_balance,
-            remaining_instruction_capacity=remaining_instruction_capacity,
-            current_up_notional=current_up_notional,
-            current_down_notional=current_down_notional,
-            spot_context=spot_context,
-            bracket_phase=bracket_phase,
-            carry_note=carry_note,
-        )
-        if repair_plan is not None:
-            return self._with_arb_reference_state(repair_plan, reference_state)
-        stabilize_plan = self._build_arb_stabilize_plan(
-            mode=mode,
-            market=market,
-            up_outcome=up_outcome,
-            down_outcome=down_outcome,
-            pair_sum=pair_sum,
-            fair_up=fair_up,
-            fair_down=fair_down,
-            up_net_edge=up_net_edge,
-            down_net_edge=down_net_edge,
-            desired_up_ratio=desired_up_ratio,
-            current_up_ratio=current_up_ratio,
-            timing_regime=timing_regime,
-            cycle_budget=cycle_budget,
-            cash_balance=cash_balance,
-            remaining_instruction_capacity=remaining_instruction_capacity,
-            current_up_notional=current_up_notional,
-            current_down_notional=current_down_notional,
-            spot_context=spot_context,
-            bracket_phase=bracket_phase,
-            carry_note=carry_note,
-        )
-        if stabilize_plan is not None:
-            return self._with_arb_reference_state(stabilize_plan, reference_state)
+        if not live_buy_block_reasons:
+            repair_plan = self._build_arb_repair_plan(
+                mode=mode,
+                market=market,
+                up_outcome=up_outcome,
+                down_outcome=down_outcome,
+                pair_sum=pair_sum,
+                fair_up=fair_up,
+                fair_down=fair_down,
+                up_net_edge=up_net_edge,
+                down_net_edge=down_net_edge,
+                desired_up_ratio=desired_up_ratio,
+                current_up_ratio=current_up_ratio,
+                timing_regime=timing_regime,
+                cycle_budget=cycle_budget,
+                cash_balance=cash_balance,
+                remaining_instruction_capacity=remaining_instruction_capacity,
+                current_up_notional=current_up_notional,
+                current_down_notional=current_down_notional,
+                spot_context=spot_context,
+                bracket_phase=bracket_phase,
+                carry_note=carry_note,
+            )
+            if repair_plan is not None:
+                return self._with_arb_reference_state(repair_plan, reference_state)
+            stabilize_plan = self._build_arb_stabilize_plan(
+                mode=mode,
+                market=market,
+                up_outcome=up_outcome,
+                down_outcome=down_outcome,
+                pair_sum=pair_sum,
+                fair_up=fair_up,
+                fair_down=fair_down,
+                up_net_edge=up_net_edge,
+                down_net_edge=down_net_edge,
+                desired_up_ratio=desired_up_ratio,
+                current_up_ratio=current_up_ratio,
+                timing_regime=timing_regime,
+                cycle_budget=cycle_budget,
+                cash_balance=cash_balance,
+                remaining_instruction_capacity=remaining_instruction_capacity,
+                current_up_notional=current_up_notional,
+                current_down_notional=current_down_notional,
+                spot_context=spot_context,
+                bracket_phase=bracket_phase,
+                carry_note=carry_note,
+            )
+            if stabilize_plan is not None:
+                return self._with_arb_reference_state(stabilize_plan, reference_state)
         unwind_plan = self._build_arb_inventory_unwind_plan(
             mode=mode,
             market=market,
@@ -2274,7 +2282,7 @@ class BTC5mStrategyService:
         if unwind_plan is not None:
             return self._with_arb_reference_state(unwind_plan, reference_state)
         delta_note = f" | delta {spot_context.delta_bps:+.1f}bps" if spot_context is not None else ""
-        block_reasons = [reason for reason in (cheap_side_block_reason, terminal_ev_block_reason) if reason]
+        block_reasons = [reason for reason in (*live_buy_block_reasons, cheap_side_block_reason, terminal_ev_block_reason) if reason]
         block_note = f" | {' | '.join(block_reasons)}" if block_reasons else ""
         self._record_strategy_snapshot(
             market=market,
@@ -5005,6 +5013,28 @@ class BTC5mStrategyService:
             category="crypto",
             reason=f"arb_micro:pair:{pair_sum:.3f}:tranche-{tranche_index}",
         )
+
+    def _arb_live_buy_block_reasons(
+        self,
+        *,
+        mode: str,
+        market: dict,
+        up_outcome: MarketOutcome,
+        down_outcome: MarketOutcome,
+    ) -> list[str]:
+        if str(mode or "").strip().lower() != "live":
+            return []
+        reasons: list[str] = []
+        slug = str(market.get("slug") or "").strip()
+        execution_counts = self.db.get_execution_counts_for_slug(slug, mode="live")
+        if int(execution_counts.get("sells") or 0) > 0:
+            reasons.append("live guard: no recompra despues de una venta en la misma ventana")
+        highest_leg_price = max(float(up_outcome.best_ask or 0.0), float(down_outcome.best_ask or 0.0))
+        if highest_leg_price >= _ARB_LIVE_REBALANCE_EXTREME_LEG_PRICE:
+            reasons.append(
+                f"live guard: no comprar si una pata ya cotiza >= {_ARB_LIVE_REBALANCE_EXTREME_LEG_PRICE:.2f}"
+            )
+        return reasons
 
     def _build_arb_sell_instruction(
         self,

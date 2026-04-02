@@ -5857,6 +5857,133 @@ def test_live_stabilize_catchup_does_not_buy_when_market_leg_is_already_extreme(
     db.close()
 
 
+def test_live_buy_block_reasons_prevent_reentry_after_sell_in_same_window(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Live No Reentry",
+        "slug": "btc-updown-5m-live-no-reentry",
+        "conditionId": "cond-live-no-reentry",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    db.record_execution(
+        result=ExecutionResult(
+            mode="live",
+            status="filled",
+            action=SignalAction.CLOSE,
+            asset="asset-up",
+            size=5.0,
+            price=0.55,
+            notional=2.75,
+            pnl_delta=0.0,
+            fee_paid=0.0,
+            message="seed-sell",
+        ),
+        side="sell",
+        condition_id=market["conditionId"],
+        source_wallet="strategy:test",
+        source_signal_id=0,
+        notes="seed sell",
+        title=market["question"],
+        slug=market["slug"],
+        outcome="Up",
+        category="crypto",
+    )
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=67.94),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72, live_btc5m_cycle_budget_usdc=25.0),
+        logger=logging.getLogger("test-btc5m-live-no-reentry"),
+    )
+
+    reasons = service._arb_live_buy_block_reasons(  # noqa: SLF001
+        mode="live",
+        market=market,
+        up_outcome=MarketOutcome(
+            label="Up",
+            asset_id="asset-up",
+            best_ask=0.45,
+            best_bid=0.44,
+            best_ask_size=100.0,
+            ask_levels=(AskLevel(price=0.45, size=100.0),),
+        ),
+        down_outcome=MarketOutcome(
+            label="Down",
+            asset_id="asset-down",
+            best_ask=0.54,
+            best_bid=0.53,
+            best_ask_size=100.0,
+            ask_levels=(AskLevel(price=0.54, size=100.0),),
+        ),
+    )
+
+    assert any("no recompra" in reason for reason in reasons)
+    db.close()
+
+
+def test_live_buy_block_reasons_prevent_new_buys_when_leg_is_extreme(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Live Extreme Entry Guard",
+        "slug": "btc-updown-5m-live-extreme-entry-guard",
+        "conditionId": "cond-live-extreme-entry-guard",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(books={}, balance=67.94),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72, live_btc5m_cycle_budget_usdc=25.0),
+        logger=logging.getLogger("test-btc5m-live-extreme-entry-guard"),
+    )
+
+    reasons = service._arb_live_buy_block_reasons(  # noqa: SLF001
+        mode="live",
+        market=market,
+        up_outcome=MarketOutcome(
+            label="Up",
+            asset_id="asset-up",
+            best_ask=0.95,
+            best_bid=0.94,
+            best_ask_size=100.0,
+            ask_levels=(AskLevel(price=0.95, size=100.0),),
+        ),
+        down_outcome=MarketOutcome(
+            label="Down",
+            asset_id="asset-down",
+            best_ask=0.05,
+            best_bid=0.04,
+            best_ask_size=100.0,
+            ask_levels=(AskLevel(price=0.05, size=100.0),),
+        ),
+    )
+
+    assert any("cotiza >= 0.90" in reason for reason in reasons)
+    db.close()
+
+
 def test_arb_stabilize_residual_catchup_completes_tiny_orphan_leg_in_shadow_mode(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()

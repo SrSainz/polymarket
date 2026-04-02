@@ -842,6 +842,35 @@ class Database:
         params.append(limit)
         return self.conn.execute(query, tuple(params)).fetchall()
 
+    def get_execution_counts_for_slug(self, slug: str, *, mode: str | None = None) -> dict[str, int]:
+        safe_slug = str(slug or "").strip()
+        if not safe_slug:
+            return {"total": 0, "buys": 0, "sells": 0, "opens": 0, "closes": 0}
+        query = """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN side = 'buy' THEN 1 ELSE 0 END) AS buys,
+                SUM(CASE WHEN side = 'sell' THEN 1 ELSE 0 END) AS sells,
+                SUM(CASE WHEN action = 'open' THEN 1 ELSE 0 END) AS opens,
+                SUM(CASE WHEN action IN ('close', 'reduce') THEN 1 ELSE 0 END) AS closes
+            FROM executions
+            WHERE slug = ?
+        """
+        params: list[object] = [safe_slug]
+        if mode:
+            query += " AND mode = ?"
+            params.append(mode)
+        row = self.conn.execute(query, tuple(params)).fetchone()
+        if row is None:
+            return {"total": 0, "buys": 0, "sells": 0, "opens": 0, "closes": 0}
+        return {
+            "total": int(row["total"] or 0),
+            "buys": int(row["buys"] or 0),
+            "sells": int(row["sells"] or 0),
+            "opens": int(row["opens"] or 0),
+            "closes": int(row["closes"] or 0),
+        }
+
     def get_execution_stats_since(self, cutoff_ts: int, mode: str | None = None) -> dict[str, float | int]:
         query = """
             SELECT
