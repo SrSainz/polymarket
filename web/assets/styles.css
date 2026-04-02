@@ -1152,6 +1152,70 @@ td {
   gap: 8px;
 }
 
+.shadow-focus-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.shadow-focus-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(28, 35, 47, 0.94), rgba(20, 25, 35, 0.94));
+  padding: 14px 16px;
+  display: grid;
+  gap: 8px;
+}
+
+.shadow-focus-card.is-positive {
+  border-color: rgba(143, 208, 170, 0.3);
+  background:
+    radial-gradient(circle at top right, rgba(143, 208, 170, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(29, 40, 36, 0.98), rgba(20, 28, 25, 0.98));
+}
+
+.shadow-focus-card.is-negative {
+  border-color: rgba(239, 155, 155, 0.3);
+  background:
+    radial-gradient(circle at top right, rgba(239, 155, 155, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(44, 32, 36, 0.98), rgba(28, 21, 23, 0.98));
+}
+
+.shadow-focus-card.is-warning {
+  border-color: rgba(233, 178, 125, 0.3);
+  background:
+    radial-gradient(circle at top right, rgba(233, 178, 125, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(40, 34, 27, 0.98), rgba(25, 21, 18, 0.98));
+}
+
+.shadow-focus-card.is-neutral {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.shadow-focus-label {
+  margin: 0;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.shadow-focus-title {
+  display: block;
+  margin: 0;
+  font-size: clamp(1.1rem, 2.8vw, 1.55rem);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+
+.shadow-focus-meta {
+  margin: 0;
+  color: var(--muted-strong);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+
 .shadow-state-badge {
   display: inline-flex;
   align-items: center;
@@ -1520,6 +1584,10 @@ td {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .shadow-focus-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .shadow-side-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1626,6 +1694,10 @@ td {
 
   .shadow-main-title-row {
     align-items: flex-start;
+  }
+
+  .shadow-focus-grid {
+    grid-template-columns: 1fr;
   }
 
   button {

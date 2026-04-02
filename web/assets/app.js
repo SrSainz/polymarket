@@ -651,17 +651,170 @@ function shadowEdgeSnapshot(intel, summary) {
   return { gross, net, fee, slippage, estimatedCost, breakEvenGap, execution, tone };
 }
 
-function shadowEdgeHeadline(snapshot) {
+function shadowEdgeHeadline(snapshot, options = {}) {
   if (!snapshot) return "Sin edge calculado todavia.";
+  if (Number(options?.currentWindowExposure || 0) > 0.01) return "Edge informativo: ya estamos dentro";
+  if (options?.constraint?.hardBlock) {
+    if (options.constraint.kind === "reference") return "No entrar: referencia degradada";
+    if (options.constraint.kind === "budget") return "No entrar: sin tamano util";
+    if (options.constraint.kind === "paused") return "No entrar: live pausado";
+    return "No entrar: runtime bloqueado";
+  }
   if (snapshot.net > 0.01) return "Ahora mismo sí compensa entrar";
   if (snapshot.breakEvenGap > 0.01) return `Ahora mismo faltan ${fmtBps(snapshot.breakEvenGap, 1)} para break-even`;
   if (snapshot.gross > 0.01) return "Hay edge bruto, pero el coste se lo come";
   return "No hay edge útil ahora mismo";
 }
 
-function shadowEdgeMeta(snapshot) {
+function shadowEdgeMeta(snapshot, options = {}) {
   if (!snapshot) return "Sin edge calculado todavia.";
+  if (Number(options?.currentWindowExposure || 0) > 0.01) {
+    return `Ya hay ${fmtUsdPlain(Number(options.currentWindowExposure || 0), 2)} dentro. Este edge es contexto de gestion, no senal de entrada.`;
+  }
+  if (options?.constraint?.hardBlock) {
+    return options.constraint.meta || "Hay un bloqueo operativo que manda sobre el edge calculado.";
+  }
   return `bruto ${fmtBps(snapshot.gross, 1)} - fee ${fmtBps(snapshot.fee, 1)} - slippage/drag ${fmtBps(snapshot.slippage, 1)} = neto ${fmtBps(snapshot.net, 1)} | ${snapshot.execution}`;
+}
+
+function shadowConstraintSummary(summary, operability, spotInfo, liveInfo, budgetInfo) {
+  const note = `${String(operability?.reason || "").trim()} ${String(spotInfo?.referenceNote || "").trim()}`.toLowerCase();
+  const referenceBad =
+    operability?.state === "degraded_reference" ||
+    operability?.state === "waiting_official" ||
+    spotInfo?.referenceComparable === false ||
+    note.includes("sin spot de referencia") ||
+    note.includes("referencia degradada");
+
+  if (liveInfo?.isLiveSession && !liveInfo?.canExecute) {
+    return {
+      title: "Live pausado",
+      meta: liveInfo?.reason || "El runtime esta armado en modo live, pero no puede ejecutar ahora mismo.",
+      tone: "warning",
+      hardBlock: true,
+      kind: "paused",
+    };
+  }
+
+  if (referenceBad) {
+    return {
+      title: "Referencia no fiable",
+      meta:
+        operability?.reason ||
+        spotInfo?.referenceNote ||
+        "Sin spot comparable o con referencia degradada. Esta ventana no es operable.",
+      tone: "negative",
+      hardBlock: true,
+      kind: "reference",
+    };
+  }
+
+  if (operability?.state === "budget_limited" || Number(budgetInfo?.budgetShortfall || 0) > 0.01) {
+    return {
+      title: "Sin tamano util",
+      meta: operability?.reason || budgetLimitMeta(summary) || "No queda presupuesto util para entrar bien.",
+      tone: "warning",
+      hardBlock: true,
+      kind: "budget",
+    };
+  }
+
+  if (operability?.blocking) {
+    return {
+      title: operability?.label || "Bloqueado",
+      meta: operability?.reason || "El runtime tiene un bloqueo activo.",
+      tone: "warning",
+      hardBlock: true,
+      kind: "operability",
+    };
+  }
+
+  return {
+    title: "Sin bloqueo duro",
+    meta:
+      spotInfo?.effectiveBeat > 0
+        ? `Beat ${fmtBtcPrice(spotInfo.effectiveBeat)} | ${String(spotInfo?.effectiveSource || "-").replaceAll("-", " ")}`
+        : "La ventana esta libre de bloqueos duros; solo queda esperar calidad de entrada.",
+    tone: "positive",
+    hardBlock: false,
+    kind: "clear",
+  };
+}
+
+function shadowDecisionSummary(
+  summary,
+  operability,
+  spotInfo,
+  edgeSnapshot,
+  timingInfo,
+  currentWindowExposure,
+  positionCount,
+  budgetInfo,
+  constraint
+) {
+  if (currentWindowExposure > 0.01) {
+    if (positionCount <= 1) {
+      return {
+        title: "Gestionar pata suelta",
+        meta: `Hay ${fmtUsdPlain(currentWindowExposure, 2)} dentro y solo ${positionCount || 1} pata abierta. Toca vigilar, no abrir alegremente.`,
+        tone: "warning",
+      };
+    }
+    return {
+      title: "Gestionar posicion",
+      meta: `${fmtUsdPlain(currentWindowExposure, 2)} dentro | ${positionCount} patas abiertas | ${windowCountdownLabel(timingInfo)}`,
+      tone: toneFromNumber(Number(summary?.strategy_current_market_live_pnl || 0)),
+    };
+  }
+
+  if (constraint?.hardBlock) {
+    return {
+      title: constraint.kind === "paused" ? "Pausado" : "No entrar",
+      meta: constraint.meta || "Hay un bloqueo operativo real en esta ventana.",
+      tone: constraint.tone || "warning",
+    };
+  }
+
+  if (operability?.state === "ready" && Number(edgeSnapshot?.net || 0) > 0.01) {
+    return {
+      title: "Listo para entrar",
+      meta: `${fmtBps(edgeSnapshot.net, 1)} netos | ${windowCountdownLabel(timingInfo)} | presupuesto ${fmtUsdPlain(Number(summary?.strategy_market_exposure_cap || budgetInfo?.cycleBudget || 0), 2)}`,
+      tone: "positive",
+    };
+  }
+
+  if (Number(edgeSnapshot?.net || 0) > 0.01) {
+    return {
+      title: "Vigilando entrada",
+      meta: `Hay edge neto (${fmtBps(edgeSnapshot.net, 1)}), pero todavia falta una condicion operativa para ejecutar bien.`,
+      tone: "warning",
+    };
+  }
+
+  if (Number(edgeSnapshot?.breakEvenGap || 0) > 0.01) {
+    return {
+      title: "Esperar edge",
+      meta: `Faltan ${fmtBps(edgeSnapshot.breakEvenGap, 1)} para break-even. Mejor esperar que forzar la ventana.`,
+      tone: "neutral",
+    };
+  }
+
+  return {
+    title: "Esperar edge",
+    meta: spotInfo?.referenceNote || operability?.reason || "Sin ventaja util ahora mismo.",
+    tone: "neutral",
+  };
+}
+
+function shadowBudgetSummary(summary, budgetInfo, currentWindowExposure) {
+  const marketCap = Number(summary?.strategy_market_exposure_cap || budgetInfo?.cycleBudget || 0);
+  const totalCap = Number(summary?.strategy_total_exposure_cap || 0);
+  const remaining = Math.max(Number(budgetInfo?.remainingBudget ?? marketCap - currentWindowExposure), 0);
+  const effectiveMin = Number(summary?.strategy_effective_min_notional || budgetInfo?.effectiveMinNotional || 0);
+  const title = `${fmtUsdPlain(marketCap, 2)} max | ${fmtUsdPlain(currentWindowExposure, 2)} dentro`;
+  const meta = `Restante ${fmtUsdPlain(remaining, 2)} | total ${fmtUsdPlain(totalCap, 2)} | minimo ${fmtUsdPlain(effectiveMin, 2)}`;
+  const tone = currentWindowExposure > 0.01 ? "warning" : marketCap > 0 ? "neutral" : "negative";
+  return { title, meta, tone };
 }
 
 function clamp(value, min, max) {
@@ -910,6 +1063,20 @@ function paintShadowOverview(summary, items = lastPositions) {
   const netEdgeBps = Number(edge?.selected_ev_bps ?? summary?.strategy_taker_ev_bps ?? 0);
   const feeBps = Number(edge?.taker_fee_bps ?? summary?.strategy_taker_fee_bps ?? 0);
   const edgeSnapshot = shadowEdgeSnapshot(userIntel, summary);
+  const liveInfo = liveControlInfo(summary);
+  const focusConstraint = shadowConstraintSummary(summary, operability, spotInfo, liveInfo, budgetInfo);
+  const focusDecision = shadowDecisionSummary(
+    summary,
+    operability,
+    spotInfo,
+    edgeSnapshot,
+    timingInfo,
+    currentWindowExposure,
+    positionCount,
+    budgetInfo,
+    focusConstraint
+  );
+  const focusBudget = shadowBudgetSummary(summary, budgetInfo, currentWindowExposure);
   const latencyHeadline = compareLatencyHeadline(userIntel);
   const referenceHeadline = compareReferenceHeadline(userIntel) || String(spotInfo?.effectiveSource || "-").replaceAll("-", " ");
   const referenceMeta = compareReferenceMeta(userIntel);
@@ -937,6 +1104,19 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowReferenceBadge").textContent = effectiveBeat > 0 ? `Beat ${fmtBtcPrice(effectiveBeat)}` : "Beat -";
   document.getElementById("shadowActionBadge").textContent =
     currentWindowExposure > 0 ? `${positionCount} patas abiertas` : `Fuente ${referenceHeadline || "-"}`;
+
+  const decisionCard = document.getElementById("shadowDecisionCard");
+  const constraintCard = document.getElementById("shadowConstraintCard");
+  const budgetCard = document.getElementById("shadowBudgetCard");
+  applyToneClass(decisionCard, focusDecision.tone);
+  applyToneClass(constraintCard, focusConstraint.tone);
+  applyToneClass(budgetCard, focusBudget.tone);
+  document.getElementById("shadowDecisionTitle").textContent = focusDecision.title;
+  document.getElementById("shadowDecisionMeta").textContent = focusDecision.meta;
+  document.getElementById("shadowConstraintTitle").textContent = focusConstraint.title;
+  document.getElementById("shadowConstraintMeta").textContent = focusConstraint.meta;
+  document.getElementById("shadowBudgetTitle").textContent = focusBudget.title;
+  document.getElementById("shadowBudgetMeta").textContent = focusBudget.meta;
 
   const windowCard = document.getElementById("shadowWindowPnlCard");
   applyToneClass(windowCard, currentWindowExposure > 0 ? toneFromNumber(currentWindowPnl) : primaryStatus.tone);
@@ -1007,9 +1187,19 @@ function paintShadowOverview(summary, items = lastPositions) {
         `${feedInfo.label} | ${String(reference?.reference_quality || spotInfo.referenceQuality || "").trim() || "sin calidad"} | ${String(edge?.edge_status || "sin edge")}`;
 
   const edgeCard = document.getElementById("shadowEdgeCard");
-  applyToneClass(edgeCard, edgeSnapshot.tone);
+  applyToneClass(
+    edgeCard,
+    currentWindowExposure > 0.01
+      ? toneFromNumber(currentWindowPnl)
+      : focusConstraint.hardBlock
+      ? focusConstraint.tone
+      : edgeSnapshot.tone
+  );
   document.getElementById("shadowEdgeStatusValue").textContent = fmtBps(edgeSnapshot.net, 1);
-  document.getElementById("shadowEdgeHeadline").textContent = shadowEdgeHeadline(edgeSnapshot);
+  document.getElementById("shadowEdgeHeadline").textContent = shadowEdgeHeadline(edgeSnapshot, {
+    constraint: focusConstraint,
+    currentWindowExposure,
+  });
   const edgeScale = Math.max(Math.abs(edgeSnapshot.gross), Math.abs(edgeSnapshot.net), edgeSnapshot.estimatedCost, 10);
   const edgeWidthPct = clamp((Math.abs(edgeSnapshot.net) / edgeScale) * 50, 0, 50);
   document.getElementById("shadowEdgeMeterNegative").style.width = edgeSnapshot.net < 0 ? `${edgeWidthPct}%` : "0%";
@@ -1018,7 +1208,10 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowEdgeFeeValue").textContent = `Fee ${fmtBps(edgeSnapshot.fee, 1)}`;
   document.getElementById("shadowEdgeSlipValue").textContent = `Slippage ${fmtBps(edgeSnapshot.slippage, 1)}`;
   document.getElementById("shadowEdgeModeValue").textContent = `${edgeSnapshot.execution || "-"}`;
-  document.getElementById("shadowEdgeMeta").textContent = shadowEdgeMeta(edgeSnapshot);
+  document.getElementById("shadowEdgeMeta").textContent = shadowEdgeMeta(edgeSnapshot, {
+    constraint: focusConstraint,
+    currentWindowExposure,
+  });
 
   const recentCard = document.getElementById("shadowRecentCard");
   const recentSum = recentRows.reduce((acc, item) => acc + Number(item?.pnl || 0), 0);
