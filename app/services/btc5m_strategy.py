@@ -4274,6 +4274,13 @@ class BTC5mStrategyService:
         if not instructions:
             return None
 
+        terminal_ev_pct = self._arb_terminal_ev_pct_for_instructions(
+            instructions=instructions,
+            fair_by_asset={target.asset_id: fair_value},
+        )
+        if str(mode or "").strip().lower() == "live" and terminal_ev_pct < _ARB_TERMINAL_EV_MIN_BRACKET:
+            return None
+
         primary_notional = sum(item.notional for item in instructions)
         projected_up_notional = current_up_notional + (primary_notional if target.asset_id == up_outcome.asset_id else 0.0)
         projected_down_notional = current_down_notional + (primary_notional if target.asset_id == down_outcome.asset_id else 0.0)
@@ -4283,7 +4290,7 @@ class BTC5mStrategyService:
         )
         note = (
             f"repair {target.label} ask {target.best_ask:.3f} ~ fair {fair_value:.3f} | "
-            f"net {net_edge * 100:.2f}% | {timing_regime} | compras {len(instructions)} | "
+            f"net {net_edge * 100:.2f}% | ev {terminal_ev_pct * 100:.2f}% | {timing_regime} | compras {len(instructions)} | "
             f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
             f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
             f"fase {bracket_phase}{carry_note}"
@@ -4323,6 +4330,7 @@ class BTC5mStrategyService:
             desired_up_ratio=desired_up_ratio,
             current_up_ratio=current_ratio_after,
             bracket_phase=bracket_phase,
+            terminal_ev_pct=terminal_ev_pct,
         )
 
     def _build_arb_stabilize_plan(
@@ -4511,6 +4519,13 @@ class BTC5mStrategyService:
         if not instructions:
             return None
 
+        terminal_ev_pct = self._arb_terminal_ev_pct_for_instructions(
+            instructions=instructions,
+            fair_by_asset={target.asset_id: fair_value},
+        )
+        if str(mode or "").strip().lower() == "live" and terminal_ev_pct < _ARB_TERMINAL_EV_MIN_BRACKET:
+            return None
+
         primary_notional = sum(item.notional for item in instructions)
         projected_up_notional = current_up_notional + (primary_notional if target.asset_id == up_outcome.asset_id else 0.0)
         projected_down_notional = current_down_notional + (primary_notional if target.asset_id == down_outcome.asset_id else 0.0)
@@ -4524,7 +4539,7 @@ class BTC5mStrategyService:
             mode_label = "catchup" if catchup_rebalance else "stabilize"
         note = (
             f"{mode_label} {target.label} ask {target.best_ask:.3f} ~ fair {fair_value:.3f} | "
-            f"net {net_edge * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
+            f"net {net_edge * 100:.2f}% | ev {terminal_ev_pct * 100:.2f}% | delta {spot_context.delta_bps:+.1f}bps | "
             f"{timing_regime} | compras {len(instructions)} | "
             f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=desired_down_ratio)} | "
             f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
@@ -4566,6 +4581,7 @@ class BTC5mStrategyService:
             desired_up_ratio=desired_up_ratio,
             current_up_ratio=current_ratio_after,
             bracket_phase=bracket_phase,
+            terminal_ev_pct=terminal_ev_pct,
         )
 
     def _build_arb_inventory_unwind_plan(
