@@ -32,8 +32,17 @@ class LiveWalletSyncService:
         duplicates = 0
         skipped = 0
         errors = 0
+        closed_imported = 0
+        closed_duplicates = 0
+        closed_skipped = 0
+        closed_errors = 0
 
         raw_activity = self._fetch_activity(wallet=safe_wallet, page_limit=page_limit, max_pages=max_pages)
+        closed_positions = self._fetch_closed_positions(
+            wallet=safe_wallet,
+            page_limit=page_limit,
+            max_pages=max_pages,
+        )
         trade_rows = sorted(
             [row for row in raw_activity if str(row.get("type") or "").strip().upper() == "TRADE"],
             key=lambda row: (
@@ -63,6 +72,33 @@ class LiveWalletSyncService:
             else:
                 skipped += 1
 
+        closed_rows = sorted(
+            closed_positions,
+            key=lambda row: (
+                int(_safe_float(row.get("timestamp"))),
+                str(row.get("slug") or row.get("eventSlug") or ""),
+                str(row.get("asset") or ""),
+            ),
+        )
+        for closed_position in closed_rows:
+            sync_key = self._closed_position_sync_key(closed_position)
+            if self.db.get_bot_state(sync_key):
+                closed_duplicates += 1
+                continue
+            try:
+                result = self._import_closed_position(closed_position=closed_position, wallet=safe_wallet, mode=safe_mode)
+            except Exception:  # noqa: BLE001
+                closed_errors += 1
+                continue
+            if result == "imported":
+                closed_imported += 1
+                self.db.set_bot_state(sync_key, "1")
+            elif result == "duplicate":
+                closed_duplicates += 1
+                self.db.set_bot_state(sync_key, "1")
+            else:
+                closed_skipped += 1
+
         positions = self._fetch_positions(wallet=safe_wallet, page_limit=page_limit, max_pages=max_pages)
         mismatch_reason = self._positions_mismatch_reason(positions=positions)
         now_ts = int(time.time())
@@ -82,16 +118,25 @@ class LiveWalletSyncService:
         self.db.set_bot_state("live_wallet_sync_duplicates", str(duplicates))
         self.db.set_bot_state("live_wallet_sync_skipped", str(skipped))
         self.db.set_bot_state("live_wallet_sync_errors", str(errors))
+        self.db.set_bot_state("live_wallet_sync_closed_imported", str(closed_imported))
+        self.db.set_bot_state("live_wallet_sync_closed_duplicates", str(closed_duplicates))
+        self.db.set_bot_state("live_wallet_sync_closed_skipped", str(closed_skipped))
+        self.db.set_bot_state("live_wallet_sync_closed_errors", str(closed_errors))
 
         return {
             "wallet": safe_wallet,
             "mode": safe_mode,
             "activity_rows": len(trade_rows),
+            "closed_rows": len(closed_rows),
             "positions_rows": len(positions),
             "imported": imported,
             "duplicates": duplicates,
             "skipped": skipped,
             "errors": errors,
+            "closed_imported": closed_imported,
+            "closed_duplicates": closed_duplicates,
+            "closed_skipped": closed_skipped,
+            "closed_errors": closed_errors,
             "ok": mismatch_reason == "",
             "mismatch_reason": mismatch_reason,
         }
@@ -117,6 +162,20 @@ class LiveWalletSyncService:
         for page_index in range(safe_pages):
             offset = page_index * safe_limit
             page = self.activity_client.get_positions(wallet=wallet, limit=safe_limit, offset=offset)
+            if not page:
+                break
+            items.extend(page)
+            if len(page) < safe_limit:
+                break
+        return items
+
+    def _fetch_closed_positions(self, *, wallet: str, page_limit: int, max_pages: int) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        safe_limit = max(int(page_limit), 1)
+        safe_pages = max(int(max_pages), 1)
+        for page_index in range(safe_pages):
+            offset = page_index * safe_limit
+            page = self.activity_client.get_closed_positions(wallet=wallet, limit=safe_limit, offset=offset)
             if not page:
                 break
             items.extend(page)
@@ -179,6 +238,64 @@ class LiveWalletSyncService:
         )
         return "imported" if result.status == "filled" else "skipped"
 
+    def _import_closed_position(self, *, closed_position: dict[str, Any], wallet: str, mode: str) -> str:
+        asset = str(closed_position.get("asset") or "").strip()
+        existing = self.db.get_copy_position(asset)
+        if existing is None:
+            return "skipped"
+
+        size = max(float(existing["size"] or 0.0), 0.0)
+        if size <= 1e-9:
+            return "skipped"
+
+        condition_id = str(
+            closed_position.get("conditionId")
+            or closed_position.get("condition_id")
+            or existing["condition_id"]
+            or ""
+        ).strip()
+        ts = int(_safe_float(closed_position.get("timestamp")))
+        settlement_price = max(_safe_float(closed_position.get("curPrice")), 0.0)
+        if not asset or not condition_id or ts <= 0:
+            return "skipped"
+
+        instruction = CopyInstruction(
+            action=SignalAction.CLOSE,
+            side=TradeSide.SELL,
+            asset=asset,
+            condition_id=condition_id,
+            size=size,
+            price=settlement_price,
+            notional=size * settlement_price,
+            source_wallet=f"wallet-closed:{wallet}",
+            source_signal_id=0,
+            title=str(closed_position.get("title") or existing["title"] or closed_position.get("slug") or ""),
+            slug=str(closed_position.get("slug") or closed_position.get("eventSlug") or existing["slug"] or ""),
+            outcome=str(closed_position.get("outcome") or existing["outcome"] or ""),
+            category=str(closed_position.get("category") or existing["category"] or "crypto"),
+            reason=(
+                "wallet_closed_position_import:"
+                f"{str(closed_position.get('slug') or closed_position.get('eventSlug') or asset).strip()}"
+            ),
+        )
+        result = apply_fill_to_database(
+            db=self.db,
+            instruction=instruction,
+            mode=mode,
+            filled_size=size,
+            fill_price=settlement_price,
+            fill_notional=size * settlement_price,
+            fee_paid=0.0,
+            message=json.dumps(closed_position, separators=(",", ":"), sort_keys=True),
+            status="filled",
+            notes=(
+                "wallet_closed_position_import "
+                f"pnl={_safe_float(closed_position.get('realizedPnl')):.6f}"
+            ),
+            execution_ts=ts,
+        )
+        return "imported" if result.status == "filled" else "skipped"
+
     def _positions_mismatch_reason(self, *, positions: list[dict[str, Any]]) -> str:
         wallet_positions = {
             str(item.get("asset") or "").strip(): max(_safe_float(item.get("size")), 0.0)
@@ -206,6 +323,14 @@ class LiveWalletSyncService:
         size = max(_safe_float(trade.get("size")), 0.0)
         price = max(_safe_float(trade.get("price")), 0.0)
         return f"live_imported_activity:{transaction_hash}:{asset}:{side}:{ts}:{size:.8f}:{price:.8f}"
+
+    def _closed_position_sync_key(self, closed_position: dict[str, Any]) -> str:
+        asset = str(closed_position.get("asset") or "").strip()
+        slug = str(closed_position.get("slug") or closed_position.get("eventSlug") or "").strip()
+        ts = int(_safe_float(closed_position.get("timestamp")))
+        realized_pnl = _safe_float(closed_position.get("realizedPnl"))
+        settlement_price = max(_safe_float(closed_position.get("curPrice")), 0.0)
+        return f"live_imported_closed_position:{slug}:{asset}:{ts}:{realized_pnl:.8f}:{settlement_price:.8f}"
 
 
 def _safe_float(value: object) -> float:

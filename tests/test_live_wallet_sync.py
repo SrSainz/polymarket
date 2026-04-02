@@ -8,15 +8,25 @@ from app.services.live_wallet_sync import LiveWalletSyncService
 
 
 class _FakeActivityClient:
-    def __init__(self, *, activity: list[dict], positions: list[dict]) -> None:
+    def __init__(
+        self,
+        *,
+        activity: list[dict],
+        positions: list[dict],
+        closed_positions: list[dict] | None = None,
+    ) -> None:
         self._activity = activity
         self._positions = positions
+        self._closed_positions = list(closed_positions or [])
 
     def get_activity(self, wallet: str, limit: int = 200, offset: int = 0) -> list[dict]:
         return self._activity[offset : offset + limit]
 
     def get_positions(self, wallet: str, limit: int = 500, offset: int = 0) -> list[dict]:
         return self._positions[offset : offset + limit]
+
+    def get_closed_positions(self, wallet: str, limit: int = 500, offset: int = 0) -> list[dict]:
+        return self._closed_positions[offset : offset + limit]
 
 
 def test_live_wallet_sync_imports_activity_into_executions_and_daily_pnl(tmp_path: Path) -> None:
@@ -56,6 +66,7 @@ def test_live_wallet_sync_imports_activity_into_executions_and_daily_pnl(tmp_pat
                 },
             ],
             positions=[],
+            closed_positions=[],
         ),
     )
 
@@ -126,6 +137,7 @@ def test_live_wallet_sync_blocks_when_wallet_positions_do_not_match_ledger(tmp_p
                 }
             ],
             positions=[{"asset": "asset-3", "size": 7.0}],
+            closed_positions=[],
         ),
     )
 
@@ -135,4 +147,106 @@ def test_live_wallet_sync_blocks_when_wallet_positions_do_not_match_ledger(tmp_p
     assert "size distinta" in str(result["mismatch_reason"])
     assert db.get_bot_state("position_ledger_preflight") == "blocked"
     assert db.get_bot_state("position_ledger_mode") == "external"
+    db.close()
+
+
+def test_live_wallet_sync_closes_resolved_position_from_closed_positions(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot_live.db")
+    db.init_schema()
+    service = LiveWalletSyncService(
+        db,
+        _FakeActivityClient(
+            activity=[
+                {
+                    "timestamp": 1775001000,
+                    "transactionHash": "tx-buy",
+                    "conditionId": "cond-4",
+                    "type": "TRADE",
+                    "size": 10.0,
+                    "usdcSize": 4.0,
+                    "price": 0.4,
+                    "asset": "asset-4",
+                    "side": "BUY",
+                    "title": "Bitcoin Up or Down - Closed",
+                    "slug": "btc-updown-5m-closed",
+                    "outcome": "Up",
+                }
+            ],
+            positions=[],
+            closed_positions=[
+                {
+                    "timestamp": 1775001060,
+                    "conditionId": "cond-4",
+                    "asset": "asset-4",
+                    "slug": "btc-updown-5m-closed",
+                    "title": "Bitcoin Up or Down - Closed",
+                    "outcome": "Up",
+                    "curPrice": 1.0,
+                    "realizedPnl": 6.0,
+                }
+            ],
+        ),
+    )
+
+    result = service.sync(wallet="0xabc", mode="live", page_limit=50, max_pages=2)
+
+    executions = db.get_recent_executions(limit=10)
+    day = datetime.fromtimestamp(1775001060, timezone.utc).date().isoformat()
+    assert result["ok"] is True
+    assert result["imported"] == 1
+    assert result["closed_imported"] == 1
+    assert len(executions) == 2
+    assert executions[0]["side"] == "sell"
+    assert executions[0]["price"] == 1.0
+    assert abs(db.get_daily_execution_pnl(day, mode="live") - 6.0) < 1e-9
+    assert db.list_copy_positions() == []
+    assert db.get_bot_state("live_wallet_sync_closed_imported") == "1"
+    db.close()
+
+
+def test_live_wallet_sync_closed_positions_is_idempotent(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot_live.db")
+    db.init_schema()
+    service = LiveWalletSyncService(
+        db,
+        _FakeActivityClient(
+            activity=[
+                {
+                    "timestamp": 1775001100,
+                    "transactionHash": "tx-buy",
+                    "conditionId": "cond-5",
+                    "type": "TRADE",
+                    "size": 5.0,
+                    "usdcSize": 2.5,
+                    "price": 0.5,
+                    "asset": "asset-5",
+                    "side": "BUY",
+                    "title": "Bitcoin Up or Down - Idempotent Closed",
+                    "slug": "btc-updown-5m-idempotent-closed",
+                    "outcome": "Down",
+                }
+            ],
+            positions=[],
+            closed_positions=[
+                {
+                    "timestamp": 1775001160,
+                    "conditionId": "cond-5",
+                    "asset": "asset-5",
+                    "slug": "btc-updown-5m-idempotent-closed",
+                    "title": "Bitcoin Up or Down - Idempotent Closed",
+                    "outcome": "Down",
+                    "curPrice": 0.0,
+                    "realizedPnl": -2.5,
+                }
+            ],
+        ),
+    )
+
+    first = service.sync(wallet="0xabc", mode="live")
+    second = service.sync(wallet="0xabc", mode="live")
+
+    assert first["closed_imported"] == 1
+    assert second["closed_imported"] == 0
+    assert len(db.get_recent_executions(limit=10)) == 2
+    assert db.list_copy_positions() == []
     db.close()

@@ -385,6 +385,7 @@ def _clear_runtime_ledger(db: Database) -> None:
     db.delete_bot_state_by_prefix("live_processed_trade:")
     db.delete_bot_state_by_prefix("live_observed_activity:")
     db.delete_bot_state_by_prefix("live_imported_activity:")
+    db.delete_bot_state_by_prefix("live_imported_closed_position:")
     db.set_bot_state("position_ledger_mode", "")
     db.set_bot_state("position_ledger_preflight", "ready")
     db.set_bot_state("live_last_observed_trade_id", "")
