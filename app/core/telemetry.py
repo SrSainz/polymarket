@@ -98,8 +98,9 @@ class MicrostructureTelemetry:
             regime = self.regime_detector.classify(frame, readiness_score=readiness_score)
             frame = replace(frame, readiness_score=readiness_score, regime=regime)
             decision = self.strategy_engine.evaluate(frame, blockers=blockers)
-            append_jsonl(events_log_path(self.research_dir, "feature_frames"), frame.to_dict())
-            append_jsonl(events_log_path(self.research_dir, "decision_traces"), decision.to_dict())
+            if self.log_events:
+                append_jsonl(events_log_path(self.research_dir, "feature_frames"), frame.to_dict())
+                append_jsonl(events_log_path(self.research_dir, "decision_traces"), decision.to_dict())
 
         self._latest_frame = frame
         self._latest_decision = decision

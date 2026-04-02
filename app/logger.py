@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+_BOT_LOG_MAX_BYTES = 50 * 1024 * 1024
+_BOT_LOG_BACKUP_COUNT = 5
 
 
 def setup_logger(log_dir: Path, level: str = "INFO") -> logging.Logger:
@@ -21,7 +25,12 @@ def setup_logger(log_dir: Path, level: str = "INFO") -> logging.Logger:
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    file_handler = logging.FileHandler(log_dir / "bot.log", encoding="utf-8")
+    file_handler = RotatingFileHandler(
+        log_dir / "bot.log",
+        maxBytes=_BOT_LOG_MAX_BYTES,
+        backupCount=_BOT_LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 

@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+_RUNTIME_JSONL_MAX_BYTES = 256 * 1024 * 1024
+_RUNTIME_JSONL_BACKUP_COUNT = 4
+
 
 def research_root_from_db(db_path: Path) -> Path:
     return db_path.parent / "research"
@@ -92,10 +95,64 @@ def dump_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
 
 
-def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
+def append_jsonl(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    max_bytes: int | None = None,
+    backup_count: int | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_max_bytes, resolved_backup_count = _resolve_jsonl_rotation_limits(
+        path,
+        max_bytes=max_bytes,
+        backup_count=backup_count,
+    )
+    if resolved_max_bytes > 0 and path.exists():
+        try:
+            current_size = path.stat().st_size
+        except OSError:
+            current_size = 0
+        if current_size >= resolved_max_bytes:
+            _rotate_jsonl_file(path, backup_count=resolved_backup_count)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+
+def _resolve_jsonl_rotation_limits(path: Path, *, max_bytes: int | None, backup_count: int | None) -> tuple[int, int]:
+    if max_bytes is not None:
+        return max(int(max_bytes), 0), max(int(backup_count or 0), 0)
+    if path.suffix == ".jsonl" and "runtime" in path.parts:
+        return _RUNTIME_JSONL_MAX_BYTES, _RUNTIME_JSONL_BACKUP_COUNT
+    return 0, 0
+
+
+def _rotate_jsonl_file(path: Path, *, backup_count: int) -> None:
+    safe_backup_count = max(int(backup_count), 0)
+    if safe_backup_count <= 0:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            return
+        return
+    oldest = path.with_name(f"{path.name}.{safe_backup_count}")
+    try:
+        oldest.unlink(missing_ok=True)
+    except OSError:
+        return
+    for index in range(safe_backup_count - 1, 0, -1):
+        source = path.with_name(f"{path.name}.{index}")
+        target = path.with_name(f"{path.name}.{index + 1}")
+        if not source.exists():
+            continue
+        try:
+            source.replace(target)
+        except OSError:
+            continue
+    try:
+        path.replace(path.with_name(f"{path.name}.1"))
+    except OSError:
+        return
 
 
 def _load_json(path: Path, *, default: dict[str, Any]) -> dict[str, Any]:
