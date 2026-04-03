@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260402-shadow-home21" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260403-shadow-home22" />
   </head>
   <body>
     <div class="app-shell">
@@ -211,6 +211,94 @@
               <p id="shadowRecentMeta" class="mini-meta">Aun no hay suficientes cierres recientes.</p>
             </article>
           </div>
+        </section>
+
+        <section class="tournament-board" id="tournamentBoard">
+          <article class="panel tournament-hero-card" id="tournamentHeroCard">
+            <div class="subpanel-head">
+              <div>
+                <h3>Camino a live</h3>
+                <p class="panel-copy">Gate real, variante candidata y siguiente paso antes de volver a armar.</p>
+              </div>
+              <span id="tournamentStatusBadge" class="badge">sin datos</span>
+            </div>
+            <div class="tournament-hero-grid">
+              <div class="tournament-score-shell">
+                <p class="compare-focus-kicker">Ready for live</p>
+                <strong id="tournamentHeadline" class="tournament-headline">-</strong>
+                <p id="tournamentHeroMeta" class="mini-meta">-</p>
+                <div class="tournament-score-row">
+                  <div class="tournament-score-value">
+                    <span id="tournamentScoreValue">0</span>
+                    <small>/100</small>
+                  </div>
+                  <div class="tournament-score-copy">
+                    <span id="tournamentChecksValue">0/0 checks</span>
+                    <span id="tournamentWindowsValue">0 compartidas</span>
+                  </div>
+                </div>
+                <div class="tournament-progress" aria-hidden="true">
+                  <span id="tournamentScoreFill" class="tournament-progress-fill"></span>
+                </div>
+              </div>
+
+              <div class="tournament-recommendation-shell">
+                <p class="compare-focus-kicker">Que haria ahora el sistema</p>
+                <strong id="tournamentRecommendationLabel" class="tournament-headline">-</strong>
+                <p id="tournamentRecommendationSummary" class="shadow-card-headline">-</p>
+                <div class="shadow-edge-pills tournament-chip-row">
+                  <span id="tournamentActiveVariant" class="shadow-edge-pill">Activa -</span>
+                  <span id="tournamentCandidateVariant" class="shadow-edge-pill">Candidata -</span>
+                  <span id="tournamentGeneratedAt" class="shadow-edge-pill">Actualizado -</span>
+                </div>
+                <p id="tournamentNextStep" class="mini-meta">-</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel tournament-guard-card" id="tournamentGuardCard">
+            <div class="subpanel-head">
+              <div>
+                <h3>Guard de armado</h3>
+                <p class="panel-copy">Conexion, feed, ledger y residuos que tienen que estar bien antes de live.</p>
+              </div>
+              <span id="tournamentGuardBadge" class="badge">-</span>
+            </div>
+            <p id="tournamentGuardMeta" class="mini-meta">-</p>
+            <div id="tournamentGuardGrid" class="tournament-guard-grid"></div>
+          </article>
+
+          <article class="panel tournament-leaderboard-card" id="tournamentLeaderboardCard">
+            <div class="subpanel-head">
+              <div>
+                <h3>Torneo de variantes</h3>
+                <p class="panel-copy">Ranking visual de las variantes que estamos comparando antes de volver a live.</p>
+              </div>
+              <span id="tournamentLeaderboardBadge" class="badge">-</span>
+            </div>
+            <p id="tournamentLeaderboardMeta" class="mini-meta">-</p>
+            <div id="tournamentLeaderboardList" class="tournament-leaderboard-list"></div>
+          </article>
+
+          <article class="panel tournament-reasons-card" id="tournamentReasonsCard">
+            <div class="subpanel-head">
+              <div>
+                <h3>Bloqueos y fortalezas</h3>
+                <p class="panel-copy">Lo que hoy nos frena y lo que ya esta suficientemente bien encaminado.</p>
+              </div>
+              <span id="tournamentReasonsBadge" class="badge">-</span>
+            </div>
+            <div class="tournament-reason-columns">
+              <div class="tournament-reason-column">
+                <p class="compare-focus-kicker">Bloquea live</p>
+                <ul id="tournamentBlockersList" class="tournament-reason-list"></ul>
+              </div>
+              <div class="tournament-reason-column">
+                <p class="compare-focus-kicker">Ya va bien</p>
+                <ul id="tournamentStrengthsList" class="tournament-reason-list tournament-reason-list-positive"></ul>
+              </div>
+            </div>
+          </article>
         </section>
 
         <section class="cards metrics-strip">
@@ -874,6 +962,6 @@
         <p id="lastUpdated">Ultima actualizacion: -</p>
       </footer>
     </div>
-    <script src="/assets/app.js?v=20260402-shadow-home21"></script>
+    <script src="/assets/app.js?v=20260403-shadow-home22"></script>
   </body>
 </html>

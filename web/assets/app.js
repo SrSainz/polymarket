@@ -10,7 +10,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-02-shadow-home21";
+const UI_BUILD = "2026-04-03-shadow-home22";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -648,6 +648,360 @@ function renderCompareReadinessItems(readiness) {
       `
     )
     .join("");
+}
+
+function readinessTone(readiness = {}) {
+  const status = String(readiness?.status || "").trim().toLowerCase();
+  if (status === "ready") return "positive";
+  if (status === "warming" || status === "collecting" || status === "incubating") return "warning";
+  if (status === "blocked" || status === "no-go") return "negative";
+  return "neutral";
+}
+
+function uniqueNonEmpty(values) {
+  const seen = new Set();
+  return (Array.isArray(values) ? values : [])
+    .map((item) => String(item || "").trim())
+    .filter((item) => {
+      if (!item || seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
+function tournamentLeaderboardTone(row, activeVariant, candidateVariant) {
+  const variant = String(row?.variant || "").trim();
+  const status = String(row?.status || "").trim().toLowerCase();
+  if (variant && variant === candidateVariant) return "positive";
+  if (variant && variant === activeVariant) return "warning";
+  if (status === "fail") return "negative";
+  if (status === "pass") return "neutral";
+  return "neutral";
+}
+
+function tournamentLeaderboardBadge(row, activeVariant, candidateVariant) {
+  const variant = String(row?.variant || "").trim();
+  if (variant && variant === candidateVariant) return "CANDIDATA";
+  if (variant && variant === activeVariant) return "ACTIVA";
+  const status = String(row?.status || "").trim();
+  return status ? status.toUpperCase() : "VARIANTE";
+}
+
+function buildTournamentGuardChecks(summary) {
+  const connection = backendConnectionStateInfo(summary);
+  const control = liveControlInfo(summary);
+  const ledger = ledgerSyncInfo(summary);
+  const readiness = summary?.strategy_live_readiness || {};
+  const readinessStatus = String(readiness?.status || "").trim().toLowerCase();
+  const referenceComparable = Boolean(summary?.strategy_reference_comparable);
+  const referenceQuality = String(summary?.strategy_reference_quality || "").trim().toLowerCase();
+  const feedConnected = Boolean(summary?.strategy_feed_connected);
+  const trackedAssets = Math.max(Number(summary?.strategy_feed_tracked_assets || 0), 0);
+  const openPositions = Math.max(Number(summary?.open_positions || 0), 0);
+  const exposure = Math.max(Number(summary?.strategy_current_market_total_exposure || 0), 0);
+  const pendingOrders = Math.max(Number(summary?.live_pending_orders_count || 0), 0);
+  const observedTrades = Math.max(Number(summary?.live_observed_trades_count || 0), 0);
+  const referenceOk =
+    referenceComparable &&
+    !referenceQuality.includes("missing") &&
+    !referenceQuality.includes("degraded") &&
+    !referenceQuality.includes("stale") &&
+    !referenceQuality.includes("fallback");
+
+  return [
+    {
+      label: "Backend",
+      ok: connection.stable,
+      meta: connection.meta || "Sin backend del NAS.",
+    },
+    {
+      label: "Sesion live",
+      ok: control.isLiveSession,
+      meta: control.isLiveSession ? (control.canExecute ? "Live ya armado." : "Live preparado y pausado.") : "El runtime actual no esta en modo live.",
+    },
+    {
+      label: "Feed",
+      ok: feedConnected && trackedAssets > 0,
+      meta: `${String(summary?.strategy_data_source || "-")} | ${feedConnected ? "conectado" : "idle"} | ${trackedAssets} activos`,
+    },
+    {
+      label: "Referencia",
+      ok: referenceOk,
+      meta: referenceQuality ? `${referenceQuality}${referenceComparable ? "" : " | no comparable"}` : "sin calidad",
+    },
+    {
+      label: "Wallet y ledger",
+      ok: ledger.ok,
+      meta: ledger.meta || "Sin sincronizacion todavia.",
+    },
+    {
+      label: "Residuos",
+      ok: openPositions === 0 && pendingOrders === 0 && observedTrades === 0 && exposure <= 0.01,
+      meta: `${openPositions} pos | ${pendingOrders} pendientes | ${observedTrades} observados`,
+    },
+    {
+      label: "Gate live",
+      ok: readinessStatus === "ready",
+      meta: String(readiness?.headline || "Sin gate calculado."),
+    },
+  ];
+}
+
+function renderTournamentGuardGrid(items) {
+  if (!Array.isArray(items) || !items.length) {
+    return `
+      <div class="tournament-guard-item is-neutral">
+        <span class="tournament-guard-label">Sin checks</span>
+        <strong>Esperando summary real</strong>
+        <small>Conecta el backend del NAS para ver el guard operativo completo.</small>
+      </div>
+    `;
+  }
+  return items
+    .map((item) => {
+      const tone = item?.ok ? "positive" : "negative";
+      return `
+        <div class="tournament-guard-item is-${tone}">
+          <span class="tournament-guard-label">${escapeHtml(String(item?.label || "-"))}</span>
+          <strong>${item?.ok ? "OK" : "Pendiente"}</strong>
+          <small>${escapeHtml(String(item?.meta || "-"))}</small>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderTournamentReasonList(items, tone, emptyTitle, emptyMeta) {
+  const safeItems = uniqueNonEmpty(items);
+  if (!safeItems.length) {
+    return `
+      <li class="tournament-reason-item is-neutral">
+        <strong>${escapeHtml(emptyTitle)}</strong>
+        <span>${escapeHtml(emptyMeta)}</span>
+      </li>
+    `;
+  }
+  return safeItems
+    .slice(0, 6)
+    .map(
+      (item, index) => `
+        <li class="tournament-reason-item is-${tone}">
+          <strong>${escapeHtml(`${tone === "positive" ? "Fortaleza" : "Bloqueo"} ${index + 1}`)}</strong>
+          <span>${escapeHtml(item)}</span>
+        </li>
+      `
+    )
+    .join("");
+}
+
+function renderTournamentLeaderboard(rows, activeVariant, candidateVariant) {
+  const safeRows = Array.isArray(rows) ? rows.filter(Boolean).slice(0, 5) : [];
+  if (!safeRows.length) {
+    return `
+      <article class="tournament-row is-neutral">
+        <div class="tournament-row-top">
+          <div>
+            <p class="tournament-row-rank">Sin ranking disponible</p>
+            <strong class="tournament-row-variant">Necesitamos experimento o torneo reciente</strong>
+          </div>
+          <span class="badge is-neutral">ESPERA</span>
+        </div>
+        <p class="mini-meta">Todavia no hay leaderboard para comparar variantes visualmente.</p>
+      </article>
+    `;
+  }
+
+  const maxScore = Math.max(...safeRows.map((row) => Number(row?.score || 0)), 1);
+  return safeRows
+    .map((row) => {
+      const variant = String(row?.variant || "-");
+      const rank = Number(row?.rank || 0);
+      const score = Number(row?.score || 0);
+      const pnl = Number(row?.pnl ?? row?.net_realized_pnl_usdc ?? 0);
+      const expectancy = Number(row?.expectancy_window_usdc || 0);
+      const fillRate = Number(row?.fill_rate || 0);
+      const hitRate = Number(row?.hit_rate || 0);
+      const drawdown = Math.abs(Number(row?.drawdown ?? row?.max_drawdown_usdc ?? 0));
+      const edge = Number(row?.real_edge_bps || 0);
+      const tone = tournamentLeaderboardTone(row, activeVariant, candidateVariant);
+      const width = clamp((score / maxScore) * 100, 6, 100);
+      const badge = tournamentLeaderboardBadge(row, activeVariant, candidateVariant);
+      const note = String(row?.notes || "").trim();
+      return `
+        <article class="tournament-row is-${tone}">
+          <div class="tournament-row-top">
+            <div>
+              <p class="tournament-row-rank">#${rank || "-"} · score ${fmt(score, 1)}</p>
+              <strong class="tournament-row-variant">${escapeHtml(variant)}</strong>
+            </div>
+            <span class="badge is-${tone}">${escapeHtml(badge)}</span>
+          </div>
+          <div class="tournament-row-bar" aria-hidden="true">
+            <span class="tournament-row-bar-fill" style="width:${width}%"></span>
+          </div>
+          <div class="tournament-row-metrics">
+            <span>${escapeHtml(`PnL ${fmtUsd(pnl, 2)}`)}</span>
+            <span>${escapeHtml(`EV ${fmtUsd(expectancy, 2)}/ventana`)}</span>
+            <span>${escapeHtml(`Fill ${fmtPct(fillRate * 100, 0)}`)}</span>
+            <span>${escapeHtml(`Hit ${fmtPct(hitRate * 100, 0)}`)}</span>
+            <span>${escapeHtml(`DD ${fmtUsdPlain(drawdown, 2)}`)}</span>
+            <span>${escapeHtml(`Edge ${fmtBps(edge, 1)}`)}</span>
+          </div>
+          ${note ? `<p class="tournament-row-note">${escapeHtml(note)}</p>` : ""}
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function paintTournamentBoard(summary) {
+  const section = document.getElementById("tournamentBoard");
+  if (!section) return;
+
+  const tournament = summary?.strategy_variant_tournament || {};
+  const readiness = summary?.strategy_live_readiness || tournament?.live_readiness || {};
+  const recommendation = summary?.strategy_variant_tournament_recommendation || tournament?.recommendation || {};
+  const connection = backendConnectionStateInfo(summary);
+  const armGuard = liveArmGuardInfo(summary);
+  const leaderboard = Array.isArray(tournament?.leaderboard) ? tournament.leaderboard : [];
+  const activeVariant = String(tournament?.active_variant || strategyVariant(summary) || "-").trim() || "-";
+  const candidateVariant =
+    String(
+      recommendation?.candidate_variant ||
+        tournament?.best_passing_variant_row?.variant ||
+        tournament?.best_variant_row?.variant ||
+        activeVariant ||
+        "-"
+    ).trim() || "-";
+  const generatedAt = String(summary?.strategy_variant_tournament_generated_at || tournament?.generated_at || "").trim();
+  const readinessMetrics = readiness?.metrics || {};
+  const readinessThresholds = readiness?.thresholds || {};
+  const sharedWindows = Number(readinessMetrics?.shared_window_count || 0);
+  const sharedTarget = Number(readinessThresholds?.min_shared_windows || 0);
+  const readinessScore = clamp(Number(readiness?.score || 0), 0, 100);
+  const passedChecks = Number(readiness?.passed_checks || 0);
+  const totalChecks = Number(readiness?.total_checks || 0);
+  const blockers = uniqueNonEmpty([
+    ...(Array.isArray(readiness?.blockers) ? readiness.blockers : []),
+    ...(Array.isArray(recommendation?.reasons) ? recommendation.reasons : []),
+  ]);
+  const strengths = uniqueNonEmpty([
+    ...(Array.isArray(readiness?.strengths) ? readiness.strengths : []),
+    tournament?.passing_variants > 0
+      ? `${Number(tournament?.passing_variants || 0)}/${Number(tournament?.variant_count || 0)} variantes pasan el gate interno del torneo.`
+      : "",
+    activeVariant && candidateVariant && activeVariant === candidateVariant
+      ? `La variante activa ${activeVariant} sigue liderando el torneo.`
+      : activeVariant && candidateVariant
+      ? `La candidata ${candidateVariant} mejora hoy a la activa ${activeVariant}.`
+      : "",
+  ]);
+  const tone = readinessTone(readiness);
+  const heroCard = document.getElementById("tournamentHeroCard");
+  const guardCard = document.getElementById("tournamentGuardCard");
+  const leaderboardCard = document.getElementById("tournamentLeaderboardCard");
+  const reasonsCard = document.getElementById("tournamentReasonsCard");
+  const statusBadge = document.getElementById("tournamentStatusBadge");
+  const leaderboardBadge = document.getElementById("tournamentLeaderboardBadge");
+  const reasonsBadge = document.getElementById("tournamentReasonsBadge");
+  const guardBadge = document.getElementById("tournamentGuardBadge");
+
+  applyToneClass(heroCard, tone);
+  applyToneClass(guardCard, armGuard.ok ? "positive" : blockers.length > 0 ? "negative" : "warning");
+  applyToneClass(leaderboardCard, candidateVariant && candidateVariant !== activeVariant ? "warning" : "neutral");
+  applyToneClass(reasonsCard, blockers.length ? "negative" : "positive");
+  applyToneClass(statusBadge, tone);
+  applyToneClass(leaderboardBadge, candidateVariant && candidateVariant !== activeVariant ? "warning" : "neutral");
+  applyToneClass(reasonsBadge, blockers.length ? "negative" : "positive");
+  applyToneClass(guardBadge, armGuard.ok ? "positive" : "negative");
+
+  if (isPublicRuntime() || isBackendDisconnectedRuntime()) {
+    const publicMode = isPublicRuntime();
+    statusBadge.textContent = publicMode ? "PUBLICO" : "NAS OFF";
+    document.getElementById("tournamentHeadline").textContent = publicMode ? "Conecta el backend del NAS" : "Backend del NAS desconectado";
+    document.getElementById("tournamentHeroMeta").textContent = publicMode
+      ? "Sin backend real no podemos medir readiness, torneo ni guard de live."
+      : connection.meta;
+    document.getElementById("tournamentScoreValue").textContent = "0";
+    document.getElementById("tournamentChecksValue").textContent = "0/0 checks";
+    document.getElementById("tournamentWindowsValue").textContent = "0 compartidas";
+    document.getElementById("tournamentScoreFill").style.width = "0%";
+    document.getElementById("tournamentRecommendationLabel").textContent = publicMode ? "Modo publico" : "Esperando NAS";
+    document.getElementById("tournamentRecommendationSummary").textContent = publicMode
+      ? "La interfaz publica no puede decidir si armar live sin el NAS."
+      : "Sin backend del NAS no podemos saber si live esta listo ni mandar controles fiables.";
+    document.getElementById("tournamentActiveVariant").textContent = "Activa -";
+    document.getElementById("tournamentCandidateVariant").textContent = "Candidata -";
+    document.getElementById("tournamentGeneratedAt").textContent = "Actualizado -";
+    document.getElementById("tournamentNextStep").textContent = connection.meta;
+    guardBadge.textContent = "SIN NAS";
+    document.getElementById("tournamentGuardMeta").textContent = connection.meta;
+    document.getElementById("tournamentGuardGrid").innerHTML = renderTournamentGuardGrid([]);
+    leaderboardBadge.textContent = "SIN TORNEO";
+    document.getElementById("tournamentLeaderboardMeta").textContent = "Necesitamos summary real del NAS para ver el ranking.";
+    document.getElementById("tournamentLeaderboardList").innerHTML = renderTournamentLeaderboard([], activeVariant, candidateVariant);
+    reasonsBadge.textContent = "SIN DIAG";
+    document.getElementById("tournamentBlockersList").innerHTML = renderTournamentReasonList([], "negative", "Sin backend real", "Conecta el NAS para ver los bloqueos reales.");
+    document.getElementById("tournamentStrengthsList").innerHTML = renderTournamentReasonList([], "positive", "Sin fortalezas", "Todavia no hay diagnostico suficiente.");
+    return;
+  }
+
+  statusBadge.textContent = String(readiness?.label || recommendation?.label || "sin gate").toUpperCase();
+  document.getElementById("tournamentHeadline").textContent = String(readiness?.headline || recommendation?.summary || "Sin torneo reciente");
+  document.getElementById("tournamentHeroMeta").textContent =
+    totalChecks > 0
+      ? compareReadinessMeta(readiness)
+      : generatedAt
+      ? `Actualizado ${isoText(generatedAt)} | sin suficientes checks todavia`
+      : "Esperando torneo o readiness reciente.";
+  document.getElementById("tournamentScoreValue").textContent = String(Math.round(readinessScore));
+  document.getElementById("tournamentChecksValue").textContent = `${passedChecks}/${totalChecks || 0} checks`;
+  document.getElementById("tournamentWindowsValue").textContent =
+    sharedTarget > 0 ? `${sharedWindows}/${sharedTarget} compartidas` : `${sharedWindows} compartidas`;
+  document.getElementById("tournamentScoreFill").style.width = `${readinessScore}%`;
+  document.getElementById("tournamentRecommendationLabel").textContent = String(recommendation?.label || "Sin recomendacion");
+  document.getElementById("tournamentRecommendationSummary").textContent = String(
+    recommendation?.summary || readiness?.headline || "Sin resumen accionable todavia."
+  );
+  document.getElementById("tournamentActiveVariant").textContent = `Activa ${activeVariant}`;
+  document.getElementById("tournamentCandidateVariant").textContent = `Candidata ${candidateVariant}`;
+  document.getElementById("tournamentGeneratedAt").textContent = generatedAt ? `Actualizado ${isoText(generatedAt)}` : "Actualizado -";
+  document.getElementById("tournamentNextStep").textContent = String(
+    recommendation?.next_step || armGuard.summary || "Sin siguiente paso definido."
+  );
+
+  const guardChecks = buildTournamentGuardChecks(summary);
+  const guardPassed = guardChecks.filter((item) => item.ok).length;
+  guardBadge.textContent = armGuard.ok ? "ARMABLE" : `${guardPassed}/${guardChecks.length} OK`;
+  document.getElementById("tournamentGuardMeta").textContent = armGuard.ok
+    ? "Todo lo operativo esta en verde. Solo quedaria tu decision de armar live."
+    : armGuard.summary;
+  document.getElementById("tournamentGuardGrid").innerHTML = renderTournamentGuardGrid(guardChecks);
+
+  leaderboardBadge.textContent = `${Math.max(Number(tournament?.passing_variants || 0), 0)}/${Math.max(Number(tournament?.variant_count || leaderboard.length), 0)} PASS`;
+  document.getElementById("tournamentLeaderboardMeta").textContent =
+    leaderboard.length > 0
+      ? `${candidateVariant === activeVariant ? "La activa sigue delante." : `Hoy ganaria ${candidateVariant}.`} Score, EV, fill y drawdown por variante.`
+      : "Sin leaderboard reciente para comparar variantes.";
+  document.getElementById("tournamentLeaderboardList").innerHTML = renderTournamentLeaderboard(
+    leaderboard,
+    activeVariant,
+    candidateVariant
+  );
+
+  reasonsBadge.textContent = blockers.length ? `${blockers.length} BLOQ` : `${strengths.length} OK`;
+  document.getElementById("tournamentBlockersList").innerHTML = renderTournamentReasonList(
+    blockers,
+    "negative",
+    "Sin bloqueos",
+    "Hoy el gate no detecta bloqueos relevantes."
+  );
+  document.getElementById("tournamentStrengthsList").innerHTML = renderTournamentReasonList(
+    strengths,
+    "positive",
+    "Sin fortalezas",
+    "Todavia no tenemos suficientes puntos fuertes registrados."
+  );
 }
 
 function compareLatencyHeadline(intel) {
@@ -2650,6 +3004,7 @@ function paintSummary(summary, items = lastPositions) {
   } else {
     applyLocalModeLabels();
   }
+  paintTournamentBoard(summary);
   paintRuntimeCompare(summary);
   paintShadowOverview(summary, items);
   const buckets = splitPositionBuckets(summary, items);
