@@ -4056,10 +4056,20 @@ def test_arb_micro_paused_live_refreshes_fixed_cycle_caps_in_bot_state(tmp_path:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     db.set_bot_state("live_control_state", "paused")
+    market = {
+        "question": "Bitcoin Up or Down - Paused Live Snapshot",
+        "conditionId": "cond-paused-live",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": "2026-04-03T18:00:00Z", "eventMetadata": {}}],
+    }
+    clob = _FakeCLOBClient(books={}, balance=114.14)
     service = BTC5mStrategyService(
         db,
-        _FakeGammaClient({}),
-        _FakeCLOBClient(books={}, balance=114.14),
+        _FakeGammaClient(market),
+        clob,
         paper_broker=PaperBroker(db),
         live_broker=_FakeBroker(),
         autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
@@ -4082,6 +4092,11 @@ def test_arb_micro_paused_live_refreshes_fixed_cycle_caps_in_bot_state(tmp_path:
     assert round(float(db.get_bot_state("strategy_total_exposure_cap") or 0.0), 2) == 31.25
     assert round(float(db.get_bot_state("strategy_budget_effective_ceiling") or 0.0), 2) == 25.00
     assert db.get_bot_state("strategy_exposure_cap_mode") == "fixed-cycle"
+    assert clob.tracked_assets == ("asset-up", "asset-down")
+    assert str(db.get_bot_state("strategy_market_slug") or "").startswith("btc-updown-5m-")
+    assert db.get_bot_state("strategy_market_title") == "Bitcoin Up or Down - Paused Live Snapshot"
+    assert db.get_bot_state("strategy_feed_tracked_assets") == "2"
+    assert db.get_bot_state("strategy_data_source") == "websocket-warming"
     db.close()
 
 

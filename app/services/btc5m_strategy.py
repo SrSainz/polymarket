@@ -444,10 +444,11 @@ class BTC5mStrategyService:
             operating_bankroll=operating_bankroll,
             reserved_profit=reserved_profit,
         )
+        market = self._discover_market()
         ledger_allowed, ledger_note = self._position_ledger_can_run(mode=mode)
         if not ledger_allowed:
             stats["blocked"] += 1
-            self._record_strategy_snapshot(note=ledger_note)
+            self._record_strategy_snapshot(market=market, note=ledger_note)
             return self._complete_cycle(
                 mode=mode,
                 stats=stats,
@@ -460,7 +461,7 @@ class BTC5mStrategyService:
         live_allowed, live_control_note = self._live_control_can_execute(mode=mode)
         if not live_allowed:
             stats["blocked"] += 1
-            self._record_strategy_snapshot(note=live_control_note)
+            self._record_strategy_snapshot(market=market, note=live_control_note)
             return self._complete_cycle(
                 mode=mode,
                 stats=stats,
@@ -471,7 +472,6 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        market = self._discover_market()
         if market is None:
             stats["skipped"] += 1
             note = "no active btc5m market"
@@ -646,10 +646,12 @@ class BTC5mStrategyService:
             live_total_capital=live_total_capital,
             current_total_exposure=total_exposure,
         )
+        market = self._discover_market()
         ledger_allowed, ledger_note = self._position_ledger_can_run(mode=mode)
         if not ledger_allowed:
             stats["blocked"] += 1
             self._record_strategy_snapshot(
+                market=market,
                 note=ledger_note,
                 extra_state=self._arb_state_defaults(strategy_resolution_mode=resolution_mode),
             )
@@ -667,6 +669,7 @@ class BTC5mStrategyService:
         if not live_allowed:
             stats["blocked"] += 1
             self._record_strategy_snapshot(
+                market=market,
                 note=live_control_note,
                 extra_state=self._arb_state_defaults(strategy_resolution_mode=resolution_mode),
             )
@@ -705,7 +708,6 @@ class BTC5mStrategyService:
                 live_total_capital=live_total_capital,
             )
 
-        market = self._discover_market()
         if market is None:
             stats["skipped"] += 1
             note = "no active btc5m market"
