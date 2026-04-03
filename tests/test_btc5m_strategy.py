@@ -8106,7 +8106,7 @@ def test_arb_reference_state_live_like_can_allow_soft_stale_rtds_when_official_g
     db.close()
 
 
-def test_arb_reference_state_live_like_accepts_captured_chainlink_when_official_missing(tmp_path: Path) -> None:
+def test_arb_reference_state_live_blocks_captured_chainlink_when_official_missing(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     service = BTC5mStrategyService(
@@ -8142,10 +8142,9 @@ def test_arb_reference_state_live_like_accepts_captured_chainlink_when_official_
         anchor_source="polymarket-chainlink",
     )
 
-    assert live_state.comparable is True
+    assert live_state.comparable is False
     assert live_state.quality == "captured-chainlink"
-    assert "captura propia Chainlink" in live_state.note
-    assert round(live_state.budget_scale, 2) == 0.90
+    assert "live exige priceToBeat oficial" in live_state.note
     assert shadow_state.comparable is True
     assert shadow_state.quality == "captured-chainlink"
     db.close()
@@ -8177,11 +8176,23 @@ def test_arb_reference_state_live_like_accepts_soft_stale_captured_chainlink_whe
         local_anchor_price=70280.98,
         anchor_source="captured-chainlink",
     )
+    live_state = service._arb_reference_state(  # noqa: SLF001
+        mode="live",
+        source="polymarket-rtds+binance",
+        age_ms=1281,
+        chainlink_price=70280.98,
+        official_price_to_beat=0.0,
+        local_anchor_price=70280.98,
+        anchor_source="captured-chainlink",
+    )
 
     assert shadow_state.comparable is True
     assert shadow_state.quality == "soft-stale-captured-chainlink"
     assert "captura Chainlink" in shadow_state.note
     assert round(shadow_state.budget_scale, 2) == 0.85
+    assert live_state.comparable is False
+    assert live_state.quality == "soft-stale-captured-chainlink"
+    assert "live exige priceToBeat oficial" in live_state.note
     db.close()
 
 

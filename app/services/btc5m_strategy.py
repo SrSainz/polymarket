@@ -6431,6 +6431,12 @@ class BTC5mStrategyService:
                 )
             ):
                 if official_required_live_like and has_captured_chainlink_anchor:
+                    if mode_text == "live":
+                        return ArbReferenceState(
+                            comparable=False,
+                            quality="soft-stale-captured-chainlink",
+                            note="live exige priceToBeat oficial; la captura Chainlink solo se usa para shadow",
+                        )
                     return ArbReferenceState(
                         comparable=True,
                         quality="soft-stale-captured-chainlink",
@@ -6494,6 +6500,12 @@ class BTC5mStrategyService:
             )
         if official_required_live_like and not has_official:
             if has_captured_chainlink_anchor:
+                if mode_text == "live":
+                    return ArbReferenceState(
+                        comparable=False,
+                        quality="captured-chainlink",
+                        note="live exige priceToBeat oficial; la captura Chainlink solo se usa para shadow",
+                    )
                 return ArbReferenceState(
                     comparable=True,
                     quality="captured-chainlink",
