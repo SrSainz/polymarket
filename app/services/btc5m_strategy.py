@@ -6260,22 +6260,54 @@ class BTC5mStrategyService:
         official, _source = self._market_official_price_to_beat_with_source(market)
         return official
 
+    def _official_price_bot_state_key(self, slug: str) -> str:
+        return f"arb_official_price:{str(slug or '').strip()}"
+
+    def _load_persisted_official_price_to_beat(self, slug: str) -> tuple[float, str]:
+        safe_slug = str(slug or "").strip()
+        if not safe_slug:
+            return 0.0, "public-gamma-missing"
+        price = _safe_float(self.db.get_bot_state(self._official_price_bot_state_key(safe_slug)))
+        source = str(
+            self.db.get_bot_state(f"{self._official_price_bot_state_key(safe_slug)}:source") or "public-gamma"
+        ).strip()
+        if price <= 0:
+            return 0.0, "public-gamma-missing"
+        return price, source or "public-gamma"
+
+    def _persist_official_price_to_beat(self, slug: str, price: float, source: str) -> None:
+        safe_slug = str(slug or "").strip()
+        if not safe_slug or price <= 0:
+            return
+        self.db.set_bot_state(self._official_price_bot_state_key(safe_slug), f"{price:.8f}")
+        self.db.set_bot_state(f"{self._official_price_bot_state_key(safe_slug)}:source", str(source or "public-gamma"))
+
     def _market_official_price_to_beat_with_source(self, market: dict | None) -> tuple[float, str]:
         if not isinstance(market, dict):
             return 0.0, "public-gamma-missing"
 
         slug = str(market.get("slug") or "").strip()
+        persisted_price = 0.0
+        persisted_source = "public-gamma-missing"
         if slug:
             cached = self._official_price_cache.get(slug)
             if cached is not None:
                 cached_price, cached_expires_at, cached_source = cached
                 if time.monotonic() < cached_expires_at and cached_price > 0:
                     return cached_price, cached_source
+            persisted_price, persisted_source = self._load_persisted_official_price_to_beat(slug)
+            if persisted_price > 0:
+                self._official_price_cache[slug] = (
+                    persisted_price,
+                    time.monotonic() + _MARKET_METADATA_CACHE_SECONDS,
+                    persisted_source,
+                )
 
         official = self._market_official_price_to_beat_from_payload(market)
         if official > 0:
             if slug:
                 self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS, "public-gamma")
+                self._persist_official_price_to_beat(slug, official, "public-gamma")
             return official, "public-gamma"
 
         refreshed_market: dict | None = None
@@ -6287,6 +6319,7 @@ class BTC5mStrategyService:
         if official > 0:
             if slug:
                 self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS, "public-gamma")
+                self._persist_official_price_to_beat(slug, official, "public-gamma")
             return official, "public-gamma"
 
         public_gamma_client = self._public_gamma_client
@@ -6299,6 +6332,7 @@ class BTC5mStrategyService:
             if official > 0:
                 if slug:
                     self._official_price_cache[slug] = (official, time.monotonic() + _MARKET_METADATA_CACHE_SECONDS, "public-gamma")
+                    self._persist_official_price_to_beat(slug, official, "public-gamma")
                 return official, "public-gamma"
             if slug and hasattr(public_gamma_client, "get_public_price_to_beat"):
                 try:
@@ -6312,7 +6346,10 @@ class BTC5mStrategyService:
                             time.monotonic() + _MARKET_METADATA_CACHE_SECONDS,
                             public_source,
                         )
+                        self._persist_official_price_to_beat(slug, public_official, public_source)
                     return public_official, public_source
+        if persisted_price > 0:
+            return persisted_price, persisted_source
         return 0.0, "public-gamma-missing"
 
     def _market_official_price_to_beat_from_client(

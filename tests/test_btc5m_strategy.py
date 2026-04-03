@@ -7669,6 +7669,70 @@ def test_market_official_price_to_beat_falls_back_to_public_gamma_when_primary_c
     db.close()
 
 
+def test_market_official_price_to_beat_reuses_persisted_slug_cache_when_public_lookup_flaps(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    slug = "btc-updown-5m-1773600301"
+    partial_market = {
+        "question": "Bitcoin Up or Down - Persisted Official Fallback",
+        "slug": slug,
+        "conditionId": "cond-public-gamma-persisted",
+        "closed": False,
+        "acceptingOrders": True,
+        "events": [{"id": "evt-public-persisted", "eventMetadata": {}}],
+    }
+    priming_service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({slug: partial_market}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-public-gamma-persisted-prime"),
+    )
+    priming_service._public_gamma_client = _FakeGammaClient(  # type: ignore[assignment]
+        {
+            slug: {
+                "question": "Bitcoin Up or Down - Persisted Official Refreshed",
+                "slug": slug,
+                "conditionId": "cond-public-gamma-refreshed",
+                "closed": False,
+                "acceptingOrders": True,
+                "events": [{"id": "evt-public-persisted", "eventMetadata": {"priceToBeat": 70891.34}}],
+            }
+        }
+    )
+
+    primed_official = priming_service._market_official_price_to_beat(partial_market)
+
+    assert round(primed_official, 2) == 70891.34
+
+    reuse_service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({slug: partial_market}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=SimpleNamespace(execute=lambda instruction: None),
+        live_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(),
+        logger=logging.getLogger("test-btc5m-public-gamma-persisted-reuse"),
+    )
+    reuse_service._public_gamma_client = _FakeGammaClient({slug: partial_market})  # type: ignore[assignment]
+
+    persisted_official, persisted_source = reuse_service._market_official_price_to_beat_with_source(partial_market)  # noqa: SLF001
+
+    assert round(persisted_official, 2) == 70891.34
+    assert persisted_source == "public-gamma"
+    db.close()
+
+
 def test_arb_micro_strict_realism_skips_degraded_reference(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
