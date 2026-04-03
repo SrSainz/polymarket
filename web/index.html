@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260403-shadow-home23" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260403-shadow-home24" />
   </head>
   <body>
     <div class="app-shell">
@@ -84,10 +84,90 @@
                   Estamos leyendo el estado actual del bot para enseñarte solo lo importante.
                 </p>
               </div>
-              <div class="shadow-chip-row">
+            <div class="shadow-chip-row">
                 <span id="shadowWindowTime" class="soft-badge">Ventana -</span>
                 <span id="shadowReferenceBadge" class="soft-badge">Referencia -</span>
                 <span id="shadowActionBadge" class="soft-badge">Accion -</span>
+              </div>
+            </div>
+
+            <div class="shadow-stage-shell" id="shadowStageShell">
+              <div class="shadow-stage-top">
+                <div class="shadow-stage-signal">
+                  <span id="shadowStagePulse" class="shadow-stage-pulse" aria-hidden="true"></span>
+                  <div class="shadow-stage-copy">
+                    <p class="shadow-stage-kicker">Pulso de la ventana</p>
+                    <strong id="shadowStageHeadline" class="shadow-stage-headline">-</strong>
+                    <p id="shadowStageMeta" class="shadow-stage-meta">-</p>
+                  </div>
+                </div>
+
+                <div class="shadow-stage-stats">
+                  <article class="shadow-stage-stat">
+                    <span>Tiempo</span>
+                    <strong id="shadowStageTimeValue">-</strong>
+                    <small id="shadowStageTimeMeta">-</small>
+                  </article>
+                  <article class="shadow-stage-stat">
+                    <span>Edge neto</span>
+                    <strong id="shadowStageEdgeValue">-</strong>
+                    <small id="shadowStageEdgeMeta">-</small>
+                  </article>
+                  <article class="shadow-stage-stat">
+                    <span>Riesgo usado</span>
+                    <strong id="shadowStageRiskValue">-</strong>
+                    <small id="shadowStageRiskMeta">-</small>
+                  </article>
+                </div>
+              </div>
+
+              <div class="shadow-stage-progress-shell">
+                <div class="shadow-stage-progress" aria-hidden="true">
+                  <span id="shadowStageProgressFill" class="shadow-stage-progress-fill"></span>
+                </div>
+                <div class="shadow-stage-progress-meta">
+                  <span>Apertura</span>
+                  <span id="shadowStageProgressNow">-</span>
+                  <span>Cierre</span>
+                </div>
+              </div>
+
+              <div class="shadow-balance-grid">
+                <article class="shadow-balance-card">
+                  <p class="shadow-stage-kicker">Reparto objetivo</p>
+                  <div class="shadow-balance-row">
+                    <span>Sube</span>
+                    <strong id="shadowTargetUpValue">-</strong>
+                  </div>
+                  <div class="shadow-balance-rail is-up" aria-hidden="true">
+                    <span id="shadowTargetUpFill" class="shadow-balance-fill"></span>
+                  </div>
+                  <div class="shadow-balance-row">
+                    <span>Baja</span>
+                    <strong id="shadowTargetDownValue">-</strong>
+                  </div>
+                  <div class="shadow-balance-rail is-down" aria-hidden="true">
+                    <span id="shadowTargetDownFill" class="shadow-balance-fill"></span>
+                  </div>
+                </article>
+
+                <article class="shadow-balance-card">
+                  <p class="shadow-stage-kicker">Reparto actual</p>
+                  <div class="shadow-balance-row">
+                    <span>Sube</span>
+                    <strong id="shadowActualUpValue">-</strong>
+                  </div>
+                  <div class="shadow-balance-rail is-up" aria-hidden="true">
+                    <span id="shadowActualUpFill" class="shadow-balance-fill"></span>
+                  </div>
+                  <div class="shadow-balance-row">
+                    <span>Baja</span>
+                    <strong id="shadowActualDownValue">-</strong>
+                  </div>
+                  <div class="shadow-balance-rail is-down" aria-hidden="true">
+                    <span id="shadowActualDownFill" class="shadow-balance-fill"></span>
+                  </div>
+                </article>
               </div>
             </div>
 
@@ -962,6 +1042,6 @@
         <p id="lastUpdated">Ultima actualizacion: -</p>
       </footer>
     </div>
-    <script src="/assets/app.js?v=20260403-shadow-home23"></script>
+    <script src="/assets/app.js?v=20260403-shadow-home24"></script>
   </body>
 </html>

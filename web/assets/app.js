@@ -10,7 +10,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-03-shadow-home23";
+const UI_BUILD = "2026-04-03-shadow-home24";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -363,6 +363,55 @@ function actualRatioLabel(summary) {
   const upRatio = Number(summary?.strategy_current_up_ratio ?? summary?.strategy_primary_ratio ?? 0.5);
   if (Number.isNaN(upRatio)) return "-";
   return `${friendlyOutcomeName("up")} ${fmtPct(upRatio * 100, 0)} / ${friendlyOutcomeName("down")} ${fmtPct(Math.max((1 - upRatio) * 100, 0), 0)}`;
+}
+
+function normalizeRatioValue(value, fallback = 0) {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed)) return fallback;
+  const normalized = parsed > 1 ? parsed / 100 : parsed;
+  return clamp(normalized, 0, 1);
+}
+
+function ratioSnapshot(summary) {
+  const breakdown = currentBreakdown(summary);
+  const openExposure = Math.max(Number(summary?.strategy_current_market_total_exposure || 0), 0);
+  let actualUp = null;
+  let actualDown = null;
+
+  breakdown.forEach((item) => {
+    const outcome = String(item?.outcome || "").trim().toLowerCase();
+    const shareRaw = item?.money_share_pct ?? item?.share_pct ?? null;
+    if (shareRaw == null) return;
+    if (outcome === "up") actualUp = normalizeRatioValue(shareRaw, 0);
+    if (outcome === "down") actualDown = normalizeRatioValue(shareRaw, 0);
+  });
+
+  if (!breakdown.length && openExposure <= 0) {
+    actualUp = 0;
+    actualDown = 0;
+  }
+  if (actualUp == null) actualUp = normalizeRatioValue(summary?.strategy_current_up_ratio, 0.5);
+  if (actualDown == null) actualDown = normalizeRatioValue(summary?.strategy_current_down_ratio, Math.max(1 - actualUp, 0));
+  if (actualUp == null && actualDown != null) actualUp = Math.max(1 - actualDown, 0);
+  if (actualDown == null && actualUp != null) actualDown = Math.max(1 - actualUp, 0);
+
+  const targetUp = normalizeRatioValue(summary?.strategy_desired_up_ratio, 0.5);
+  const targetDown = normalizeRatioValue(summary?.strategy_desired_down_ratio, Math.max(1 - targetUp, 0));
+
+  return {
+    targetUp,
+    targetDown,
+    actualUp: clamp(actualUp, 0, 1),
+    actualDown: clamp(actualDown, 0, 1),
+  };
+}
+
+function windowStagePhaseLabel(timingInfo) {
+  const pct = Number(timingInfo?.pct || 0);
+  if (pct >= 90) return "Settlement";
+  if (pct >= 70) return "Cierre tactico";
+  if (pct >= 35) return "Ventana viva";
+  return "Apertura";
 }
 
 function compareRatioLabel(ratio) {
@@ -1507,6 +1556,7 @@ function paintShadowOverview(summary, items = lastPositions) {
   const referenceMeta = compareReferenceMeta(userIntel);
   const recentPositiveCount = recentRows.filter((item) => Number(item?.pnl || 0) > 0).length;
   const recentVisibleCount = recentRows.slice(0, 8).length;
+  const ratios = ratioSnapshot(summary);
   const effectiveBeat = Number(summary?.strategy_effective_price_to_beat || spotInfo?.effectiveBeat || spotInfo?.officialBeat || 0);
   const positionState =
     currentWindowExposure <= 0
@@ -1542,6 +1592,48 @@ function paintShadowOverview(summary, items = lastPositions) {
   document.getElementById("shadowConstraintMeta").textContent = focusConstraint.meta;
   document.getElementById("shadowBudgetTitle").textContent = focusBudget.title;
   document.getElementById("shadowBudgetMeta").textContent = focusBudget.meta;
+
+  const stageShell = document.getElementById("shadowStageShell");
+  const stagePulse = document.getElementById("shadowStagePulse");
+  const stageTone =
+    focusConstraint.hardBlock && currentWindowExposure <= 0
+      ? focusConstraint.tone
+      : currentWindowExposure > 0
+      ? toneFromNumber(currentWindowPnl, 0.05)
+      : focusDecision.tone;
+  applyToneClass(stageShell, stageTone);
+  applyToneClass(stagePulse, stageTone);
+  document.getElementById("shadowStageHeadline").textContent =
+    currentWindowExposure > 0 ? `${windowState.label} | ${positionState}` : focusDecision.title;
+  document.getElementById("shadowStageMeta").textContent =
+    currentWindowExposure > 0
+      ? `${windowState.detail} | ${focusBudget.meta}`
+      : `${focusDecision.meta} | ${focusConstraint.meta}`;
+  document.getElementById("shadowStageTimeValue").textContent = mmssLabel(timingInfo.remaining);
+  document.getElementById("shadowStageTimeMeta").textContent = `${windowStagePhaseLabel(timingInfo)} | ${fmt(timingInfo.pct, 0)}% consumido`;
+  document.getElementById("shadowStageEdgeValue").textContent = fmtBps(edgeSnapshot.net, 1);
+  document.getElementById("shadowStageEdgeMeta").textContent =
+    edgeSnapshot.execution && edgeSnapshot.execution !== "-"
+      ? `${edgeSnapshot.execution} | fee ${fmtBps(edgeSnapshot.fee, 1)}`
+      : shadowEdgeHeadline(edgeSnapshot, { constraint: focusConstraint, currentWindowExposure });
+  document.getElementById("shadowStageRiskValue").textContent = `${fmtUsdPlain(currentWindowExposure, 2)} / ${fmtUsdPlain(
+    budgetInfo.cycleBudget || budgetInfo.budgetCeiling,
+    2
+  )}`;
+  document.getElementById("shadowStageRiskMeta").textContent =
+    currentWindowExposure > 0
+      ? `${positionState.toLowerCase()} | restan ${fmtUsdPlain(budgetInfo.remainingBudget, 2)}`
+      : `sin posicion | techo util ${fmtUsdPlain(budgetInfo.budgetCeiling, 2)}`;
+  document.getElementById("shadowStageProgressFill").style.width = `${clamp(timingInfo.pct, 0, 100)}%`;
+  document.getElementById("shadowStageProgressNow").textContent = `${windowStagePhaseLabel(timingInfo)} | ${windowCountdownLabel(timingInfo)}`;
+  document.getElementById("shadowTargetUpValue").textContent = fmtPct(ratios.targetUp * 100, 0);
+  document.getElementById("shadowTargetDownValue").textContent = fmtPct(ratios.targetDown * 100, 0);
+  document.getElementById("shadowActualUpValue").textContent = fmtPct(ratios.actualUp * 100, 0);
+  document.getElementById("shadowActualDownValue").textContent = fmtPct(ratios.actualDown * 100, 0);
+  document.getElementById("shadowTargetUpFill").style.width = `${clamp(ratios.targetUp * 100, 0, 100)}%`;
+  document.getElementById("shadowTargetDownFill").style.width = `${clamp(ratios.targetDown * 100, 0, 100)}%`;
+  document.getElementById("shadowActualUpFill").style.width = `${clamp(ratios.actualUp * 100, 0, 100)}%`;
+  document.getElementById("shadowActualDownFill").style.width = `${clamp(ratios.actualDown * 100, 0, 100)}%`;
 
   const windowCard = document.getElementById("shadowWindowPnlCard");
   applyToneClass(windowCard, currentWindowExposure > 0 ? toneFromNumber(currentWindowPnl) : primaryStatus.tone);

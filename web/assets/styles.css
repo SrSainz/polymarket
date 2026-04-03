@@ -1192,6 +1192,251 @@ td {
   gap: 8px;
 }
 
+.shadow-stage-shell {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  gap: 16px;
+  margin-top: 2px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: calc(var(--radius-lg) + 2px);
+  background:
+    radial-gradient(circle at top left, rgba(139, 184, 255, 0.12), transparent 26%),
+    linear-gradient(180deg, rgba(17, 23, 31, 0.96), rgba(14, 19, 27, 0.96));
+  transition:
+    border-color 0.22s ease,
+    background 0.22s ease,
+    transform 0.22s ease;
+}
+
+.shadow-stage-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, rgba(255, 255, 255, 0.04), transparent 35%, rgba(255, 255, 255, 0.02));
+  pointer-events: none;
+}
+
+.shadow-stage-shell.is-positive {
+  border-color: rgba(143, 208, 170, 0.3);
+  background:
+    radial-gradient(circle at top left, rgba(143, 208, 170, 0.18), transparent 26%),
+    linear-gradient(180deg, rgba(22, 31, 28, 0.98), rgba(16, 23, 21, 0.98));
+}
+
+.shadow-stage-shell.is-negative {
+  border-color: rgba(239, 155, 155, 0.3);
+  background:
+    radial-gradient(circle at top left, rgba(239, 155, 155, 0.18), transparent 26%),
+    linear-gradient(180deg, rgba(38, 28, 32, 0.98), rgba(24, 18, 21, 0.98));
+}
+
+.shadow-stage-shell.is-warning {
+  border-color: rgba(233, 178, 125, 0.3);
+  background:
+    radial-gradient(circle at top left, rgba(233, 178, 125, 0.18), transparent 26%),
+    linear-gradient(180deg, rgba(36, 31, 24, 0.98), rgba(24, 20, 17, 0.98));
+}
+
+.shadow-stage-top,
+.shadow-stage-signal,
+.shadow-stage-stats,
+.shadow-balance-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.shadow-stage-signal {
+  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.shadow-stage-pulse {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: rgba(152, 164, 184, 0.34);
+  background: rgba(152, 164, 184, 0.9);
+  box-shadow: 0 0 0 0 rgba(152, 164, 184, 0.45);
+  animation: shadowPulse 2.2s ease-out infinite;
+}
+
+.shadow-stage-pulse.is-positive {
+  color: rgba(60, 178, 109, 0.34);
+  background: rgba(60, 178, 109, 0.95);
+  box-shadow: 0 0 0 0 rgba(60, 178, 109, 0.42);
+}
+
+.shadow-stage-pulse.is-negative {
+  color: rgba(223, 105, 101, 0.34);
+  background: rgba(223, 105, 101, 0.95);
+  box-shadow: 0 0 0 0 rgba(223, 105, 101, 0.42);
+}
+
+.shadow-stage-pulse.is-warning {
+  color: rgba(233, 178, 125, 0.34);
+  background: rgba(233, 178, 125, 0.95);
+  box-shadow: 0 0 0 0 rgba(233, 178, 125, 0.42);
+}
+
+.shadow-stage-kicker {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.shadow-stage-headline {
+  display: block;
+  margin: 0;
+  font-size: clamp(1.3rem, 3vw, 2.2rem);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+}
+
+.shadow-stage-meta {
+  margin: 6px 0 0;
+  color: var(--muted-strong);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  max-width: 78ch;
+}
+
+.shadow-stage-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.shadow-stage-stat,
+.shadow-balance-card {
+  padding: 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.shadow-stage-stat span,
+.shadow-balance-row span {
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.shadow-stage-stat strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 1.45rem;
+  letter-spacing: -0.04em;
+}
+
+.shadow-stage-stat small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted-strong);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.shadow-stage-progress-shell {
+  display: grid;
+  gap: 8px;
+}
+
+.shadow-stage-progress {
+  position: relative;
+  height: 16px;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(90deg, rgba(68, 98, 145, 0.2), rgba(255, 255, 255, 0.05)),
+    rgba(7, 11, 17, 0.62);
+}
+
+.shadow-stage-progress-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(102, 145, 232, 0.9), rgba(120, 221, 178, 0.9));
+  transition: width 0.35s ease;
+}
+
+.shadow-stage-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.74rem;
+}
+
+.shadow-stage-progress-meta span:nth-child(2) {
+  color: var(--ink);
+}
+
+.shadow-balance-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.shadow-balance-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.shadow-balance-row strong {
+  font-size: 0.92rem;
+  color: var(--ink);
+}
+
+.shadow-balance-rail {
+  position: relative;
+  height: 12px;
+  overflow: hidden;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.shadow-balance-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  transition: width 0.32s ease;
+}
+
+.shadow-balance-rail.is-up .shadow-balance-fill {
+  background: linear-gradient(90deg, rgba(99, 182, 255, 0.92), rgba(97, 225, 186, 0.92));
+}
+
+.shadow-balance-rail.is-down .shadow-balance-fill {
+  background: linear-gradient(90deg, rgba(241, 162, 111, 0.92), rgba(223, 105, 101, 0.92));
+}
+
+@keyframes shadowPulse {
+  0% {
+    transform: scale(0.94);
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 14px rgba(255, 255, 255, 0);
+  }
+  100% {
+    transform: scale(0.94);
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+  }
+}
+
 .shadow-focus-grid {
   display: grid;
   gap: 10px;
@@ -1952,6 +2197,11 @@ td {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .shadow-stage-top {
+    grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.95fr);
+    align-items: start;
+  }
+
   .shadow-side-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2082,6 +2332,19 @@ td {
 
   .shadow-focus-grid {
     grid-template-columns: 1fr;
+  }
+
+  .shadow-stage-stats,
+  .shadow-balance-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .shadow-stage-signal {
+    grid-template-columns: 1fr;
+  }
+
+  .shadow-stage-pulse {
+    display: none;
   }
 
   .tournament-hero-grid,
