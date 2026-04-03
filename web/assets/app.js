@@ -10,7 +10,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-03-shadow-home24";
+const UI_BUILD = "2026-04-03-live-home25";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -2348,15 +2348,15 @@ function applyPublicModeLabels() {
   document.getElementById("heroTriggerLabel").textContent = "Actividad visible";
   document.getElementById("heroFeedLabel").textContent = "Fuente";
   document.getElementById("pnlLabel").textContent = "P&L realizado visible";
-  document.getElementById("liveCashLabel").textContent = "Datos del simulador";
+  document.getElementById("liveCashLabel").textContent = "Datos del bot del NAS";
   document.getElementById("pendingSignalsLabel").textContent = "Señales del bot";
   document.getElementById("strategyModeLabel").textContent = "Estado de la web";
   document.getElementById("positionsCurrentTitle").textContent = "Posiciones públicas";
   document.getElementById("positionsCurrentCopy").textContent = "Lo que la Data API publica muestra ahora mismo para esta wallet.";
   document.getElementById("positionsArchiveTitle").textContent = "Sincronización del NAS";
-  document.getElementById("positionsArchiveCopy").textContent = "Conecta el backend del NAS para separar ventana actual, archivo y simulador.";
+  document.getElementById("positionsArchiveCopy").textContent = "Conecta el backend del NAS para separar ventana actual y archivo operativo.";
   document.getElementById("executionsTitle").textContent = "Actividad pública reciente";
-  document.getElementById("executionsCopy").textContent = "Movimientos visibles de la wallet observada, no del simulador del NAS.";
+  document.getElementById("executionsCopy").textContent = "Movimientos visibles de la wallet observada, no del bot live del NAS.";
 }
 
 function applyBackendDisconnectedLabels() {
@@ -2365,13 +2365,13 @@ function applyBackendDisconnectedLabels() {
   document.getElementById("heroTriggerLabel").textContent = "Siguiente paso";
   document.getElementById("heroFeedLabel").textContent = "Conexión";
   document.getElementById("pnlLabel").textContent = "Ganancia / pérdida";
-  document.getElementById("liveCashLabel").textContent = "Capital del simulador";
+  document.getElementById("liveCashLabel").textContent = "Capital live";
   document.getElementById("pendingSignalsLabel").textContent = "Compras previstas en esta ventana";
   document.getElementById("strategyModeLabel").textContent = "Estado ahora";
   document.getElementById("positionsCurrentTitle").textContent = "Patas abiertas";
   document.getElementById("positionsCurrentCopy").textContent = "Conecta el backend del NAS para ver la ventana real y sus patas.";
   document.getElementById("positionsArchiveTitle").textContent = "Archivo / resto";
-  document.getElementById("positionsArchiveCopy").textContent = "Sin backend no podemos separar ventana actual, archivo y simulador.";
+  document.getElementById("positionsArchiveCopy").textContent = "Sin backend no podemos separar ventana actual y archivo operativo.";
   document.getElementById("executionsTitle").textContent = "Ejecuciones recientes";
   document.getElementById("executionsCopy").textContent = "Esta vista necesita el backend del NAS para mostrar compras, cierres y PnL reales.";
 }
@@ -2382,7 +2382,7 @@ function applyLocalModeLabels() {
   document.getElementById("heroTriggerLabel").textContent = "Tiempo de ventana";
   document.getElementById("heroFeedLabel").textContent = "Salud del feed";
   document.getElementById("pnlLabel").textContent = "Ganancia / pérdida total";
-  document.getElementById("liveCashLabel").textContent = "Equity estimada del simulador";
+  document.getElementById("liveCashLabel").textContent = "Equity estimada live";
   document.getElementById("pendingSignalsLabel").textContent = "Siguientes compras";
   document.getElementById("strategyModeLabel").textContent = "Estado ahora";
   document.getElementById("positionsCurrentTitle").textContent = "Patas abiertas";
@@ -2390,7 +2390,7 @@ function applyLocalModeLabels() {
   document.getElementById("positionsArchiveTitle").textContent = "Otras patas / archivo";
   document.getElementById("positionsArchiveCopy").textContent = "Operaciones fuera del mercado principal o ya desplazadas.";
   document.getElementById("executionsTitle").textContent = "Ejecuciones recientes";
-  document.getElementById("executionsCopy").textContent = "Todas las compras y cierres que ha ido haciendo el simulador.";
+  document.getElementById("executionsCopy").textContent = "Todas las compras y cierres que ha ido haciendo el bot live.";
 }
 
 function currentWindowDirection(summary) {
@@ -2593,22 +2593,20 @@ function liveArmGuardInfo(summary = lastSummary) {
   const currentMarketExposure = Math.max(Number(summary?.strategy_current_market_total_exposure || 0), 0);
   const pendingOrders = Math.max(Number(summary?.live_pending_orders_count || 0), 0);
   const observedTrades = Math.max(Number(summary?.live_observed_trades_count || 0), 0);
-  const reasons = [];
+  const blockers = [];
+  const warnings = [];
 
   if (!connection.stable) {
-    reasons.push(connection.connected ? "backend del NAS inestable" : "backend del NAS desconectado");
+    blockers.push(connection.connected ? "backend del NAS inestable" : "backend del NAS desconectado");
   }
   if (!control.isLiveSession) {
-    reasons.push("el runtime actual no esta en modo live");
+    blockers.push("el runtime actual no esta en modo live");
   }
   if (control.canExecute) {
-    reasons.push("live ya esta armado");
+    blockers.push("live ya esta armado");
   }
   if (!ledger.ok) {
-    reasons.push(ledger.meta || "wallet sync / ledger todavia no estan listos");
-  }
-  if (readinessStatus !== "ready") {
-    reasons.push(readinessBlockers[0] || String(readiness?.headline || "el gate de live aun no esta en verde"));
+    blockers.push(ledger.meta || "wallet sync / ledger todavia no estan listos");
   }
   if (
     !referenceComparable ||
@@ -2617,23 +2615,33 @@ function liveArmGuardInfo(summary = lastSummary) {
     referenceQuality.includes("stale") ||
     referenceQuality.includes("fallback")
   ) {
-    reasons.push(`referencia ${referenceQuality || "sin calidad"}`);
+    warnings.push(`referencia ${referenceQuality || "sin calidad"}`);
+  }
+  if (readinessStatus !== "ready") {
+    warnings.push(readinessBlockers[0] || String(readiness?.headline || "el gate de live aun no esta en verde"));
   }
   if (openPositions > 0 || currentMarketExposure > 0) {
-    reasons.push(`quedan ${openPositions} posiciones / ${fmtUsdPlain(currentMarketExposure, 2)} abiertos`);
+    blockers.push(`quedan ${openPositions} posiciones / ${fmtUsdPlain(currentMarketExposure, 2)} abiertos`);
   }
   if (pendingOrders > 0) {
-    reasons.push(`${pendingOrders} ordenes pendientes`);
+    blockers.push(`${pendingOrders} ordenes pendientes`);
   }
   if (observedTrades > 0 && !ledger.ok) {
-    reasons.push(`${observedTrades} movimientos observados aun no reconciliados`);
+    blockers.push(`${observedTrades} movimientos observados aun no reconciliados`);
   }
 
+  const blockerSummary = blockers.length ? blockers.slice(0, 3).join(" | ") : "";
+  const warningSummary = warnings.length ? warnings.slice(0, 3).join(" | ") : "";
+
   return {
-    ok: reasons.length === 0,
-    reasons,
-    primaryReason: reasons[0] || "",
-    summary: reasons.length ? reasons.slice(0, 3).join(" | ") : "Backend estable, ledger listo y sin residuos abiertos.",
+    ok: blockers.length === 0,
+    reasons: blockers,
+    warnings,
+    hasWarnings: warnings.length > 0,
+    primaryReason: blockers[0] || warnings[0] || "",
+    summary: blockerSummary || warningSummary || "Backend estable, ledger listo y sin residuos abiertos.",
+    blockerSummary,
+    warningSummary,
     connection,
     control,
     ledger,
@@ -2780,10 +2788,12 @@ function applyLiveControlUi(summary = lastSummary) {
   meta.textContent =
     `${info.reason || (info.isLiveSession ? "sin motivo" : "el bot no esta en live")} | ` +
     `cambio ${updatedText} | ultimo resumen ${lastSentText}` +
-    `${armGuard.ok ? " | gate live listo" : ` | arm bloqueado: ${armGuard.primaryReason}`}`;
-  backendMeta.textContent = armGuard.ok
-    ? `${connectionInfo.meta} | listo para armar live si quieres.`
-    : `${connectionInfo.meta} | arm bloqueado: ${armGuard.summary}`;
+    `${!armGuard.ok ? ` | arm bloqueado: ${armGuard.primaryReason}` : armGuard.hasWarnings ? ` | armable con avisos: ${armGuard.warningSummary}` : " | gate live listo"}`;
+  backendMeta.textContent = !armGuard.ok
+    ? `${connectionInfo.meta} | arm bloqueado: ${armGuard.summary}`
+    : armGuard.hasWarnings
+    ? `${connectionInfo.meta} | live armable con avisos: ${armGuard.warningSummary}`
+    : `${connectionInfo.meta} | listo para armar live si quieres.`;
 
   const localAvailable = runtimeMode === "local";
   armBtn.disabled = !localAvailable || !armGuard.ok;
@@ -2792,9 +2802,11 @@ function applyLiveControlUi(summary = lastSummary) {
   armBtn.title =
     !localAvailable
       ? "Solo disponible con backend local"
-      : armGuard.ok
-      ? "Backend estable, referencia util y ledger listo para armar live."
-      : armGuard.summary;
+      : !armGuard.ok
+      ? armGuard.summary
+      : armGuard.hasWarnings
+      ? `Armar live con avisos: ${armGuard.warningSummary}`
+      : "Backend estable y ledger listo para armar live.";
   pauseBtn.title =
     !localAvailable ? "Solo disponible con backend local" : !info.isLiveSession ? "Activa run.py live con LIVE_TRADING=true" : "";
   summaryNowBtn.title = !localAvailable ? "Solo disponible con backend local" : "";

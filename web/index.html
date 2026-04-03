@@ -10,7 +10,7 @@
       href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260403-shadow-home24" />
+  <link rel="stylesheet" href="/assets/styles.css?v=20260403-live-home25" />
   </head>
   <body>
     <div class="app-shell">
@@ -47,7 +47,7 @@
               <button id="apiBaseBtn" type="button" class="secondary-btn">Guardar API</button>
               <button id="refreshBtn" type="button">Refrescar</button>
               <button id="resetBtn" type="button" class="secondary-btn">Reiniciar runtime</button>
-              <button id="resetCompareBtn" type="button" class="danger-btn">Limpiar compare</button>
+              <button id="resetCompareBtn" type="button" class="danger-btn" hidden>Limpiar compare</button>
               <button id="wipeRuntimeBtn" type="button" class="danger-btn">Borrado total</button>
             </div>
             <div class="toolbar-field toolbar-field-wide control-status">
@@ -74,7 +74,7 @@
           <article class="panel shadow-main-panel" id="shadowMainPanel">
             <div class="shadow-main-head">
               <div class="shadow-main-copy">
-                <p class="hero-kicker">Solo shadow</p>
+                <p class="hero-kicker">Live BTC5m</p>
                 <div class="shadow-main-title-row">
                   <h2 id="shadowHeroStatus" class="shadow-main-title">Cargando shadow...</h2>
                   <span id="shadowStateBadge" class="shadow-state-badge">sin datos</span>
@@ -293,7 +293,7 @@
           </div>
         </section>
 
-        <section class="tournament-board" id="tournamentBoard">
+        <section class="tournament-board" id="tournamentBoard" hidden>
           <article class="panel tournament-hero-card" id="tournamentHeroCard">
             <div class="subpanel-head">
               <div>
@@ -383,7 +383,7 @@
 
         <section class="cards metrics-strip">
           <article class="card metric-card card-primary">
-            <p class="card-label" id="liveCashLabel">Capital total del simulador</p>
+            <p class="card-label" id="liveCashLabel">Capital live</p>
             <p class="card-value" id="liveCashBalance">-</p>
             <p class="card-subvalue" id="liveCashMeta">disponible -</p>
           </article>
@@ -415,13 +415,13 @@
           <article class="card metric-card">
             <p class="card-label" id="exposureLabel">Dinero metido en esta ventana</p>
             <p class="card-value" id="exposure">-</p>
-            <p class="card-subvalue" id="exposureMark">total simulador -</p>
+            <p class="card-subvalue" id="exposureMark">total live -</p>
           </article>
 
           <article class="card metric-card">
             <p class="card-label" id="openPositionsLabel">Patas abiertas en esta ventana</p>
             <p class="card-value" id="openPositions">-</p>
-            <p class="card-subvalue" id="openPositionsMeta">totales simulador -</p>
+            <p class="card-subvalue" id="openPositionsMeta">totales live -</p>
           </article>
 
           <article class="card metric-card noise-card">
@@ -436,7 +436,7 @@
             <p class="hero-kicker">System Status</p>
             <h2 class="hero-title" id="strategyHeroTitle">Sin mercado activo aun.</h2>
             <p id="systemNotice" class="hero-text">
-              Vista operativa del motor BTC5m: mercado, reparto, salud del feed y rentabilidad del simulador.
+              Vista operativa del motor BTC5m: mercado, reparto, salud del feed y rentabilidad del bot live.
             </p>
           </div>
 
@@ -462,7 +462,7 @@
           </div>
         </section>
 
-        <section class="compare-section" id="runtimeCompareSection">
+        <section class="compare-section" id="runtimeCompareSection" hidden>
           <article class="panel compare-panel">
             <div class="panel-head panel-head-tight">
               <div>
@@ -1042,6 +1042,6 @@
         <p id="lastUpdated">Ultima actualizacion: -</p>
       </footer>
     </div>
-    <script src="/assets/app.js?v=20260403-shadow-home24"></script>
+    <script src="/assets/app.js?v=20260403-live-home25"></script>
   </body>
 </html>
