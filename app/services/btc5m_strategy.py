@@ -92,6 +92,9 @@ _ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN = 0.001
 _ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN = 0.02
 _ARB_CHEAP_SIDE_MICRO_RATIO_GAP = 0.055
 _ARB_CHEAP_SIDE_MICRO_PAIR_MAX = 1.012
+_ARB_LIVE_MICRO_PROBE_BUDGET_MAX = 3.50
+_ARB_LIVE_MICRO_PROBE_MIN_RAW_EDGE = 0.03
+_ARB_LIVE_MICRO_PROBE_MIN_NET_EDGE = 0.01
 _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR = 0.58
 _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR = 0.64
 _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS = 4.0
@@ -2084,6 +2087,7 @@ class BTC5mStrategyService:
             )
             should_block_cheap_side, cheap_side_block_reason = self._arb_should_block_flat_single_side_open(
                 mode=mode,
+                reference_quality=reference_state.quality,
                 bracket_phase=bracket_phase,
                 current_up_notional=current_up_notional,
                 current_down_notional=current_down_notional,
@@ -2121,6 +2125,13 @@ class BTC5mStrategyService:
             net_edge = cheap_side.net_edge
             edge_source = cheap_side.edge_source
             ratio_gap_abs = abs(desired_up_ratio - current_up_ratio)
+            if (
+                str(mode or "").strip().lower() == "live"
+                and bracket_phase == "abrir"
+                and current_up_notional <= _ARB_MIN_OPERABLE_BUDGET_SLACK
+                and current_down_notional <= _ARB_MIN_OPERABLE_BUDGET_SLACK
+            ):
+                single_budget = _round_down(min(single_budget, min(cycle_budget * 0.45, _ARB_LIVE_MICRO_PROBE_BUDGET_MAX)), "0.01")
             single_levels = self._build_arb_single_side_levels(
                 target=target,
                 budget=single_budget,
@@ -3591,6 +3602,7 @@ class BTC5mStrategyService:
         self,
         *,
         mode: str,
+        reference_quality: str,
         bracket_phase: str,
         current_up_notional: float,
         current_down_notional: float,
@@ -3614,7 +3626,23 @@ class BTC5mStrategyService:
         if current_up_notional > 0 or current_down_notional > 0:
             return False, ""
         if mode_text == "live":
-            return True, "cheap-side bloqueado en live: live opera bracket-only; la primera entrada debe abrir dos patas"
+            reference_quality_text = str(reference_quality or "").strip().lower()
+            live_reference_ok = reference_quality_text in {"official", "rest-coinbase-official", "captured-chainlink-live"}
+            live_probe_budget_cap = min(cycle_budget * 0.45, _ARB_LIVE_MICRO_PROBE_BUDGET_MAX)
+            live_micro_probe_ok = (
+                live_reference_ok
+                and seconds_into_window <= _ARB_EARLY_MID_END
+                and pair_sum <= min(_ARB_CHEAP_SIDE_MICRO_PAIR_MAX, 1.010)
+                and abs(delta_bps) >= max(_ARB_CHEAP_SIDE_MICRO_DELTA_BPS, _ARB_CHEAP_SIDE_MIN_DELTA_BPS)
+                and signal.raw_edge >= max(_ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN, _ARB_LIVE_MICRO_PROBE_MIN_RAW_EDGE)
+                and signal.net_edge >= max(_ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN, _ARB_LIVE_MICRO_PROBE_MIN_NET_EDGE)
+                and min(single_budget, live_probe_budget_cap) >= self._arb_min_notional(signal.target)
+            )
+            if not live_micro_probe_ok:
+                return (
+                    True,
+                    "cheap-side bloqueado en live: live opera bracket-only salvo sonda minima con referencia valida, edge claro y ticket reducido",
+                )
 
         if seconds_into_window > _ARB_EARLY_MID_END:
             return True, "cheap-side bloqueado en live-like: ventana demasiado avanzada para abrir solo una pata"
@@ -3643,6 +3671,8 @@ class BTC5mStrategyService:
                 True,
                 "cheap-side bloqueado en live-like: apertura plana solo con edge fuerte, ventana temprana y presupuesto de pareja",
             )
+        if mode_text == "live" and live_micro_probe_ok:
+            return False, ""
 
         second_leg_viable, second_leg_reason = self._arb_live_like_second_leg_viability(
             signal=signal,
