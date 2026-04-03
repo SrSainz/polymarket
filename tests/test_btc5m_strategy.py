@@ -8372,14 +8372,27 @@ def test_arb_reference_state_live_like_accepts_rest_coinbase_when_public_officia
         age_ms=150,
         chainlink_price=65804.65,
         official_price_to_beat=65804.65,
-        local_anchor_price=65805.02,
-        anchor_source="captured-chainlink",
+        local_anchor_price=0.0,
+        anchor_source="",
+    )
+    live_state = service._arb_reference_state(  # noqa: SLF001
+        mode="live",
+        source="rest-coinbase",
+        age_ms=150,
+        chainlink_price=65804.65,
+        official_price_to_beat=65804.65,
+        local_anchor_price=0.0,
+        anchor_source="",
     )
 
     assert shadow_state.comparable is True
     assert shadow_state.quality == "rest-coinbase-official"
     assert "beat oficial publico" in shadow_state.note
     assert round(shadow_state.budget_scale, 2) == 0.65
+    assert live_state.comparable is True
+    assert live_state.quality == "rest-coinbase-official"
+    assert "beat oficial publico" in live_state.note
+    assert round(live_state.budget_scale, 2) == 0.65
     db.close()
 
 

@@ -6512,7 +6512,6 @@ class BTC5mStrategyService:
                 is_live_like
                 and source_text == "rest-coinbase"
                 and has_official
-                and has_captured_chainlink_anchor
             ):
                 return ArbReferenceState(
                     comparable=True,
