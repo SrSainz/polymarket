@@ -7129,13 +7129,26 @@ class BTC5mStrategyService:
 
     def _observed_live_activities(self) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
+        sync_status = str(self.db.get_bot_state("live_wallet_sync_status") or "").strip().lower()
+        try:
+            sync_at_ms = int(str(self.db.get_bot_state("live_wallet_sync_at") or "0")) * 1000
+        except ValueError:
+            sync_at_ms = 0
+        stale_keys: list[str] = []
         for row in self.db.list_bot_state_by_prefix("live_observed_activity:"):
             try:
                 payload = json.loads(row["value"])
             except (TypeError, json.JSONDecodeError):
                 continue
             if isinstance(payload, dict):
+                observed_at = int(_safe_float(payload.get("observed_at")))
+                if sync_status == "ok" and sync_at_ms > 0 and observed_at > 0 and observed_at <= sync_at_ms:
+                    stale_keys.append(str(row["key"] or ""))
+                    continue
                 items.append(payload)
+        for key in stale_keys:
+            if key:
+                self.db.delete_bot_state(key)
         return items
 
     def _pending_live_order_remaining_size(self, pending: Mapping[str, object]) -> float:

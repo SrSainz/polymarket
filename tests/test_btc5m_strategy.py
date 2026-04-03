@@ -1010,6 +1010,48 @@ def test_live_position_ledger_preflight_blocks_on_observed_external_activity(tmp
     db.close()
 
 
+def test_live_position_ledger_preflight_ignores_observed_activity_older_than_successful_sync(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_preflight_require_clean_ledger=True),
+        logger=logging.getLogger("test-btc5m-live-ledger-preflight-stale-observed"),
+    )
+    db.set_bot_state("live_wallet_sync_status", "ok")
+    db.set_bot_state("live_wallet_sync_at", "1775244624")
+    db.set_bot_state(
+        "live_observed_activity:manual-order:trade-manual",
+        json.dumps(
+            {
+                "order_id": "manual-order",
+                "trade_id": "trade-manual",
+                "asset": "asset-up",
+                "condition_id": "cond-1",
+                "observed_at": 1775244623000,
+                "observed_live_activity": True,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+    allowed, note = service._position_ledger_can_run(mode="live")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.list_bot_state_by_prefix("live_observed_activity:") == []
+    db.close()
+
+
 def test_cleanup_stale_pending_live_orders_removes_expired_window_and_keeps_current(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
