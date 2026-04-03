@@ -10,7 +10,7 @@ const DEPRECATED_REMOTE_APIS = new Set([
 ]);
 const DONUT_GAIN_COLOR = "#3a9f62";
 const DONUT_LOSS_COLOR = "#d0675f";
-const UI_BUILD = "2026-04-03-shadow-home22";
+const UI_BUILD = "2026-04-03-shadow-home23";
 
 let runtimeMode = "local";
 let watchedWallet = DEFAULT_WALLET;
@@ -2798,6 +2798,14 @@ async function getJson(url) {
   return response.json();
 }
 
+function readEndpointItems(result, fallbackItems, label, failedLabels) {
+  if (result.status === "fulfilled") {
+    return Array.isArray(result.value?.items) ? result.value.items : [];
+  }
+  failedLabels.push(label);
+  return Array.isArray(fallbackItems) ? fallbackItems : [];
+}
+
 function markBackendHealthy() {
   backendFailureStreak = 0;
   backendConnectedOnce = true;
@@ -4089,27 +4097,42 @@ async function refreshAll() {
     }
 
     if (runtimeMode === "local") {
-      const [summary, positions, executions, audit] = await Promise.all([
-        getJson(withCacheBust(buildApiUrl("/api/summary"))),
+      const summary = await getJson(withCacheBust(buildApiUrl("/api/summary")));
+
+      markBackendHealthy();
+
+      const endpointResults = await Promise.allSettled([
         getJson(withCacheBust(buildApiUrl("/api/positions"))),
         getJson(withCacheBust(buildApiUrl("/api/executions?limit=50"))),
         getJson(withCacheBust(buildApiUrl("/api/window-audit?limit=60"))),
       ]);
+      const failedPanels = [];
+      const positions = readEndpointItems(endpointResults[0], lastPositions, "posiciones", failedPanels);
+      const executions = readEndpointItems(endpointResults[1], lastExecutions, "ejecuciones", failedPanels);
+      const audit = readEndpointItems(endpointResults[2], lastWindowAudit, "auditoria local", failedPanels);
 
-      markBackendHealthy();
-      applyBackendConnectionUi(true);
+      applyBackendConnectionUi(
+        true,
+        failedPanels.length
+          ? `Backend NAS conectado. Seguimos mostrando el ultimo snapshot valido en: ${failedPanels.join(", ")}.`
+          : ""
+      );
 
-      paintExecutions(executions.items || []);
-      paintWindowAudit(audit.items || []);
-      paintSummary(summary, positions.items || []);
-      paintPositions(positions.items || []);
-      paintSignals([]);
-      paintSelectedWallets([]);
-      paintRiskBlocks({});
-      paintExposureDonut(summary || {});
-      paintOperationPnl(executions.items || []);
-      paintStrategySetups(summary || {});
-      paintWalletHypotheses(summary || {});
+      try {
+        paintExecutions(executions);
+        paintWindowAudit(audit);
+        paintSummary(summary, positions);
+        paintPositions(positions);
+        paintSignals([]);
+        paintSelectedWallets([]);
+        paintRiskBlocks({});
+        paintExposureDonut(summary || {});
+        paintOperationPnl(executions);
+        paintStrategySetups(summary || {});
+        paintWalletHypotheses(summary || {});
+      } catch (renderError) {
+        document.getElementById("lastUpdated").textContent = `Error de interfaz: ${renderError.message}`;
+      }
       return;
     }
 
