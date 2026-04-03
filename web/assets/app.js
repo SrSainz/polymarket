@@ -2779,6 +2779,8 @@ function applyLiveControlUi(summary = lastSummary) {
   const armGuard = liveArmGuardInfo(summary);
   const updatedText = info.updatedAt > 0 ? tsToIso(info.updatedAt) : "sin cambios";
   const lastSentText = info.statusSummaryLastSentAt > 0 ? tsToIso(info.statusSummaryLastSentAt) : "sin enviar";
+  armBtn.textContent = info.canExecute ? "Ya armado" : "Armar live";
+  pauseBtn.textContent = info.canExecute ? "Pausar live" : "Ya pausado";
   controlBadge.textContent = info.label.toUpperCase();
   controlBadge.classList.remove("live-badge", "paper-badge");
   controlBadge.classList.add(info.canExecute ? "live-badge" : "paper-badge");
@@ -2802,13 +2804,21 @@ function applyLiveControlUi(summary = lastSummary) {
   armBtn.title =
     !localAvailable
       ? "Solo disponible con backend local"
+      : info.canExecute
+      ? "Live ya esta armado."
       : !armGuard.ok
       ? armGuard.summary
       : armGuard.hasWarnings
       ? `Armar live con avisos: ${armGuard.warningSummary}`
       : "Backend estable y ledger listo para armar live.";
   pauseBtn.title =
-    !localAvailable ? "Solo disponible con backend local" : !info.isLiveSession ? "Activa run.py live con LIVE_TRADING=true" : "";
+    !localAvailable
+      ? "Solo disponible con backend local"
+      : !info.isLiveSession
+      ? "Activa run.py live con LIVE_TRADING=true"
+      : !info.canExecute
+      ? "Live ya esta pausado."
+      : "";
   summaryNowBtn.title = !localAvailable ? "Solo disponible con backend local" : "";
 }
 
