@@ -31,6 +31,7 @@ from app.services.report import ReportService
 from app.services.runtime_diagnostics import RuntimeDiagnosticsService
 from app.services.telegram_daily_summary import TelegramDailySummaryService
 from app.services.telegram_trade_notifier import TelegramTradeNotifierService
+from app.services.variant_tournament import VariantTournamentService
 from app.services.wallet_pattern_miner import WalletPatternMiner
 from app.settings import AppPaths, AppSettings, load_settings
 from app.core.replay_engine import ReplayEngine
@@ -231,6 +232,7 @@ def parse_args() -> argparse.Namespace:
             "report",
             "dataset",
             "experiments",
+            "tournament",
             "hypotheses",
             "diagnostics",
             "replay",
@@ -591,6 +593,26 @@ def main() -> int:
                 "experiments => "
                 f"variants={len(results.get('variants', []))} datasets={len(results.get('datasets', []))} "
                 f"windows={dataset_summary['windows']}"
+            )
+            return 0
+
+        if args.command == "tournament":
+            dataset_builder = HistoricalDatasetBuilder(settings.paths.research_dir)
+            dataset_summary = dataset_builder.build_from_capture_logs()
+            tournament_service = VariantTournamentService(db, settings)
+            payload, report_path = tournament_service.generate(
+                run_experiments=True,
+                fallback_inputs=[settings.paths.root / "sample.json"],
+                dataset_payload=dataset_summary,
+            )
+            recommendation = (
+                payload.get("recommendation") if isinstance(payload.get("recommendation"), dict) else {}
+            )
+            print(
+                "tournament => "
+                f"variants={payload.get('variant_count', 0)} passing={payload.get('passing_variants', 0)} "
+                f"active={payload.get('active_variant') or '-'} candidate={recommendation.get('candidate_variant') or '-'} "
+                f"decision={recommendation.get('code') or '-'} report={report_path}"
             )
             return 0
 

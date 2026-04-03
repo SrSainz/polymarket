@@ -16,6 +16,10 @@ def experiment_leaderboard_path(research_root: Path) -> Path:
     return research_root / "experiments" / "variant_leaderboard.json"
 
 
+def tournament_summary_path(research_root: Path) -> Path:
+    return research_root / "experiments" / "tournament_summary.json"
+
+
 def wallet_hypotheses_path(research_root: Path) -> Path:
     return research_root / "hypotheses" / "top_wallet_patterns.json"
 
@@ -52,6 +56,21 @@ def events_log_path(research_root: Path, name: str) -> Path:
 
 def load_experiment_leaderboard(research_root: Path) -> dict[str, Any]:
     return _load_json(experiment_leaderboard_path(research_root), default={"generated_at": "", "variants": []})
+
+
+def load_tournament_summary(research_root: Path) -> dict[str, Any]:
+    return _load_json(
+        tournament_summary_path(research_root),
+        default={
+            "generated_at": "",
+            "active_variant": "",
+            "variant_count": 0,
+            "passing_variants": 0,
+            "leaderboard": [],
+            "recommendation": {},
+            "live_readiness": {},
+        },
+    )
 
 
 def load_wallet_hypotheses(research_root: Path) -> dict[str, Any]:

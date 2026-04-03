@@ -8,6 +8,7 @@ from app.core.lab_artifacts import (
     load_dataset_summary,
     load_experiment_leaderboard,
     load_runtime_diagnostics,
+    load_tournament_summary,
     load_wallet_hypotheses,
 )
 from app.core.strategy_monitoring import build_incubation_summary, build_recent_resolution_windows
@@ -58,6 +59,7 @@ class ReportService:
         dataset_payload = load_dataset_summary(research_root)
         diagnostics_payload = load_runtime_diagnostics(research_root)
         wallet_payload = load_wallet_hypotheses(research_root)
+        tournament_payload = load_tournament_summary(research_root)
         active_experiment = _active_experiment_row(experiment_payload, variant=strategy_variant)
         incubation_transition = evaluate_incubation_progress(
             stage=incubation_stage,
@@ -112,6 +114,34 @@ class ReportService:
             lines.append(f"- Fill rate: {float(active_experiment.get('fill_rate') or 0.0) * 100:.2f}%")
             lines.append(f"- Hit rate: {float(active_experiment.get('hit_rate') or 0.0) * 100:.2f}%")
             lines.append(f"- Real edge: {float(active_experiment.get('real_edge_bps') or 0.0):.2f} bps")
+        lines.append("")
+        lines.append("## Variant Tournament")
+        recommendation = (
+            tournament_payload.get("recommendation")
+            if isinstance(tournament_payload.get("recommendation"), dict)
+            else {}
+        )
+        leaderboard = tournament_payload.get("leaderboard") if isinstance(tournament_payload.get("leaderboard"), list) else []
+        if not recommendation and not leaderboard:
+            lines.append("- None")
+        else:
+            lines.append(f"- Generated at: {tournament_payload.get('generated_at') or '-'}")
+            lines.append(f"- Active variant: {tournament_payload.get('active_variant') or '-'}")
+            lines.append(
+                f"- Recommendation: {recommendation.get('label') or '-'} | {recommendation.get('summary') or '-'}"
+            )
+            lines.append(f"- Next step: {recommendation.get('next_step') or '-'}")
+            if leaderboard:
+                for row in leaderboard[:3]:
+                    if not isinstance(row, dict):
+                        continue
+                    lines.append(
+                        "- "
+                        f"#{int(row.get('rank') or 0)} {row.get('variant') or '-'} | "
+                        f"{row.get('status') or '-'} | pnl={float(row.get('pnl') or 0.0):.2f} | "
+                        f"exp/win={float(row.get('expectancy_window_usdc') or 0.0):.2f} | "
+                        f"edge={float(row.get('real_edge_bps') or 0.0):.2f}bps"
+                    )
         lines.append("")
         lines.append("## Runtime Diagnostics")
         lines.append(f"- Generated at: {diagnostics_payload.get('generated_at') or '-'}")

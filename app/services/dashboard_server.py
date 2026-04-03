@@ -21,9 +21,11 @@ from app.core.lab_artifacts import (
     load_liquidation_snapshot,
     load_microstructure_snapshot,
     load_runtime_diagnostics,
+    load_tournament_summary,
     load_wallet_hypotheses,
     research_root_from_db,
 )
+from app.core.live_readiness import evaluate_live_readiness
 from app.core.strategy_monitoring import (
     build_incubation_summary,
     build_recent_resolution_windows,
@@ -221,23 +223,6 @@ _RUNTIME_RESTART_VISIBLE_TEXT_KEYS = [
     "strategy_reference_note",
     "strategy_selected_execution",
 ]
-_LIVE_READINESS_THRESHOLDS = {
-    "min_shared_windows": 100,
-    "min_shadow_participation_pct": 90.0,
-    "min_shadow_two_sided_window_pct": 95.0,
-    "max_shadow_one_sided_window_pct": 5.0,
-    "min_shadow_settlement_window_pct": 90.0,
-    "max_shadow_vs_paper_cadence_ratio": 3.0,
-    "max_shadow_blocker_pct": 20.0,
-}
-_LIVE_READINESS_BLOCKER_LABELS = {
-    "budget_limited": "shadow se queda sin presupuesto util",
-    "degraded_reference": "shadow se bloquea por referencia degradada",
-    "waiting_official": "shadow espera priceToBeat oficial",
-    "waiting_book": "shadow no ve libro suficiente",
-}
-
-
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
@@ -451,222 +436,10 @@ def _inverse_ratio_score(actual: float, limit: float) -> float:
 
 
 def _strategy_live_readiness(*, runtime_window_compare: dict | None, incubation: dict | None) -> dict:
-    thresholds = dict(_LIVE_READINESS_THRESHOLDS)
-    compare = runtime_window_compare if isinstance(runtime_window_compare, dict) else {}
-    history = compare.get("history") if isinstance(compare.get("history"), dict) else {}
-    history_summary = history.get("summary") if isinstance(history.get("summary"), dict) else {}
-    sample_summary = history.get("sample_summary") if isinstance(history.get("sample_summary"), dict) else {}
-    incubation_summary = incubation if isinstance(incubation, dict) else {}
-
-    shared_window_count = int(history_summary.get("shared_window_count") or 0)
-    shadow_participation_pct = float(history_summary.get("shadow_participation_pct") or 0.0)
-    shadow_two_sided_window_pct = float(history_summary.get("shadow_two_sided_window_pct") or 0.0)
-    shadow_settlement_window_pct = float(history_summary.get("shadow_settlement_window_pct") or 0.0)
-    shadow_active_window_count = int(history_summary.get("shadow_active_window_count") or 0)
-    shadow_one_sided_window_count = int(history_summary.get("shadow_one_sided_window_count") or 0)
-    shadow_one_sided_window_pct = (
-        (shadow_one_sided_window_count / shadow_active_window_count) * 100 if shadow_active_window_count > 0 else 0.0
+    return evaluate_live_readiness(
+        runtime_window_compare=runtime_window_compare,
+        incubation=incubation,
     )
-    paper_avg_open_cadence_seconds = float(history_summary.get("paper_avg_open_cadence_seconds") or 0.0)
-    shadow_avg_open_cadence_seconds = float(history_summary.get("shadow_avg_open_cadence_seconds") or 0.0)
-    cadence_ratio = (
-        round(shadow_avg_open_cadence_seconds / paper_avg_open_cadence_seconds, 4)
-        if paper_avg_open_cadence_seconds > 0 and shadow_avg_open_cadence_seconds > 0
-        else 0.0
-    )
-    dominant_state = str(sample_summary.get("shadow_dominant_operability_state") or "").strip()
-    dominant_pct = float(sample_summary.get("shadow_dominant_operability_pct") or 0.0)
-    blocker_state_label = _LIVE_READINESS_BLOCKER_LABELS.get(dominant_state, "")
-
-    max_drawdown = float(incubation_summary.get("max_drawdown") or 0.0)
-    max_drawdown_limit = float(incubation_summary.get("max_drawdown_limit") or 0.0)
-    drawdown_breached = bool(incubation_summary.get("drawdown_breached"))
-    ready_to_scale = bool(incubation_summary.get("ready_to_scale"))
-    incubation_progress_pct = float(incubation_summary.get("progress_pct") or 0.0)
-
-    sample_ok = shared_window_count >= int(thresholds["min_shared_windows"])
-    participation_ok = shadow_participation_pct >= float(thresholds["min_shadow_participation_pct"])
-    two_sided_ok = shadow_two_sided_window_pct >= float(thresholds["min_shadow_two_sided_window_pct"])
-    one_sided_ok = shadow_one_sided_window_pct <= float(thresholds["max_shadow_one_sided_window_pct"])
-    settlement_ok = shadow_settlement_window_pct >= float(thresholds["min_shadow_settlement_window_pct"])
-    cadence_ok = bool(cadence_ratio) and cadence_ratio <= float(thresholds["max_shadow_vs_paper_cadence_ratio"])
-    blocker_ok = not blocker_state_label or dominant_pct <= float(thresholds["max_shadow_blocker_pct"])
-    drawdown_ok = not drawdown_breached
-    incubation_ok = ready_to_scale
-
-    blockers: list[str] = []
-    strengths: list[str] = []
-
-    if not sample_ok:
-        blockers.append(
-            f"Muestra corta: {shared_window_count}/{int(thresholds['min_shared_windows'])} ventanas compartidas"
-        )
-    else:
-        strengths.append(f"Muestra comparable suficiente: {shared_window_count} ventanas")
-    if not drawdown_ok:
-        blockers.append(
-            f"Drawdown max {abs(max_drawdown):.2f} > limite {abs(max_drawdown_limit):.2f}"
-        )
-    else:
-        strengths.append(
-            f"Drawdown dentro de limite ({abs(max_drawdown):.2f} / {abs(max_drawdown_limit):.2f})"
-        )
-    if not incubation_ok:
-        if incubation_progress_pct < 100:
-            blockers.append(f"Incubacion interna al {incubation_progress_pct:.0f}%")
-        else:
-            blockers.append("Incubacion interna aun no lista para escalar")
-    else:
-        strengths.append("Incubacion interna en verde")
-    if not participation_ok:
-        blockers.append(
-            f"Participacion shadow {shadow_participation_pct:.1f}% < {float(thresholds['min_shadow_participation_pct']):.0f}%"
-        )
-    else:
-        strengths.append(f"Participacion shadow {shadow_participation_pct:.1f}%")
-    if not two_sided_ok:
-        blockers.append(
-            f"Dos patas shadow {shadow_two_sided_window_pct:.1f}% < {float(thresholds['min_shadow_two_sided_window_pct']):.0f}%"
-        )
-    else:
-        strengths.append(f"Dos patas shadow {shadow_two_sided_window_pct:.1f}%")
-    if not one_sided_ok:
-        blockers.append(
-            f"Ventanas cojas shadow {shadow_one_sided_window_pct:.1f}% > {float(thresholds['max_shadow_one_sided_window_pct']):.0f}%"
-        )
-    if not settlement_ok:
-        blockers.append(
-            f"Settlement shadow {shadow_settlement_window_pct:.1f}% < {float(thresholds['min_shadow_settlement_window_pct']):.0f}%"
-        )
-    else:
-        strengths.append(f"Settlement shadow {shadow_settlement_window_pct:.1f}%")
-    if not cadence_ok:
-        if cadence_ratio > 0:
-            blockers.append(
-                f"Cadencia shadow {cadence_ratio:.2f}x paper > {float(thresholds['max_shadow_vs_paper_cadence_ratio']):.1f}x"
-            )
-        else:
-            blockers.append("Cadencia insuficiente para comparar con paper")
-    else:
-        strengths.append(f"Cadencia shadow/paper {cadence_ratio:.2f}x")
-    if not blocker_ok and blocker_state_label:
-        blockers.append(
-            f"Bloqueo dominante: {blocker_state_label} {dominant_pct:.1f}% > {float(thresholds['max_shadow_blocker_pct']):.0f}%"
-        )
-    elif blocker_state_label and dominant_pct > 0:
-        strengths.append(f"Bloqueo dominante controlado: {blocker_state_label} {dominant_pct:.1f}%")
-
-    metric_scores = {
-        "sample": _ratio_score(shared_window_count, thresholds["min_shared_windows"]),
-        "participation": _ratio_score(shadow_participation_pct, thresholds["min_shadow_participation_pct"]),
-        "two_sided": _ratio_score(shadow_two_sided_window_pct, thresholds["min_shadow_two_sided_window_pct"]),
-        "one_sided": _inverse_ratio_score(shadow_one_sided_window_pct, thresholds["max_shadow_one_sided_window_pct"]),
-        "settlement": _ratio_score(shadow_settlement_window_pct, thresholds["min_shadow_settlement_window_pct"]),
-        "cadence": _inverse_ratio_score(cadence_ratio, thresholds["max_shadow_vs_paper_cadence_ratio"])
-        if cadence_ratio > 0
-        else 0.0,
-        "dominant_blocker": _inverse_ratio_score(dominant_pct, thresholds["max_shadow_blocker_pct"])
-        if blocker_state_label
-        else 1.0,
-        "drawdown": 1.0 if drawdown_ok else 0.0,
-        "incubation": 1.0 if incubation_ok else max(0.0, min(incubation_progress_pct / 100.0, 1.0)),
-    }
-    weights = {
-        "sample": 1.0,
-        "participation": 1.25,
-        "two_sided": 1.25,
-        "one_sided": 1.0,
-        "settlement": 1.0,
-        "cadence": 1.25,
-        "dominant_blocker": 1.0,
-        "drawdown": 1.5,
-        "incubation": 1.25,
-    }
-    total_weight = sum(weights.values()) or 1.0
-    weighted_score = sum(metric_scores[key] * weights[key] for key in weights)
-    readiness_score = int(round((weighted_score / total_weight) * 100))
-
-    hard_failures = [
-        not drawdown_ok,
-        not participation_ok,
-        not two_sided_ok,
-        not one_sided_ok,
-        not settlement_ok,
-        not cadence_ok,
-        not blocker_ok,
-    ]
-    if any(hard_failures):
-        status = "blocked"
-    elif not sample_ok or not incubation_ok:
-        status = "warming"
-    else:
-        status = "ready"
-
-    if status == "ready":
-        label = "GO"
-        headline = "Listo para activar live"
-    elif status == "warming":
-        label = "warming"
-        headline = "Aun falta muestra antes de live"
-    else:
-        label = "no-go"
-        headline = "Todavia no pasa el gate de live"
-
-    passed_checks = int(
-        sum(
-            1
-            for check in (
-                sample_ok,
-                participation_ok,
-                two_sided_ok,
-                one_sided_ok,
-                settlement_ok,
-                cadence_ok,
-                blocker_ok,
-                drawdown_ok,
-                incubation_ok,
-            )
-            if check
-        )
-    )
-
-    return {
-        "status": status,
-        "label": label,
-        "headline": headline,
-        "ready": status == "ready",
-        "score": readiness_score,
-        "passed_checks": passed_checks,
-        "total_checks": 9,
-        "blockers": blockers[:8],
-        "strengths": strengths[:4],
-        "thresholds": {
-            "min_shared_windows": int(thresholds["min_shared_windows"]),
-            "min_shadow_participation_pct": round(float(thresholds["min_shadow_participation_pct"]), 2),
-            "min_shadow_two_sided_window_pct": round(float(thresholds["min_shadow_two_sided_window_pct"]), 2),
-            "max_shadow_one_sided_window_pct": round(float(thresholds["max_shadow_one_sided_window_pct"]), 2),
-            "min_shadow_settlement_window_pct": round(float(thresholds["min_shadow_settlement_window_pct"]), 2),
-            "max_shadow_vs_paper_cadence_ratio": round(float(thresholds["max_shadow_vs_paper_cadence_ratio"]), 2),
-            "max_shadow_blocker_pct": round(float(thresholds["max_shadow_blocker_pct"]), 2),
-        },
-        "metrics": {
-            "shared_window_count": shared_window_count,
-            "shadow_participation_pct": round(shadow_participation_pct, 2),
-            "shadow_two_sided_window_pct": round(shadow_two_sided_window_pct, 2),
-            "shadow_one_sided_window_pct": round(shadow_one_sided_window_pct, 2),
-            "shadow_settlement_window_pct": round(shadow_settlement_window_pct, 2),
-            "paper_avg_open_cadence_seconds": round(paper_avg_open_cadence_seconds, 4),
-            "shadow_avg_open_cadence_seconds": round(shadow_avg_open_cadence_seconds, 4),
-            "cadence_ratio": round(cadence_ratio, 4),
-            "shadow_dominant_operability_state": dominant_state,
-            "shadow_dominant_operability_pct": round(dominant_pct, 2),
-            "max_drawdown": round(max_drawdown, 4),
-            "max_drawdown_limit": round(max_drawdown_limit, 4),
-            "drawdown_breached": drawdown_breached,
-            "incubation_ready_to_scale": incubation_ok,
-            "incubation_progress_pct": round(incubation_progress_pct, 2),
-        },
-    }
 
 
 def _strategy_user_intel(
@@ -1825,6 +1598,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         )
 
     experiment_payload = load_experiment_leaderboard(research_root)
+    tournament_payload = load_tournament_summary(research_root)
     dataset_payload = load_dataset_summary(research_root)
     diagnostics_payload = load_runtime_diagnostics(research_root)
     microstructure_payload = load_microstructure_snapshot(research_root)
@@ -1839,6 +1613,11 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         auto_promote=bool(strategy_incubation_auto_promote),
     )
     variant_leaderboard = _variant_leaderboard_rows(experiment_payload)
+    tournament_recommendation = (
+        tournament_payload.get("recommendation")
+        if isinstance(tournament_payload.get("recommendation"), dict)
+        else {}
+    )
     wallet_hypotheses = _wallet_hypothesis_rows(wallet_payload)
     wallet_patterns = _wallet_pattern_rows(wallet_payload)
     claimable_snapshot = _claimable_positions_snapshot(db_path.parent.parent)
@@ -2257,6 +2036,7 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
             "compare_settlement": "ejecuciones close con notes strategy_resolution:*",
             "compare_cadence": "media entre timestamps de fills open dentro de cada ventana",
             "strategy_live_readiness": "gate derivado de runtime_compare + incubacion: muestra, participacion, dos patas, settlement, cadencia, drawdown y bloqueos dominantes",
+            "strategy_variant_tournament": "ranking consolidado de variantes usando dataset/experiments + runtime_compare + incubacion para decidir si merece pasar a live",
             "strategy_user_intel": "latencia desde libro/spot/feed/decision y edge neto estimado desde expected_edge_bps + maker/taker EV + fee-rate oficial",
             "strategy_resolution_pnl_curve": "curva acumulada de pnl realizado por ventana cerrada; muestra un tramo reciente pero conserva el nivel real del total",
         },
@@ -2274,6 +2054,9 @@ def _summary_payload(db_path: Path, *, clob_host: str, execution_mode: str, live
         "strategy_variant_backtest_real_edge_bps": round(float(active_experiment.get("real_edge_bps") or 0.0), 4),
         "strategy_variant_backtest_expectancy_window": round(float(active_experiment.get("expectancy_window_usdc") or 0.0), 4),
         "strategy_variant_leaderboard": variant_leaderboard,
+        "strategy_variant_tournament_generated_at": str(tournament_payload.get("generated_at") or ""),
+        "strategy_variant_tournament": tournament_payload if isinstance(tournament_payload, dict) else {},
+        "strategy_variant_tournament_recommendation": tournament_recommendation,
         "strategy_wallet_patterns": wallet_patterns,
         "strategy_wallet_hypotheses": wallet_hypotheses,
         "runtime_diagnostics_generated_at": str(diagnostics_payload.get("generated_at") or ""),

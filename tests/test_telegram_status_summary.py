@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,6 +40,20 @@ def test_status_summary_respects_interval_and_force_send(tmp_path: Path) -> None
     db.set_bot_state("live_control_state", "paused")
     db.set_bot_state("live_control_reason", "seguimos en perdidas")
     db.set_bot_state("live_control_updated_at", "1710755400")
+    research_root = tmp_path / "research"
+    (research_root / "experiments").mkdir(parents=True, exist_ok=True)
+    (research_root / "experiments" / "tournament_summary.json").write_text(
+        json.dumps(
+            {
+                "active_variant": "arb-micro-v1",
+                "recommendation": {
+                    "label": "Mantener live pausado",
+                    "candidate_variant": "vidarx-tilted-v1",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
 
     base_now = datetime(2026, 3, 18, 10, 0, tzinfo=timezone.utc)
     today = base_now.date().isoformat()
@@ -82,6 +97,7 @@ def test_status_summary_respects_interval_and_force_send(tmp_path: Path) -> None
     assert "Resumen 30m paper" in sent_messages[0]
     assert "seguimos en perdidas" in sent_messages[0]
     assert "de momento todo lo cerrado va en perdidas" in sent_messages[0]
+    assert "Torneo: Mantener live pausado | activa arb-micro-v1 -> candidata vidarx-tilted-v1" in sent_messages[0]
 
     assert service.send_if_due(now_utc=base_now.replace(minute=10)) is False
     assert len(sent_messages) == 1

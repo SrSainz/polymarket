@@ -69,6 +69,30 @@ def test_report_includes_variant_and_incubation_summary(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    (research_root / "experiments" / "tournament_summary.json").write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-03-18T12:00:00Z",
+                "active_variant": "arb-micro-v1",
+                "recommendation": {
+                    "label": "Mantener live pausado",
+                    "summary": "Todavia falta evidencia antes de live.",
+                    "next_step": "Seguir en shadow y revisar las ventanas malas.",
+                },
+                "leaderboard": [
+                    {
+                        "variant": "arb-micro-v1",
+                        "rank": 1,
+                        "status": "pass",
+                        "pnl": 8.0,
+                        "expectancy_window_usdc": 2.0,
+                        "real_edge_bps": 12.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     (research_root / "hypotheses" / "top_wallet_patterns.json").write_text(
         json.dumps(
             {
@@ -111,6 +135,8 @@ def test_report_includes_variant_and_incubation_summary(tmp_path: Path) -> None:
     assert "btc-updown-5m-report" in content
     assert "Lista para escalar" in content
     assert "## Backtest / Experiments" in content
+    assert "## Variant Tournament" in content
+    assert "Mantener live pausado" in content
     assert "## Runtime Diagnostics" in content
     assert "Latencia del libro" in content
     assert "## Native Dataset" in content

@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
+from app.core.lab_artifacts import load_tournament_summary, research_root_from_db
 from app.db import Database
 from app.settings import BotConfig, EnvSettings
 
@@ -72,6 +73,7 @@ class TelegramDailySummaryService:
         counts = self.db.get_daily_execution_counts(today_utc)
         open_positions = len(self.db.list_copy_positions())
         exposure = self.db.get_total_exposure()
+        tournament_brief = self._tournament_brief()
 
         mode_label = "live" if self.env.live_trading and self.config.execution_mode == "live" else "paper"
         text = (
@@ -84,6 +86,8 @@ class TelegramDailySummaryService:
             f"Posiciones abiertas: {open_positions}\n"
             f"Exposicion actual: ${exposure:.2f}"
         )
+        if tournament_brief:
+            text += f"\nTorneo: {tournament_brief}"
 
         if not self._send_message(text):
             return False
@@ -143,6 +147,7 @@ class TelegramDailySummaryService:
         strategy_market = str(self.db.get_bot_state("strategy_market_title") or self.db.get_bot_state("strategy_market_slug") or "-")
         operability_label = str(self.db.get_bot_state("strategy_operability_label") or self.db.get_bot_state("strategy_last_note") or "-")
         operability_reason = str(self.db.get_bot_state("strategy_operability_reason") or "").strip()
+        tournament_brief = self._tournament_brief()
 
         lines = [
             f"Resumen {interval_minutes}m {mode_label}",
@@ -163,6 +168,8 @@ class TelegramDailySummaryService:
             f"Variante: {strategy_variant} | mercado: {strategy_market}",
             f"Estado: {operability_label}" + (f" | {operability_reason}" if operability_reason else ""),
         ]
+        if tournament_brief:
+            lines.append(f"Torneo: {tournament_brief}")
         if interval_total <= 0:
             lines.append(f"Sin operaciones nuevas en los ultimos {interval_minutes} minutos.")
         else:
@@ -206,6 +213,21 @@ class TelegramDailySummaryService:
     def _fmt_usd(self, value: float) -> str:
         sign = "+" if value > 0 else ""
         return f"{sign}${value:.2f}"
+
+    def _tournament_brief(self) -> str:
+        research_root = research_root_from_db(self.db.db_path)
+        payload = load_tournament_summary(research_root)
+        recommendation = payload.get("recommendation") if isinstance(payload.get("recommendation"), dict) else {}
+        active_variant = str(payload.get("active_variant") or "").strip() or str(self.db.get_bot_state("strategy_variant") or "-")
+        candidate_variant = str(recommendation.get("candidate_variant") or "").strip()
+        label = str(recommendation.get("label") or "").strip()
+        if not label and not candidate_variant:
+            return ""
+        if candidate_variant and candidate_variant != active_variant:
+            return f"{label} | activa {active_variant} -> candidata {candidate_variant}"
+        if candidate_variant:
+            return f"{label} | candidata {candidate_variant}"
+        return label
 
     def _send_message(self, text: str) -> bool:
         payload = {
