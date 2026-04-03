@@ -95,6 +95,7 @@ _ARB_CHEAP_SIDE_MICRO_PAIR_MAX = 1.012
 _ARB_LIVE_MICRO_PROBE_BUDGET_MAX = 3.50
 _ARB_LIVE_MICRO_PROBE_MIN_RAW_EDGE = 0.03
 _ARB_LIVE_MICRO_PROBE_MIN_NET_EDGE = 0.01
+_ARB_LIVE_MICRO_PROBE_STRONG_NET_EDGE = 0.04
 _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR = 0.58
 _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR = 0.64
 _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS = 4.0
@@ -3633,12 +3634,16 @@ class BTC5mStrategyService:
                 "captured-chainlink-live",
                 "soft-stale-captured-chainlink",
             }
+            live_probe_delta_ok = (
+                abs(delta_bps) >= _ARB_CHEAP_SIDE_MICRO_DELTA_BPS
+                or signal.net_edge >= _ARB_LIVE_MICRO_PROBE_STRONG_NET_EDGE
+            )
             live_probe_budget_cap = min(cycle_budget * 0.45, _ARB_LIVE_MICRO_PROBE_BUDGET_MAX)
             live_micro_probe_ok = (
                 live_reference_ok
                 and seconds_into_window <= _ARB_EARLY_MID_END
                 and pair_sum <= min(_ARB_CHEAP_SIDE_MICRO_PAIR_MAX, 1.010)
-                and abs(delta_bps) >= max(_ARB_CHEAP_SIDE_MICRO_DELTA_BPS, _ARB_CHEAP_SIDE_MIN_DELTA_BPS)
+                and live_probe_delta_ok
                 and signal.raw_edge >= max(_ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN, _ARB_LIVE_MICRO_PROBE_MIN_RAW_EDGE)
                 and signal.net_edge >= max(_ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN, _ARB_LIVE_MICRO_PROBE_MIN_NET_EDGE)
                 and min(single_budget, live_probe_budget_cap) >= self._arb_min_notional(signal.target)
@@ -3648,6 +3653,7 @@ class BTC5mStrategyService:
                     True,
                     "cheap-side bloqueado en live: live opera bracket-only salvo sonda minima con referencia valida, edge claro y ticket reducido",
                 )
+            return False, ""
 
         if seconds_into_window > _ARB_EARLY_MID_END:
             return True, "cheap-side bloqueado en live-like: ventana demasiado avanzada para abrir solo una pata"
@@ -3676,8 +3682,6 @@ class BTC5mStrategyService:
                 True,
                 "cheap-side bloqueado en live-like: apertura plana solo con edge fuerte, ventana temprana y presupuesto de pareja",
             )
-        if mode_text == "live" and live_micro_probe_ok:
-            return False, ""
 
         second_leg_viable, second_leg_reason = self._arb_live_like_second_leg_viability(
             signal=signal,
