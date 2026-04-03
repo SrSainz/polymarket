@@ -1616,6 +1616,73 @@ def test_live_flat_cheap_side_probe_gate_allows_tiny_probe_with_captured_chainli
     db.close()
 
 
+def test_live_flat_cheap_side_probe_gate_allows_tiny_probe_with_soft_stale_captured_chainlink(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=114.14),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(
+            strategy_entry_mode="arb_micro",
+            live_small_target_capital=97.72,
+            live_btc5m_cycle_budget_usdc=25.0,
+        ),
+        logger=logging.getLogger("test-btc5m-live-cheap-single-probe-soft-stale"),
+    )
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.72,
+        best_bid=0.71,
+        best_ask_size=300.0,
+        ask_levels=(AskLevel(price=0.72, size=300.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.27,
+        best_bid=0.26,
+        best_ask_size=300.0,
+        ask_levels=(AskLevel(price=0.27, size=300.0), AskLevel(price=0.28, size=300.0)),
+    )
+    signal = ArbSingleSideSignal(
+        target=down_outcome,
+        fair_value=0.40,
+        raw_edge=0.13,
+        net_edge=0.111,
+        edge_source="net",
+    )
+    should_block, reason = service._arb_should_block_flat_single_side_open(  # noqa: SLF001
+        mode="live",
+        reference_quality="soft-stale-captured-chainlink",
+        bracket_phase="abrir",
+        current_up_notional=0.0,
+        current_down_notional=0.0,
+        signal=signal,
+        pair_sum=0.99,
+        cycle_budget=8.75,
+        cash_balance=114.14,
+        single_budget=8.75,
+        seconds_into_window=35,
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        fair_up=0.55,
+        fair_down=0.40,
+        delta_bps=-8.0,
+    )
+
+    assert should_block is False
+    assert reason == ""
+    db.close()
+
+
 def test_live_flat_cheap_side_probe_uses_tiny_budget_when_reference_is_captured_chainlink_live(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -8449,9 +8516,10 @@ def test_arb_reference_state_live_like_accepts_soft_stale_captured_chainlink_whe
     assert shadow_state.quality == "soft-stale-captured-chainlink"
     assert "captura Chainlink" in shadow_state.note
     assert round(shadow_state.budget_scale, 2) == 0.85
-    assert live_state.comparable is False
+    assert live_state.comparable is True
     assert live_state.quality == "soft-stale-captured-chainlink"
-    assert "live exige priceToBeat oficial" in live_state.note
+    assert "presupuesto reducido" in live_state.note
+    assert round(live_state.budget_scale, 2) == 0.35
     db.close()
 
 

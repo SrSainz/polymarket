@@ -3627,7 +3627,12 @@ class BTC5mStrategyService:
             return False, ""
         if mode_text == "live":
             reference_quality_text = str(reference_quality or "").strip().lower()
-            live_reference_ok = reference_quality_text in {"official", "rest-coinbase-official", "captured-chainlink-live"}
+            live_reference_ok = reference_quality_text in {
+                "official",
+                "rest-coinbase-official",
+                "captured-chainlink-live",
+                "soft-stale-captured-chainlink",
+            }
             live_probe_budget_cap = min(cycle_budget * 0.45, _ARB_LIVE_MICRO_PROBE_BUDGET_MAX)
             live_micro_probe_ok = (
                 live_reference_ok
@@ -6517,9 +6522,13 @@ class BTC5mStrategyService:
                 if official_required_live_like and has_captured_chainlink_anchor:
                     if mode_text == "live":
                         return ArbReferenceState(
-                            comparable=False,
+                            comparable=True,
                             quality="soft-stale-captured-chainlink",
-                            note="live exige priceToBeat oficial; la captura Chainlink solo se usa para shadow",
+                            note=(
+                                f"RTDS ligeramente vieja: {age_ms}ms > {age_limit}ms; "
+                                "live usa captura Chainlink reciente con presupuesto reducido"
+                            ),
+                            budget_scale=max(min(soft_budget_scale, _ARB_LIVE_CAPTURED_CHAINLINK_BUDGET_SCALE), 0.25),
                         )
                     return ArbReferenceState(
                         comparable=True,
