@@ -1160,7 +1160,7 @@ def test_live_blocks_flat_single_side_open_in_bracket_only_mode_even_if_second_l
     db.close()
 
 
-def test_live_biased_bracket_anchors_on_strong_edge_side_when_ratio_side_is_weak(tmp_path: Path) -> None:
+def test_live_biased_bracket_skips_if_effective_skew_would_flip_primary_side(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     market = {
@@ -1252,12 +1252,7 @@ def test_live_biased_bracket_anchors_on_strong_edge_side_when_ratio_side_is_weak
         bracket_phase="abrir",
     )
 
-    assert plan is not None
-    assert plan.price_mode == "biased-bracket"
-    assert plan.trigger.label == "Down"
-    assert {instruction.outcome for instruction in plan.instructions} == {"Up", "Down"}
-    assert any(instruction.outcome == "Up" and abs(float(instruction.price) - 0.51) < 1e-9 for instruction in plan.instructions)
-    assert "pata fuerte Down" in plan.note
+    assert plan is None
     db.close()
 
 

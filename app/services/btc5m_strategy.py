@@ -118,6 +118,7 @@ _ARB_PAIR_RELAXED_SUM_MAX = 1.0
 _ARB_BIASED_BRACKET_SUM_MAX = 1.018
 _ARB_BIASED_BRACKET_NET_EDGE_MIN = 0.008
 _ARB_BIASED_BRACKET_HEDGE_TOLERANCE = -0.012
+_ARB_LIVE_BIASED_BRACKET_PRIMARY_RATIO_MAX = 0.60
 _ARB_TERMINAL_EV_MIN_PAIR = 0.0015
 _ARB_TERMINAL_EV_MIN_BRACKET = 0.0010
 _ARB_TERMINAL_EV_MIN_SINGLE = 0.0100
@@ -4032,6 +4033,10 @@ class BTC5mStrategyService:
                 shrink = min(abs(hedge_net_edge) / max(abs(hedge_tolerance), 1e-9), 1.0) * 0.65
                 hedge_ratio = max(hedge_floor, desired_hedge_ratio * (1.0 - shrink))
             primary_ratio = min(max(1.0 - hedge_ratio, 0.52), 0.88)
+            live_skew_cap_applied = False
+            if live_bracket_fallback and primary_ratio > _ARB_LIVE_BIASED_BRACKET_PRIMARY_RATIO_MAX:
+                primary_ratio = _ARB_LIVE_BIASED_BRACKET_PRIMARY_RATIO_MAX
+                live_skew_cap_applied = True
             hedge_ratio = max(1.0 - primary_ratio, hedge_floor)
             total_ratio = primary_ratio + hedge_ratio
             if total_ratio <= 0:
@@ -4145,14 +4150,25 @@ class BTC5mStrategyService:
             ordered_primary_notional = added_up_notional if ordered_primary.asset_id == up_outcome.asset_id else added_down_notional
             ordered_secondary_notional = added_down_notional if ordered_primary.asset_id == up_outcome.asset_id else added_up_notional
             ordered_primary_ratio = ordered_primary_notional / max(ordered_primary_notional + ordered_secondary_notional, 1e-9)
+            if live_bracket_fallback:
+                if ordered_primary.asset_id != primary_target.asset_id:
+                    continue
+                if ordered_primary_ratio > (_ARB_LIVE_BIASED_BRACKET_PRIMARY_RATIO_MAX + 1e-9):
+                    continue
             orientation_note = ""
             if primary_is_up != preferred_primary_is_up:
                 orientation_note = f" | bracket anclado en pata fuerte {primary_target.label}"
+            live_skew_note = ""
+            if live_skew_cap_applied:
+                live_skew_note = (
+                    f" | live skew cap {int(_ARB_LIVE_BIASED_BRACKET_PRIMARY_RATIO_MAX * 100):d}/"
+                    f"{int((1.0 - _ARB_LIVE_BIASED_BRACKET_PRIMARY_RATIO_MAX) * 100):d}"
+                )
             note = (
                 f"biased bracket {pair_sum:.3f} | net {pair_net_edge * 100:.2f}% | ev {terminal_ev_pct * 100:.2f}% | "
                 f"objetivo {self._arb_ratio_label(up_ratio=desired_up_ratio, down_ratio=max(1.0 - desired_up_ratio, 0.0))} | "
                 f"actual {self._arb_ratio_label(up_ratio=current_ratio_after, down_ratio=max(1.0 - current_ratio_after, 0.0))} | "
-                f"fase {bracket_phase}{carry_note}{orientation_note}"
+                f"fase {bracket_phase}{carry_note}{orientation_note}{live_skew_note}"
             )
             if spot_context is not None:
                 note += f" | delta {spot_context.delta_bps:+.1f}bps"
