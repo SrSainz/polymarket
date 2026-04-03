@@ -70,6 +70,23 @@ def test_clear_runtime_ledger_deletes_positions_and_arms_live(tmp_path: Path) ->
     db.close()
 
 
+def test_clear_runtime_ledger_preserves_trade_dedupe_markers(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    db.set_bot_state("live_processed_trade:order-1:trade-1", "1")
+    db.set_bot_state("live_imported_activity:tx-1:asset-up:buy:1:1.00000000:0.25000000", "1")
+    db.set_bot_state("live_imported_closed_position:slug-1:asset-up:1:0.00000000:1.00000000", "1")
+    db.set_bot_state("live_observed_activity:order-1:trade-1", "{\"asset\":\"asset-up\"}")
+
+    _clear_runtime_ledger(db)
+
+    assert db.get_bot_state("live_processed_trade:order-1:trade-1") == "1"
+    assert db.get_bot_state("live_imported_activity:tx-1:asset-up:buy:1:1.00000000:0.25000000") == "1"
+    assert db.get_bot_state("live_imported_closed_position:slug-1:asset-up:1:0.00000000:1.00000000") == "1"
+    assert db.get_bot_state("live_observed_activity:order-1:trade-1") is None
+    db.close()
+
+
 def test_clear_runtime_ledger_ignores_dead_pid_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
