@@ -9,6 +9,8 @@ from app.db import Database
 from app.models import CopyInstruction, SignalAction, TradeSide
 from app.polymarket.activity_client import ActivityClient
 
+_LEDGER_DUST_NOTIONAL_USDC = 0.05
+
 
 class LiveWalletSyncService:
     def __init__(self, db: Database, activity_client: ActivityClient) -> None:
@@ -99,8 +101,10 @@ class LiveWalletSyncService:
             else:
                 closed_skipped += 1
 
+        self._prune_ledger_dust_positions()
         positions = self._fetch_positions(wallet=safe_wallet, page_limit=page_limit, max_pages=max_pages)
         mismatch_reason = self._positions_mismatch_reason(positions=positions)
+        material_positions = self._material_ledger_positions()
         now_ts = int(time.time())
         if mismatch_reason:
             self.db.set_bot_state("position_ledger_mode", "external")
@@ -109,9 +113,10 @@ class LiveWalletSyncService:
             self.db.set_bot_state("live_wallet_sync_reason", mismatch_reason)
         else:
             self.db.set_bot_state("position_ledger_preflight", "ready")
-            self.db.set_bot_state("position_ledger_mode", safe_mode if self.db.list_copy_positions() else "")
+            self.db.set_bot_state("position_ledger_mode", safe_mode if material_positions else "")
             self.db.set_bot_state("live_wallet_sync_status", "ok")
             self.db.set_bot_state("live_wallet_sync_reason", "")
+            self.db.delete_bot_state_by_prefix("live_observed_activity:")
         self.db.set_bot_state("live_wallet_sync_wallet", safe_wallet)
         self.db.set_bot_state("live_wallet_sync_at", str(now_ts))
         self.db.set_bot_state("live_wallet_sync_imported", str(imported))
@@ -300,12 +305,11 @@ class LiveWalletSyncService:
         wallet_positions = {
             str(item.get("asset") or "").strip(): max(_safe_float(item.get("size")), 0.0)
             for item in positions
-            if str(item.get("asset") or "").strip() and max(_safe_float(item.get("size")), 0.0) > 1e-6
+            if self._is_material_wallet_position(item)
         }
         ledger_positions = {
             str(row["asset"] or "").strip(): max(float(row["size"] or 0.0), 0.0)
-            for row in self.db.list_copy_positions()
-            if str(row["asset"] or "").strip() and max(float(row["size"] or 0.0), 0.0) > 1e-6
+            for row in self._material_ledger_positions()
         }
         if set(wallet_positions) != set(ledger_positions):
             return "wallet snapshot mismatch: assets difieren respecto al ledger"
@@ -314,6 +318,48 @@ class LiveWalletSyncService:
             if abs(wallet_size - ledger_size) > 1e-4:
                 return f"wallet snapshot mismatch: size distinta para {asset}"
         return ""
+
+    def _material_ledger_positions(self) -> list[Any]:
+        return [row for row in self.db.list_copy_positions() if self._is_material_ledger_position(row)]
+
+    def _prune_ledger_dust_positions(self) -> None:
+        for row in self.db.list_copy_positions():
+            if self._is_material_ledger_position(row):
+                continue
+            asset = str(row["asset"] or "").strip()
+            if asset:
+                self.db.delete_copy_position(asset)
+
+    def _is_material_wallet_position(self, item: dict[str, Any]) -> bool:
+        asset = str(item.get("asset") or "").strip()
+        size = max(_safe_float(item.get("size")), 0.0)
+        if not asset or size <= 1e-6:
+            return False
+        if bool(item.get("redeemable")):
+            return False
+        notional = self._wallet_position_notional(item)
+        return notional > _LEDGER_DUST_NOTIONAL_USDC
+
+    def _wallet_position_notional(self, item: dict[str, Any]) -> float:
+        current_value = max(_safe_float(item.get("currentValue")), 0.0)
+        if current_value > 0:
+            return current_value
+        initial_value = max(_safe_float(item.get("initialValue")), 0.0)
+        if initial_value > 0:
+            return initial_value
+        size = max(_safe_float(item.get("size")), 0.0)
+        cur_price = max(_safe_float(item.get("curPrice")), 0.0)
+        if size > 0 and cur_price > 0:
+            return size * cur_price
+        return size
+
+    def _is_material_ledger_position(self, row: Any) -> bool:
+        asset = str(row["asset"] or "").strip()
+        size = max(float(row["size"] or 0.0), 0.0)
+        avg_price = max(float(row["avg_price"] or 0.0), 0.0)
+        if not asset or size <= 1e-6:
+            return False
+        return (size * avg_price) > _LEDGER_DUST_NOTIONAL_USDC
 
     def _activity_sync_key(self, trade: dict[str, Any]) -> str:
         transaction_hash = str(trade.get("transactionHash") or "external").strip() or "external"

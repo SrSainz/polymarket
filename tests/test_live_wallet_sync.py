@@ -150,6 +150,73 @@ def test_live_wallet_sync_blocks_when_wallet_positions_do_not_match_ledger(tmp_p
     db.close()
 
 
+def test_live_wallet_sync_ignores_redeemable_positions_in_preflight(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot_live.db")
+    db.init_schema()
+    service = LiveWalletSyncService(
+        db,
+        _FakeActivityClient(
+            activity=[],
+            positions=[
+                {
+                    "asset": "asset-redeemable",
+                    "size": 6.78328,
+                    "curPrice": 0,
+                    "currentValue": 0,
+                    "redeemable": True,
+                    "slug": "btc-updown-5m-claimable",
+                    "title": "Bitcoin Up or Down - Claimable",
+                    "outcome": "Up",
+                }
+            ],
+            closed_positions=[],
+        ),
+    )
+
+    result = service.sync(wallet="0xabc", mode="live")
+
+    assert result["ok"] is True
+    assert db.get_bot_state("position_ledger_preflight") == "ready"
+    db.close()
+
+
+def test_live_wallet_sync_prunes_ledger_dust_before_mismatch(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot_live.db")
+    db.init_schema()
+    db.upsert_copy_position(
+        asset="asset-dust",
+        condition_id="cond-dust",
+        size=0.009,
+        avg_price=0.4,
+        realized_pnl=0.0,
+        title="Bitcoin Up or Down - Dust",
+        slug="btc-updown-5m-dust",
+        outcome="Down",
+        category="crypto",
+    )
+    service = LiveWalletSyncService(db, _FakeActivityClient(activity=[], positions=[], closed_positions=[]))
+
+    result = service.sync(wallet="0xabc", mode="live")
+
+    assert result["ok"] is True
+    assert db.list_copy_positions() == []
+    assert db.get_bot_state("position_ledger_preflight") == "ready"
+    db.close()
+
+
+def test_live_wallet_sync_clears_observed_activity_once_ledger_is_ready(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot_live.db")
+    db.init_schema()
+    db.set_bot_state("live_observed_activity:tx-1", "{\"asset\":\"asset-1\"}")
+    service = LiveWalletSyncService(db, _FakeActivityClient(activity=[], positions=[], closed_positions=[]))
+
+    result = service.sync(wallet="0xabc", mode="live")
+
+    assert result["ok"] is True
+    assert db.list_bot_state_by_prefix("live_observed_activity:") == []
+    db.close()
+
+
 def test_live_wallet_sync_closes_resolved_position_from_closed_positions(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot_live.db")
     db.init_schema()
