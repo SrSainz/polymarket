@@ -180,6 +180,57 @@ def test_live_wallet_sync_ignores_redeemable_positions_in_preflight(tmp_path: Pa
     db.close()
 
 
+def test_live_wallet_sync_closes_redeemable_position_from_positions_snapshot(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot_live.db")
+    db.init_schema()
+    service = LiveWalletSyncService(
+        db,
+        _FakeActivityClient(
+            activity=[
+                {
+                    "timestamp": 1775001200,
+                    "transactionHash": "tx-buy",
+                    "conditionId": "cond-redeemable",
+                    "type": "TRADE",
+                    "size": 6.78328,
+                    "usdcSize": 3.8664696,
+                    "price": 0.57,
+                    "asset": "asset-redeemable-open",
+                    "side": "BUY",
+                    "title": "Bitcoin Up or Down - Redeemable",
+                    "slug": "btc-updown-5m-redeemable",
+                    "outcome": "Up",
+                }
+            ],
+            positions=[
+                {
+                    "asset": "asset-redeemable-open",
+                    "conditionId": "cond-redeemable",
+                    "size": 6.78328,
+                    "curPrice": 0,
+                    "currentValue": 0,
+                    "cashPnl": -3.8664696,
+                    "redeemable": True,
+                    "slug": "btc-updown-5m-redeemable",
+                    "title": "Bitcoin Up or Down - Redeemable",
+                    "outcome": "Up",
+                }
+            ],
+            closed_positions=[],
+        ),
+    )
+
+    result = service.sync(wallet="0xabc", mode="live")
+    executions = db.get_recent_executions(limit=10)
+
+    assert result["ok"] is True
+    assert result["closed_imported"] == 1
+    assert db.list_copy_positions() == []
+    assert executions[0]["side"] == "sell"
+    assert executions[0]["price"] == 0.0
+    db.close()
+
+
 def test_live_wallet_sync_prunes_ledger_dust_before_mismatch(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot_live.db")
     db.init_schema()

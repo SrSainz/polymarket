@@ -101,8 +101,15 @@ class LiveWalletSyncService:
             else:
                 closed_skipped += 1
 
-        self._prune_ledger_dust_positions()
         positions = self._fetch_positions(wallet=safe_wallet, page_limit=page_limit, max_pages=max_pages)
+        redeemable_imported, redeemable_skipped = self._import_redeemable_positions(
+            positions=positions,
+            wallet=safe_wallet,
+            mode=safe_mode,
+        )
+        closed_imported += redeemable_imported
+        closed_skipped += redeemable_skipped
+        self._prune_ledger_dust_positions()
         mismatch_reason = self._positions_mismatch_reason(positions=positions)
         material_positions = self._material_ledger_positions()
         now_ts = int(time.time())
@@ -318,6 +325,79 @@ class LiveWalletSyncService:
             if abs(wallet_size - ledger_size) > 1e-4:
                 return f"wallet snapshot mismatch: size distinta para {asset}"
         return ""
+
+    def _import_redeemable_positions(
+        self,
+        *,
+        positions: list[dict[str, Any]],
+        wallet: str,
+        mode: str,
+    ) -> tuple[int, int]:
+        imported = 0
+        skipped = 0
+        for item in positions:
+            if not bool(item.get("redeemable")):
+                continue
+            if self._import_redeemable_position(position=item, wallet=wallet, mode=mode) == "imported":
+                imported += 1
+            else:
+                skipped += 1
+        return imported, skipped
+
+    def _import_redeemable_position(self, *, position: dict[str, Any], wallet: str, mode: str) -> str:
+        asset = str(position.get("asset") or "").strip()
+        existing = self.db.get_copy_position(asset)
+        if existing is None:
+            return "skipped"
+
+        size = max(float(existing["size"] or 0.0), 0.0)
+        if size <= 1e-9:
+            return "skipped"
+
+        current_value = max(_safe_float(position.get("currentValue")), 0.0)
+        cur_price = max(_safe_float(position.get("curPrice")), 0.0)
+        settlement_price = cur_price if cur_price > 0 else (current_value / size if current_value > 0 and size > 0 else 0.0)
+        ts = int(_safe_float(position.get("timestamp"))) or int(time.time())
+        condition_id = str(position.get("conditionId") or existing["condition_id"] or "").strip()
+        if not asset or not condition_id or ts <= 0:
+            return "skipped"
+
+        instruction = CopyInstruction(
+            action=SignalAction.CLOSE,
+            side=TradeSide.SELL,
+            asset=asset,
+            condition_id=condition_id,
+            size=size,
+            price=settlement_price,
+            notional=size * settlement_price,
+            source_wallet=f"wallet-redeemable:{wallet}",
+            source_signal_id=0,
+            title=str(position.get("title") or existing["title"] or position.get("slug") or ""),
+            slug=str(position.get("slug") or position.get("eventSlug") or existing["slug"] or ""),
+            outcome=str(position.get("outcome") or existing["outcome"] or ""),
+            category=str(position.get("category") or existing["category"] or "crypto"),
+            reason=(
+                "wallet_redeemable_position_import:"
+                f"{str(position.get('slug') or position.get('eventSlug') or asset).strip()}"
+            ),
+        )
+        result = apply_fill_to_database(
+            db=self.db,
+            instruction=instruction,
+            mode=mode,
+            filled_size=size,
+            fill_price=settlement_price,
+            fill_notional=size * settlement_price,
+            fee_paid=0.0,
+            message=json.dumps(position, separators=(",", ":"), sort_keys=True),
+            status="filled",
+            notes=(
+                "wallet_redeemable_position_import "
+                f"cash_pnl={_safe_float(position.get('cashPnl')):.6f}"
+            ),
+            execution_ts=ts,
+        )
+        return "imported" if result.status == "filled" else "skipped"
 
     def _material_ledger_positions(self) -> list[Any]:
         return [row for row in self.db.list_copy_positions() if self._is_material_ledger_position(row)]
