@@ -8101,7 +8101,7 @@ def test_arb_reference_state_live_like_can_allow_soft_stale_rtds_when_official_g
     db.close()
 
 
-def test_arb_reference_state_live_blocks_captured_chainlink_when_official_missing(tmp_path: Path) -> None:
+def test_arb_reference_state_live_allows_fresh_captured_chainlink_with_reduced_budget_when_official_missing(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     service = BTC5mStrategyService(
@@ -8137,9 +8137,10 @@ def test_arb_reference_state_live_blocks_captured_chainlink_when_official_missin
         anchor_source="polymarket-chainlink",
     )
 
-    assert live_state.comparable is False
-    assert live_state.quality == "captured-chainlink"
-    assert "live exige priceToBeat oficial" in live_state.note
+    assert live_state.comparable is True
+    assert live_state.quality == "captured-chainlink-live"
+    assert "presupuesto reducido" in live_state.note
+    assert round(live_state.budget_scale, 2) == 0.35
     assert shadow_state.comparable is True
     assert shadow_state.quality == "captured-chainlink"
     db.close()

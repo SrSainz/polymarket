@@ -119,6 +119,7 @@ _ARB_BIASED_BRACKET_SUM_MAX = 1.018
 _ARB_BIASED_BRACKET_NET_EDGE_MIN = 0.008
 _ARB_BIASED_BRACKET_HEDGE_TOLERANCE = -0.012
 _ARB_LIVE_BIASED_BRACKET_PRIMARY_RATIO_MAX = 0.60
+_ARB_LIVE_CAPTURED_CHAINLINK_BUDGET_SCALE = 0.35
 _ARB_TERMINAL_EV_MIN_PAIR = 0.0015
 _ARB_TERMINAL_EV_MIN_BRACKET = 0.0010
 _ARB_TERMINAL_EV_MIN_SINGLE = 0.0100
@@ -6518,9 +6519,10 @@ class BTC5mStrategyService:
             if has_captured_chainlink_anchor:
                 if mode_text == "live":
                     return ArbReferenceState(
-                        comparable=False,
-                        quality="captured-chainlink",
-                        note="live exige priceToBeat oficial; la captura Chainlink solo se usa para shadow",
+                        comparable=True,
+                        quality="captured-chainlink-live",
+                        note="sin priceToBeat oficial; live usa captura Chainlink fresca con presupuesto reducido",
+                        budget_scale=_ARB_LIVE_CAPTURED_CHAINLINK_BUDGET_SCALE,
                     )
                 return ArbReferenceState(
                     comparable=True,
