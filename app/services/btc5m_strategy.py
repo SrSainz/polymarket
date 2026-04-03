@@ -7013,6 +7013,31 @@ class BTC5mStrategyService:
             or ""
         ).strip()
         status = str(payload.get("status") or payload.get("trade_status") or payload.get("state") or "").strip().lower()
+        order_ids = self._live_user_payload_order_ids(payload)
+        size = _safe_float(
+            payload.get("matched_amount")
+            or payload.get("size_matched")
+            or payload.get("filled_size")
+            or payload.get("filledSize")
+            or payload.get("size")
+        )
+        price = _safe_float(payload.get("price") or payload.get("avg_price") or payload.get("average_price"))
+        row_template = {
+            "trade_id": trade_id,
+            "size": size,
+            "price": price,
+            "status": status,
+            "asset": str(payload.get("asset_id") or payload.get("asset") or payload.get("token_id") or "").strip(),
+            "side": str(payload.get("side") or payload.get("aggressor_side") or payload.get("taker_side") or "").strip().lower(),
+            "condition_id": str(payload.get("condition_id") or payload.get("market") or "").strip(),
+            "slug": str(payload.get("slug") or "").strip(),
+            "title": str(payload.get("title") or payload.get("question") or "").strip(),
+            "outcome": str(payload.get("outcome") or "").strip(),
+            "timestamp": int(_safe_float(payload.get("timestamp") or payload.get("match_time") or payload.get("created_at"))),
+        }
+        if order_ids:
+            return [{"order_id": order_id, **row_template} for order_id in order_ids]
+
         rows: list[dict[str, object]] = []
         maker_orders = payload.get("maker_orders")
         if isinstance(maker_orders, list):
@@ -7063,28 +7088,6 @@ class BTC5mStrategyService:
                 )
         if rows:
             return rows
-        order_ids = self._live_user_payload_order_ids(payload)
-        size = _safe_float(
-            payload.get("matched_amount")
-            or payload.get("size_matched")
-            or payload.get("filled_size")
-            or payload.get("filledSize")
-            or payload.get("size")
-        )
-        price = _safe_float(payload.get("price") or payload.get("avg_price") or payload.get("average_price"))
-        row_template = {
-            "trade_id": trade_id,
-            "size": size,
-            "price": price,
-            "status": status,
-            "asset": str(payload.get("asset_id") or payload.get("asset") or payload.get("token_id") or "").strip(),
-            "side": str(payload.get("side") or payload.get("aggressor_side") or payload.get("taker_side") or "").strip().lower(),
-            "condition_id": str(payload.get("condition_id") or payload.get("market") or "").strip(),
-            "slug": str(payload.get("slug") or "").strip(),
-            "title": str(payload.get("title") or payload.get("question") or "").strip(),
-            "outcome": str(payload.get("outcome") or "").strip(),
-            "timestamp": int(_safe_float(payload.get("timestamp") or payload.get("match_time") or payload.get("created_at"))),
-        }
         if not order_ids:
             return [{"order_id": "", **row_template}]
         return [{"order_id": order_id, **row_template} for order_id in order_ids]

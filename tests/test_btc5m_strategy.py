@@ -715,6 +715,110 @@ def test_live_user_trade_reconciliation_from_user_feed_thread_updates_position(t
     db.close()
 
 
+def test_live_user_trade_reconciliation_prefers_taker_order_id_over_maker_rows(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    market = {
+        "question": "Bitcoin Up or Down - Taker Feed",
+        "slug": "btc-updown-5m-taker-feed",
+        "conditionId": "cond-taker",
+        "closed": False,
+        "acceptingOrders": True,
+        "outcomes": "[\"Up\", \"Down\"]",
+        "clobTokenIds": "[\"asset-up\", \"asset-down\"]",
+        "events": [{"startTime": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}],
+    }
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient(market),
+        _FakeCLOBClient(
+            books={
+                "asset-up": {"asks": [{"price": 0.37, "size": 50}], "bids": [{"price": 0.36, "size": 50}]},
+                "asset-down": {"asks": [{"price": 0.63, "size": 50}], "bids": [{"price": 0.62, "size": 50}]},
+            }
+        ),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro"),
+        logger=logging.getLogger("test-btc5m-live-taker-reconcile"),
+    )
+    db.set_bot_state(
+        "live_pending_order:order-taker",
+        json.dumps(
+            {
+                "order_id": "order-taker",
+                "action": "open",
+                "side": "buy",
+                "asset": "asset-up",
+                "condition_id": "cond-taker",
+                "size": 5.0,
+                "price": 0.37,
+                "notional": 1.85,
+                "source_wallet": "strategy:test",
+                "source_signal_id": 1,
+                "title": "Bitcoin Up or Down - Taker Feed",
+                "slug": "btc-updown-5m-taker-feed",
+                "outcome": "Up",
+                "category": "crypto",
+                "reason": "pending-live-order",
+                "execution_profile": "taker_fak",
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+    service._handle_user_payload(  # noqa: SLF001
+        {
+            "event_type": "trade",
+            "status": "MATCHED",
+            "id": "trade-taker",
+            "taker_order_id": "order-taker",
+            "asset_id": "asset-up",
+            "condition_id": "cond-taker",
+            "slug": "btc-updown-5m-taker-feed",
+            "question": "Bitcoin Up or Down - Taker Feed",
+            "outcome": "Up",
+            "side": "BUY",
+            "matched_amount": "5",
+            "price": "0.37",
+            "maker_orders": [
+                {
+                    "order_id": "maker-1",
+                    "matched_amount": "4.09842",
+                    "price": "0.6200001463978801",
+                    "asset_id": "asset-down",
+                    "outcome": "Down",
+                },
+                {
+                    "order_id": "maker-2",
+                    "matched_amount": "0.77",
+                    "price": "0.62",
+                    "asset_id": "asset-down",
+                    "outcome": "Down",
+                },
+            ],
+        }
+    )
+
+    position = db.get_copy_position("asset-up")
+    executions = db.get_recent_executions(limit=5)
+    observed = db.list_bot_state_by_prefix("live_observed_activity:")
+
+    assert position is not None
+    assert float(position["size"]) == 5.0
+    assert abs(float(position["avg_price"]) - 0.37) < 1e-9
+    assert executions[0]["mode"] == "live"
+    assert "live_user_feed_reconciled" in str(executions[0]["notes"])
+    assert db.get_bot_state("live_pending_order:order-taker") is None
+    assert observed == []
+    db.close()
+
+
 def test_live_order_update_does_not_drop_pending_before_trade_reconciliation(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
