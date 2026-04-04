@@ -103,6 +103,8 @@ class StrategyEngine:
         self.min_maker_edge_bps = float(min_maker_edge_bps)
 
     def evaluate(self, frame: FeatureFrame, *, blockers: tuple[str, ...]) -> DecisionTrace:
+        max_spread_ticks = max(frame.spread_ticks_up, frame.spread_ticks_down)
+        max_spread_bps = max(frame.spread_bps_up, frame.spread_bps_down)
         directional_score = (
             (frame.paired_ofi_z * 4.0)
             + (frame.paired_cvd / 50.0)
@@ -124,7 +126,14 @@ class StrategyEngine:
         blocked = list(blockers)
         if frame.readiness_score < 45:
             blocked.append("readiness")
-        if maker_ev_bps >= self.min_maker_edge_bps and maker_ev_bps > taker_ev_bps and frame.seconds_left > 30:
+        maker_threshold = self.min_maker_edge_bps
+        if frame.readiness_score >= 25 and frame.seconds_left > 45:
+            maker_threshold = min(maker_threshold, 3.0)
+        if max_spread_ticks <= 2:
+            maker_threshold = min(maker_threshold, 2.5)
+        if max_spread_ticks > 4 or max_spread_bps > 3500 or frame.seconds_left <= 30:
+            maker_threshold = self.min_maker_edge_bps
+        if maker_ev_bps >= maker_threshold and maker_ev_bps > taker_ev_bps and frame.seconds_left > 30:
             selected_execution = "maker_post_only_gtc"
         elif taker_ev_bps >= self.min_taker_edge_bps and frame.seconds_left > 15:
             selected_execution = "taker_fak"

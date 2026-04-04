@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
@@ -305,8 +306,8 @@ def test_execute_instruction_uses_latest_microstructure_execution_profile_for_li
     )
 
     assert live_broker.instructions
-    assert live_broker.instructions[0].execution_profile == "taker_fak"
-    assert "live_maker_disabled:maker_post_only_gtc->taker_fak" in live_broker.instructions[0].reason
+    assert live_broker.instructions[0].execution_profile == "maker_post_only_gtc"
+    assert "live_maker_disabled" not in str(live_broker.instructions[0].reason or "")
     db.close()
 
 
@@ -1156,6 +1157,50 @@ def test_live_position_ledger_preflight_ignores_observed_activity_older_than_suc
     db.close()
 
 
+def test_live_position_ledger_preflight_ignores_old_observed_activity_after_sync_when_ledger_is_flat(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=1000.0),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_preflight_require_clean_ledger=True),
+        logger=logging.getLogger("test-btc5m-live-ledger-preflight-autoclear-observed"),
+    )
+    observed_at = int((time.time() - 601) * 1000)
+    db.set_bot_state("live_wallet_sync_status", "ok")
+    db.set_bot_state("live_wallet_sync_at", str(int(time.time()) - 900))
+    db.set_bot_state(
+        "live_observed_activity:manual-order:trade-old",
+        json.dumps(
+            {
+                "order_id": "manual-order",
+                "trade_id": "trade-old",
+                "asset": "asset-up",
+                "condition_id": "cond-1",
+                "observed_at": observed_at,
+                "slug": "btc-updown-5m-old-window",
+                "observed_live_activity": True,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+
+    allowed, note = service._position_ledger_can_run(mode="live")  # noqa: SLF001
+
+    assert allowed is True
+    assert note == ""
+    assert db.list_bot_state_by_prefix("live_observed_activity:") == []
+    db.close()
+
+
 def test_cleanup_stale_pending_live_orders_removes_expired_window_and_keeps_current(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -1226,7 +1271,7 @@ def test_cleanup_stale_pending_live_orders_removes_expired_window_and_keeps_curr
     db.close()
 
 
-def test_live_blocks_flat_single_side_open_in_bracket_only_mode_even_if_second_leg_is_not_viable(tmp_path: Path) -> None:
+def test_live_allows_flat_single_side_probe_when_reference_is_valid_even_if_second_leg_is_not_viable(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     market = {
@@ -1285,6 +1330,7 @@ def test_live_blocks_flat_single_side_open_in_bracket_only_mode_even_if_second_l
 
     blocked, reason = service._arb_should_block_flat_single_side_open(  # noqa: SLF001
         mode="live",
+        reference_quality="official",
         bracket_phase="abrir",
         current_up_notional=0.0,
         current_down_notional=0.0,
@@ -1301,8 +1347,8 @@ def test_live_blocks_flat_single_side_open_in_bracket_only_mode_even_if_second_l
         delta_bps=-7.4,
     )
 
-    assert blocked is True
-    assert "live opera bracket-only" in reason
+    assert blocked is False
+    assert reason == ""
     db.close()
 
 
@@ -1498,7 +1544,7 @@ def test_live_biased_bracket_does_not_anchor_countertrend_when_spot_is_strongly_
     db.close()
 
 
-def test_live_blocks_flat_cheap_side_open_in_bracket_only_mode(tmp_path: Path) -> None:
+def test_live_allows_flat_cheap_side_probe_with_official_reference_when_edge_is_strong(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
     service = BTC5mStrategyService(
@@ -1544,6 +1590,7 @@ def test_live_blocks_flat_cheap_side_open_in_bracket_only_mode(tmp_path: Path) -
 
     blocked, reason = service._arb_should_block_flat_single_side_open(  # noqa: SLF001
         mode="live",
+        reference_quality="official",
         bracket_phase="abrir",
         current_up_notional=0.0,
         current_down_notional=0.0,
@@ -1560,8 +1607,8 @@ def test_live_blocks_flat_cheap_side_open_in_bracket_only_mode(tmp_path: Path) -
         delta_bps=-14.0,
     )
 
-    assert blocked is True
-    assert "live opera bracket-only" in reason
+    assert blocked is False
+    assert reason == ""
     db.close()
 
 
@@ -2219,6 +2266,73 @@ def test_live_countertrend_cheap_side_is_blocked_when_spot_points_up(tmp_path: P
     db.close()
 
 
+def test_live_countertrend_cheap_side_is_blocked_when_spot_softly_points_down(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=114.14),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=97.72),
+        logger=logging.getLogger("test-btc5m-live-countertrend-cheap-side-soft-down"),
+    )
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.27,
+        best_bid=0.26,
+        best_ask_size=200.0,
+        ask_levels=(AskLevel(price=0.27, size=200.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.76,
+        best_bid=0.75,
+        best_ask_size=200.0,
+        ask_levels=(AskLevel(price=0.76, size=200.0),),
+    )
+    spot_context = ArbSpotContext(
+        current_price=66810.0,
+        reference_price=66816.0,
+        lead_price=66810.0,
+        anchor_price=66816.0,
+        local_anchor_price=66816.0,
+        official_price_to_beat=66816.0,
+        anchor_source="captured-chainlink",
+        fair_up=0.43,
+        fair_down=0.57,
+        delta_bps=-0.9,
+        price_mode="captured-chainlink",
+        source="polymarket-rtds+binance",
+        age_ms=1,
+        binance_price=66810.0,
+        chainlink_price=66810.0,
+        captured_price_to_beat=66816.0,
+        effective_price_to_beat=66816.0,
+        effective_price_source="captured-chainlink",
+    )
+
+    signal = service._select_cheap_side_target(  # noqa: SLF001
+        mode="live",
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        pair_sum=1.03,
+        spot_context=spot_context,
+        desired_up_ratio=0.75,
+        current_up_ratio=0.50,
+    )
+
+    assert signal is None
+    db.close()
+
+
 def test_live_does_not_expand_same_single_leg_inventory_with_cheap_side(tmp_path: Path) -> None:
     db = Database(tmp_path / "bot.db")
     db.init_schema()
@@ -2736,6 +2850,7 @@ def test_live_blocks_micro_probe_flat_cheap_side_open_in_bracket_only_mode(tmp_p
 
     blocked, reason = service._arb_should_block_flat_single_side_open(  # noqa: SLF001
         mode="live",
+        reference_quality="captured-chainlink-live",
         bracket_phase="abrir",
         current_up_notional=0.0,
         current_down_notional=0.0,
@@ -8169,7 +8284,7 @@ def test_arb_micro_shadow_allows_degraded_reference_with_reduced_budget(tmp_path
     assert stats["filled"] >= 2
     assert not shadow_broker.instructions
     assert db.get_bot_state("strategy_reference_comparable") == "1"
-    assert db.get_bot_state("strategy_reference_quality") == "shadow-fallback"
+    assert db.get_bot_state("strategy_reference_quality") == "rest-coinbase-official"
     assert round(float(db.get_bot_state("strategy_cycle_budget") or 0.0), 2) >= 12.40
     assert "realism gate" not in str(db.get_bot_state("strategy_last_note") or "")
     assert db.list_copy_positions()

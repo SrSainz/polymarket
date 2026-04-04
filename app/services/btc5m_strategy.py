@@ -97,8 +97,11 @@ _ARB_LIVE_MICRO_PROBE_MIN_RAW_EDGE = 0.03
 _ARB_LIVE_MICRO_PROBE_MIN_NET_EDGE = 0.01
 _ARB_LIVE_MICRO_PROBE_STRONG_NET_EDGE = 0.04
 _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR = 0.58
+_ARB_LIVE_COUNTERTREND_CHEAP_SIDE_SOFT_FAIR = 0.55
 _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR = 0.64
 _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS = 4.0
+_ARB_LIVE_COUNTERTREND_BIASED_BRACKET_SOFT_FAIR = 0.58
+_ARB_LIVE_COUNTERTREND_BIASED_BRACKET_SOFT_DELTA_BPS = 1.5
 _ARB_CHEAP_SIDE_OVERROUND_DRAG_WEIGHT = 0.65
 _ARB_CHEAP_SIDE_SPREAD_DRAG_WEIGHT = 0.35
 _ARB_CHEAP_SIDE_FEE_ESTIMATE = 0.0025
@@ -171,6 +174,7 @@ _ARB_MAX_PLAN_INSTRUCTIONS = 72
 _ARB_NO_NEW_ENTRY_SECONDS_REMAINING = 25
 _LIVE_PENDING_ORDER_CONFIRMATION_GRACE_SECONDS = 90
 _LIVE_PENDING_ORDER_WINDOW_CLOSE_GRACE_SECONDS = 30
+_LIVE_OBSERVED_ACTIVITY_AUTO_CLEAR_SECONDS = 300
 _ARB_LATE_DIRECTIONAL_SECONDS_REMAINING = 90
 _ARB_LATE_DIRECTIONAL_MAX_SPOT_AGE_MS = 600
 _ARB_LATE_DIRECTIONAL_MIN_DELTA_BPS = 5.0
@@ -3350,13 +3354,25 @@ class BTC5mStrategyService:
         label = str(target.label or "").strip().lower()
         if label == "down":
             return (
-                spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
-                and spot_context.fair_up >= _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR
+                (
+                    spot_context.delta_bps >= _ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                    and spot_context.fair_up >= _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR
+                )
+                or (
+                    spot_context.delta_bps >= _ARB_CHEAP_SIDE_SOFT_DELTA_BPS
+                    and spot_context.fair_up >= _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_SOFT_FAIR
+                )
             )
         if label == "up":
             return (
-                spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
-                and spot_context.fair_down >= _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR
+                (
+                    spot_context.delta_bps <= -_ARB_CHEAP_SIDE_MIN_DELTA_BPS
+                    and spot_context.fair_down >= _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR
+                )
+                or (
+                    spot_context.delta_bps <= -_ARB_CHEAP_SIDE_SOFT_DELTA_BPS
+                    and spot_context.fair_down >= _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_SOFT_FAIR
+                )
             )
         return False
 
@@ -3374,14 +3390,30 @@ class BTC5mStrategyService:
         if label == "down":
             return (
                 desired_up_ratio >= 0.5
-                and spot_context.delta_bps >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS
-                and spot_context.fair_up >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR
+                and (
+                    (
+                        spot_context.delta_bps >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS
+                        and spot_context.fair_up >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR
+                    )
+                    or (
+                        spot_context.delta_bps >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_SOFT_DELTA_BPS
+                        and spot_context.fair_up >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_SOFT_FAIR
+                    )
+                )
             )
         if label == "up":
             return (
                 desired_up_ratio <= 0.5
-                and spot_context.delta_bps <= -_ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS
-                and spot_context.fair_down >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR
+                and (
+                    (
+                        spot_context.delta_bps <= -_ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_DELTA_BPS
+                        and spot_context.fair_down >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR
+                    )
+                    or (
+                        spot_context.delta_bps <= -_ARB_LIVE_COUNTERTREND_BIASED_BRACKET_SOFT_DELTA_BPS
+                        and spot_context.fair_down >= _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_SOFT_FAIR
+                    )
+                )
             )
         return False
 
@@ -7150,6 +7182,9 @@ class BTC5mStrategyService:
             sync_at_ms = int(str(self.db.get_bot_state("live_wallet_sync_at") or "0")) * 1000
         except ValueError:
             sync_at_ms = 0
+        now_ms = int(time.time() * 1000)
+        has_positions = bool(self.db.list_copy_positions())
+        has_pending_orders = bool(self._pending_live_orders())
         stale_keys: list[str] = []
         for row in self.db.list_bot_state_by_prefix("live_observed_activity:"):
             try:
@@ -7159,6 +7194,15 @@ class BTC5mStrategyService:
             if isinstance(payload, dict):
                 observed_at = int(_safe_float(payload.get("observed_at")))
                 if sync_status == "ok" and sync_at_ms > 0 and observed_at > 0 and observed_at <= sync_at_ms:
+                    stale_keys.append(str(row["key"] or ""))
+                    continue
+                if (
+                    sync_status == "ok"
+                    and observed_at > 0
+                    and not has_positions
+                    and not has_pending_orders
+                    and (now_ms - observed_at) >= (_LIVE_OBSERVED_ACTIVITY_AUTO_CLEAR_SECONDS * 1000)
+                ):
                     stale_keys.append(str(row["key"] or ""))
                     continue
                 items.append(payload)
@@ -7620,9 +7664,9 @@ class BTC5mStrategyService:
             selected_execution = str(getattr(decision, "selected_execution", "") or "").strip().lower()
             original_execution = selected_execution
             if mode == "live" and selected_execution.startswith("maker"):
-                selected_execution = str(self.settings.config.live_execution_profile or "").strip().lower()
-                if not selected_execution or selected_execution.startswith("maker"):
-                    selected_execution = "taker_fak"
+                configured_execution = str(self.settings.config.live_execution_profile or "").strip().lower()
+                if configured_execution in {"maker_gtd", "maker_post_only_gtc"}:
+                    selected_execution = configured_execution
             if selected_execution and selected_execution != "no_trade":
                 updates: dict[str, str] = {"execution_profile": selected_execution}
                 if mode == "live" and original_execution.startswith("maker") and selected_execution != original_execution:
