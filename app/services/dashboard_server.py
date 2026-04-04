@@ -2782,6 +2782,14 @@ def _apply_live_control_action(db_path: Path, *, action: str, note: str = "") ->
 
     now_ts = int(time.time())
     with _connect(db_path) as conn:
+        if safe_action == "summary_now" and not _bot_state_int(conn, "telegram_status_summary_enabled"):
+            return {
+                "ok": False,
+                "action": safe_action,
+                "error": "telegram summary disabled",
+                "note": safe_note,
+                "updated_at": now_ts,
+            }
         with conn:
             if safe_action == "arm":
                 _set_bot_state(conn, "live_control_state", "armed")

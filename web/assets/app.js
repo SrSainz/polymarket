@@ -2800,7 +2800,7 @@ function applyLiveControlUi(summary = lastSummary) {
   const localAvailable = runtimeMode === "local";
   armBtn.disabled = !localAvailable || !armGuard.ok;
   pauseBtn.disabled = !localAvailable || !info.isLiveSession || !info.canExecute;
-  summaryNowBtn.disabled = !localAvailable;
+  summaryNowBtn.disabled = !localAvailable || !info.statusSummaryEnabled;
   armBtn.title =
     !localAvailable
       ? "Solo disponible con backend local"
@@ -2819,7 +2819,11 @@ function applyLiveControlUi(summary = lastSummary) {
       : !info.canExecute
       ? "Live ya esta pausado."
       : "";
-  summaryNowBtn.title = !localAvailable ? "Solo disponible con backend local" : "";
+  summaryNowBtn.title = !localAvailable
+    ? "Solo disponible con backend local"
+    : !info.statusSummaryEnabled
+    ? "Resumen Telegram desactivado."
+    : "";
 }
 
 function setCardTone(elementId, value) {
@@ -4539,11 +4543,22 @@ async function sendLiveControlAction(action, buttonId, successPrefix) {
       return;
     }
   }
+  if (action === "summary_now") {
+    const info = liveControlInfo(lastSummary);
+    if (!info.statusSummaryEnabled) {
+      document.getElementById("lastUpdated").textContent = "Resumen Telegram desactivado.";
+      applyLiveControlUi(lastSummary);
+      return;
+    }
+  }
   const originalLabel = button.textContent;
   button.disabled = true;
   button.textContent = "Aplicando...";
   try {
-    await postJson(withCacheBust(buildApiUrl("/api/live-control")), { action });
+    const payload = await postJson(withCacheBust(buildApiUrl("/api/live-control")), { action });
+    if (!payload?.ok) {
+      throw new Error(String(payload?.error || "accion rechazada"));
+    }
     document.getElementById("lastUpdated").textContent = `${successPrefix}.`;
     await refreshAll();
   } catch (error) {
