@@ -96,6 +96,9 @@ _ARB_LIVE_MICRO_PROBE_BUDGET_MAX = 3.50
 _ARB_LIVE_MICRO_PROBE_MIN_RAW_EDGE = 0.03
 _ARB_LIVE_MICRO_PROBE_MIN_NET_EDGE = 0.01
 _ARB_LIVE_MICRO_PROBE_STRONG_NET_EDGE = 0.04
+_ARB_LIVE_MICRO_PROBE_TARGET_MIN_FAIR = 0.54
+_ARB_LIVE_MICRO_PROBE_MIN_FAIR_LEAD = 0.06
+_ARB_LIVE_MICRO_PROBE_MIN_TARGET_DELTA_BPS = 0.75
 _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_MIN_FAIR = 0.58
 _ARB_LIVE_COUNTERTREND_CHEAP_SIDE_SOFT_FAIR = 0.55
 _ARB_LIVE_COUNTERTREND_BIASED_BRACKET_MIN_FAIR = 0.64
@@ -3666,6 +3669,20 @@ class BTC5mStrategyService:
                 "captured-chainlink-live",
                 "soft-stale-captured-chainlink",
             }
+            target_is_up = str(signal.target.label or "").strip().lower() == "up"
+            target_fair = fair_up if target_is_up else fair_down
+            opposite_fair = fair_down if target_is_up else fair_up
+            live_probe_direction_ok = (
+                (target_is_up and delta_bps >= _ARB_LIVE_MICRO_PROBE_MIN_TARGET_DELTA_BPS)
+                or ((not target_is_up) and delta_bps <= -_ARB_LIVE_MICRO_PROBE_MIN_TARGET_DELTA_BPS)
+                or (
+                    (target_fair - opposite_fair) >= _ARB_LIVE_MICRO_PROBE_MIN_FAIR_LEAD
+                    and (
+                        target_fair >= _ARB_LIVE_MICRO_PROBE_TARGET_MIN_FAIR
+                        or signal.net_edge >= _ARB_LIVE_MICRO_PROBE_STRONG_NET_EDGE
+                    )
+                )
+            )
             live_probe_delta_ok = (
                 abs(delta_bps) >= _ARB_CHEAP_SIDE_MICRO_DELTA_BPS
                 or signal.net_edge >= _ARB_LIVE_MICRO_PROBE_STRONG_NET_EDGE
@@ -3675,6 +3692,7 @@ class BTC5mStrategyService:
                 live_reference_ok
                 and seconds_into_window <= _ARB_EARLY_MID_END
                 and pair_sum <= min(_ARB_CHEAP_SIDE_MICRO_PAIR_MAX, 1.010)
+                and live_probe_direction_ok
                 and live_probe_delta_ok
                 and signal.raw_edge >= max(_ARB_CHEAP_SIDE_MICRO_RAW_EDGE_MIN, _ARB_LIVE_MICRO_PROBE_MIN_RAW_EDGE)
                 and signal.net_edge >= max(_ARB_CHEAP_SIDE_MICRO_NET_EDGE_MIN, _ARB_LIVE_MICRO_PROBE_MIN_NET_EDGE)
@@ -3683,7 +3701,7 @@ class BTC5mStrategyService:
             if not live_micro_probe_ok:
                 return (
                     True,
-                    "cheap-side bloqueado en live: live opera bracket-only salvo sonda minima con referencia valida, edge claro y ticket reducido",
+                    "cheap-side bloqueado en live: la sonda minima exige referencia valida, edge claro y direccion dominante",
                 )
             return False, ""
 

@@ -1696,7 +1696,7 @@ def test_live_flat_cheap_side_probe_is_blocked_in_bracket_only_mode(tmp_path: Pa
     )
 
     assert plan is None
-    assert "live opera bracket-only" in str(db.get_bot_state("strategy_last_note") or "")
+    assert "sonda minima exige" in str(db.get_bot_state("strategy_last_note") or "")
     db.close()
 
 
@@ -2868,7 +2868,72 @@ def test_live_blocks_micro_probe_flat_cheap_side_open_in_bracket_only_mode(tmp_p
     )
 
     assert blocked is True
-    assert "live opera bracket-only" in reason
+    assert "sonda minima exige" in reason
+    db.close()
+
+
+def test_live_blocks_flat_cheap_side_probe_when_direction_is_ambiguous(tmp_path: Path) -> None:
+    db = Database(tmp_path / "bot.db")
+    db.init_schema()
+    service = BTC5mStrategyService(
+        db,
+        _FakeGammaClient({}),
+        _FakeCLOBClient(books={}, balance=58.84),
+        paper_broker=PaperBroker(db),
+        live_broker=_FakeBroker(),
+        shadow_broker=_FakeBroker(),
+        autonomous_decider=SimpleNamespace(build_exit_instruction=lambda **kwargs: None),
+        daily_summary=SimpleNamespace(send_if_due=lambda: False),
+        trade_notifier=SimpleNamespace(send_realized_result=lambda **kwargs: False),
+        settings=_settings(strategy_entry_mode="arb_micro", live_small_target_capital=58.84, live_btc5m_cycle_budget_usdc=25.0),
+        logger=logging.getLogger("test-btc5m-live-cheap-probe-ambiguous"),
+    )
+
+    up_outcome = MarketOutcome(
+        label="Up",
+        asset_id="asset-up",
+        best_ask=0.30,
+        best_bid=0.29,
+        best_ask_size=100.0,
+        ask_levels=(AskLevel(price=0.30, size=100.0),),
+    )
+    down_outcome = MarketOutcome(
+        label="Down",
+        asset_id="asset-down",
+        best_ask=0.72,
+        best_bid=0.71,
+        best_ask_size=100.0,
+        ask_levels=(AskLevel(price=0.72, size=100.0),),
+    )
+    signal = ArbSingleSideSignal(
+        target=up_outcome,
+        fair_value=0.49,
+        raw_edge=0.19,
+        net_edge=0.05,
+        edge_source="spot",
+    )
+
+    blocked, reason = service._arb_should_block_flat_single_side_open(  # noqa: SLF001
+        mode="live",
+        reference_quality="captured-chainlink-live",
+        bracket_phase="abrir",
+        current_up_notional=0.0,
+        current_down_notional=0.0,
+        signal=signal,
+        pair_sum=1.02,
+        cycle_budget=25.0,
+        cash_balance=58.84,
+        single_budget=3.0,
+        seconds_into_window=40,
+        up_outcome=up_outcome,
+        down_outcome=down_outcome,
+        fair_up=0.49,
+        fair_down=0.51,
+        delta_bps=-0.4,
+    )
+
+    assert blocked is True
+    assert "direccion dominante" in reason
     db.close()
 
 
