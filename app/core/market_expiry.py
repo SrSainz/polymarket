@@ -16,14 +16,16 @@ def is_market_within_horizon(end_date: str, *, max_horizon_days: int) -> bool:
     if not value:
         return False
 
+    now_utc = datetime.now(timezone.utc)
+    horizon = max(max_horizon_days, 0)
+
     if len(value) == 10 and value[4] == "-" and value[7] == "-":
         try:
             market_date = datetime.strptime(value, "%Y-%m-%d").date()
         except ValueError:
             return False
-        today = datetime.now(timezone.utc).date()
-        delta_days = (market_date - today).days
-        return 0 <= delta_days <= max(max_horizon_days, 0)
+        delta_days = (market_date - now_utc.date()).days
+        return 0 <= delta_days <= horizon
 
     normalized = value.replace("Z", "+00:00")
     try:
@@ -34,10 +36,9 @@ def is_market_within_horizon(end_date: str, *, max_horizon_days: int) -> bool:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     dt_utc = dt.astimezone(timezone.utc)
-    now_utc = datetime.now(timezone.utc)
     if dt_utc < now_utc:
         return False
-    return dt_utc <= now_utc + timedelta(days=max(max_horizon_days, 0))
+    return dt_utc <= now_utc + timedelta(days=horizon)
 
 
 def _parse_end_date_to_cutoff(raw: str) -> datetime | None:
