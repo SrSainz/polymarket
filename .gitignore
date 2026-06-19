@@ -18,3 +18,9 @@ config/settings.yaml.nas-backup*
 *.bundle
 *.bundle.b64
 *.bundle.b64.txt
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
