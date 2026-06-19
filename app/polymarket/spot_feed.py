@@ -317,18 +317,23 @@ class SpotFeed:
             latest = self._prices.get(symbol)
 
         if history:
-            candidates = [
-                (price, ts)
-                for price, ts in history
-                if abs(ts - target_ts) <= tolerance_seconds
-            ]
-            if candidates:
-                later = sorted((item for item in candidates if item[1] >= target_ts), key=lambda item: (item[1] - target_ts))
-                if later:
-                    return later[0][0]
-                earlier = sorted((item for item in candidates if item[1] < target_ts), key=lambda item: (target_ts - item[1]))
-                if earlier:
-                    return earlier[0][0]
+            best_later: tuple[float, float] | None = None
+            best_earlier: tuple[float, float] | None = None
+            for price, ts in history:
+                delta = ts - target_ts
+                if abs(delta) > tolerance_seconds:
+                    continue
+                if delta >= 0:
+                    if best_later is None or delta < best_later[1]:
+                        best_later = (price, delta)
+                else:
+                    distance = abs(delta)
+                    if best_earlier is None or distance < best_earlier[1]:
+                        best_earlier = (price, distance)
+            if best_later is not None:
+                return best_later[0]
+            if best_earlier is not None:
+                return best_earlier[0]
 
         if latest is None:
             return None

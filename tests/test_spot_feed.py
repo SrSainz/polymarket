@@ -94,6 +94,19 @@ def test_spot_feed_anchor_price_prefers_chainlink_sample_near_window_start() -> 
     assert anchor == 71852.76
 
 
+def test_spot_feed_anchor_price_uses_nearest_earlier_sample_without_future_match() -> None:
+    feed = SpotFeed("wss://ws-live-data.polymarket.com", logging.getLogger("test-spot-feed"))
+    target = time.time()
+    with feed._lock:
+        feed._history["btc/usd"].append((71820.10, target - 2.0))
+        feed._history["btc/usd"].append((71838.40, target - 0.3))
+        feed._history["btc/usd"].append((71831.25, target - 1.0))
+
+    anchor = feed.get_anchor_price(symbol="btc/usd", target_ts=target)
+
+    assert anchor == 71838.40
+
+
 def test_spot_feed_anchor_price_uses_chainlink_event_timestamp_not_local_receive_time() -> None:
     feed = SpotFeed("wss://ws-live-data.polymarket.com", logging.getLogger("test-spot-feed"))
     target = 1773577195.0
