@@ -34,6 +34,12 @@ def test_public_observer_only_uses_public_market_hosts() -> None:
     assert "nas.polysainz.com" not in content
 
 
+def test_public_observer_only_requests_ready_clob_books() -> None:
+    content = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
+    assert "market.enableOrderBook && market.acceptingOrders" in content
+    assert "market.ready === true && market.funded === true" in content
+
+
 def test_public_observer_preserves_missing_numbers_and_escapes_invalid_dates() -> None:
     content = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
     assert 'value === null || value === undefined' in content

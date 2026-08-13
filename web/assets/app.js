@@ -155,7 +155,10 @@ function normalizeMarket(market, event) {
     volume: numberOrNull(market.volumeNum ?? market.volume),
     minSize: numberOrNull(market.orderMinSize),
     tickSize: numberOrNull(market.orderPriceMinTickSize),
+    enableOrderBook: Boolean(market.enableOrderBook),
     acceptingOrders: Boolean(market.acceptingOrders),
+    ready: market.ready === undefined ? null : Boolean(market.ready),
+    funded: market.funded === undefined ? null : Boolean(market.funded),
     clearBookOnStart: Boolean(market.clearBookOnStart),
     secondsDelay: numberOrNull(market.secondsDelay),
     feesEnabled: Boolean(market.feesEnabled),
@@ -226,7 +229,10 @@ function safeHttpUrl(value) {
 
 async function loadBookSnapshot(event) {
   if (!event) return;
-  const markets = event.markets.filter(marketMatchesFilter).filter((market) => market.tokens[0]).slice(0, 8);
+  const markets = event.markets
+    .filter(marketMatchesFilter)
+    .filter((market) => market.enableOrderBook && market.acceptingOrders && market.ready === true && market.funded === true && market.tokens[0])
+    .slice(0, 8);
   await Promise.all(markets.map(async (market) => {
     try {
       const payload = await fetchJson(`${CLOB_API}/book?token_id=${encodeURIComponent(market.tokens[0])}`, "Libro CLOB");
@@ -349,11 +355,6 @@ function filteredEvents() {
   const events = state.events.filter((event) => {
     const matchesSearch = !query || `${event.title} ${event.sport} ${event.description}`.toLowerCase().includes(query);
     const matchesType = event.markets.some(marketMatchesFilter);
-    const status = eventState(event);
-    const label = status.label;
-    const matchesView = state.viewFilter === "all"
-      || (state.viewFilter === "live" && status.className === "state-live")
-      || (state.viewFilter === "upcoming" && (label === "PRÓXIMO" || label === "EN ESPERA"));
     return matchesSearch && matchesType && eventMatchesView(event);
   });
   return events.sort((a, b) => {
