@@ -24,6 +24,7 @@ const state = {
   books: new Map(),
   socket: null,
   socketRetry: 0,
+  bookRequestId: 0,
   refreshTimer: null,
   requestId: 0,
   refreshPending: false,
@@ -227,18 +228,30 @@ function safeHttpUrl(value) {
   }
 }
 
+function isClobReady(market) {
+  return Boolean(
+    market?.enableOrderBook
+      && market?.acceptingOrders
+      && market?.ready === true
+      && market?.funded === true
+      && market?.tokens?.[0]
+  );
+}
+
 async function loadBookSnapshot(event) {
+  const requestId = ++state.bookRequestId;
+  state.books.clear();
   if (!event) return;
   const markets = event.markets
     .filter(marketMatchesFilter)
-    .filter((market) => market.enableOrderBook && market.acceptingOrders && market.ready === true && market.funded === true && market.tokens[0])
+    .filter(isClobReady)
     .slice(0, 8);
   await Promise.all(markets.map(async (market) => {
     try {
       const payload = await fetchJson(`${CLOB_API}/book?token_id=${encodeURIComponent(market.tokens[0])}`, "Libro CLOB");
-      state.books.set(market.id, { book: payload, receivedAt: Date.now() });
+      if (requestId === state.bookRequestId) state.books.set(market.id, { book: payload, receivedAt: Date.now() });
     } catch {
-      state.books.delete(market.id);
+      if (requestId === state.bookRequestId) state.books.delete(market.id);
     }
   }));
 }
@@ -305,7 +318,7 @@ async function loadEvents() {
         return rawEvent?.active !== false && rawEvent?.closed !== true && rawEvent?.archived !== true;
       })
       .filter((event) => event.markets.length > 0)
-      .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0));
+      .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0));
     if (events.length > 0 || state.hasUserSelectedSeries) {
       selectedEvents = events;
       selectedSeries = series;
@@ -317,7 +330,7 @@ async function loadEvents() {
   state.selectedSeries = selectedSeries;
   $("leagueSelect").value = selectedSeries;
   if (!state.selectedEventId || !state.events.some((event) => event.id === state.selectedEventId)) {
-    state.selectedEventId = state.events[0]?.id || "";
+    state.selectedEventId = [...state.events].sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0))[0]?.id || "";
   }
 }
 
@@ -346,7 +359,7 @@ function marketMatchesFilter(market) {
 function eventMatchesView(event) {
   const className = eventState(event).className;
   if (state.viewFilter === "live") return className === "state-live";
-  if (state.viewFilter === "upcoming") return ["state-next", "state-waiting"].includes(className);
+  if (state.viewFilter === "upcoming") return className === "state-next";
   return true;
 }
 
@@ -448,13 +461,19 @@ function renderDetail() {
 function renderDetailMarket(market) {
   const yes = market.prices[0];
   const no = market.prices[1];
-  const book = state.books.get(market.id)?.book;
-  const bid = bookLevel(book, "bids");
-  const ask = bookLevel(book, "asks");
-  const bestBid = bid.price ?? market.bestBid;
-  const bestAsk = ask.price ?? market.bestAsk;
-  const depth = book ? `top3 ${bookDepth(book, "bids").toFixed(1)} / ${bookDepth(book, "asks").toFixed(1)}` : "Gamma snapshot";
+  const book = isClobReady(market) ? state.books.get(market.id)?.book : null;
+  const bid = book ? bookLevel(book, "bids") : { price: null };
+  const ask = book ? bookLevel(book, "asks") : { price: null };
+  const bestBid = isClobReady(market) ? bid.price : null;
+  const bestAsk = isClobReady(market) ? ask.price : null;
+  const depth = book ? `top3 ${bookDepth(book, "bids").toFixed(1)} / ${bookDepth(book, "asks").toFixed(1)}` : "CLOB no disponible";
   const feeLabel = market.feesEnabled ? `fee ${escapeHtml(market.feeType)}` : "fee no indicado";
+  if (!book) {
+    return `<div class="market-row"><div class="market-row-title"><strong>${escapeHtml(market.question)}</strong><span>${escapeHtml(formatMarketType(market.type))} · min ${market.minSize ?? "-"}</span></div><div class="market-row-prices"><span class="yes-price">YES <b>${formatPrice(yes)}</b></span><span class="no-price">NO <b>${formatPrice(no)}</b></span></div><div class="market-row-book"><span>precio Gamma ${formatPrice(yes)} / ${formatPrice(no)}</span><span>spread no calculable</span><span>CLOB no disponible</span><span>${feeLabel}</span></div><div class="market-row-actions"><button type="button" data-paper-market="${escapeHtml(market.id)}" data-paper-side="YES" class="paper-button">+ Paper YES</button><button type="button" data-paper-market="${escapeHtml(market.id)}" data-paper-side="NO" class="paper-button paper-button-muted">+ Paper NO</button></div></div>`;
+  }
+  const quoteLabel = book ? `bid/ask ${formatPrice(bestBid)} / ${formatPrice(bestAsk)}` : `precio Gamma ${formatPrice(yes)} / ${formatPrice(no)}`;
+  const spreadLabel = book && bestBid !== null && bestAsk !== null ? `spread ${((bestAsk - bestBid) * 100).toFixed(1)}¢` : "spread no calculable";
+  const displayedQuote = book ? `bid/ask ${formatPrice(bestBid)} / ${formatPrice(bestAsk)}` : `precio Gamma ${formatPrice(yes)} / ${formatPrice(no)}`;
   return `<div class="market-row"><div class="market-row-title"><strong>${escapeHtml(market.question)}</strong><span>${escapeHtml(formatMarketType(market.type))} · min ${market.minSize ?? "-"}</span></div><div class="market-row-prices"><span class="yes-price">SÍ <b>${formatPrice(yes)}</b></span><span class="no-price">NO <b>${formatPrice(no)}</b></span></div><div class="market-row-book"><span>bid/ask ${formatPrice(bestBid)} / ${formatPrice(bestAsk)}</span><span>spread ${bestBid !== null && bestAsk !== null ? `${((bestAsk - bestBid) * 100).toFixed(1)}¢` : "-"}</span><span>${depth}</span><span>${feeLabel}</span></div><div class="market-row-actions"><button type="button" data-paper-market="${escapeHtml(market.id)}" data-paper-side="YES" class="paper-button">+ Paper SÍ</button><button type="button" data-paper-market="${escapeHtml(market.id)}" data-paper-side="NO" class="paper-button paper-button-muted">+ Paper NO</button></div></div>`;
 }
 
@@ -563,6 +582,10 @@ function startSportsSocket() {
 }
 
 function renderAll() {
+  const visibleIds = new Set(filteredEvents().map((event) => event.id));
+  if (state.selectedEventId && !visibleIds.has(state.selectedEventId)) {
+    state.selectedEventId = filteredEvents()[0]?.id || "";
+  }
   renderEvents();
   renderDetail();
   renderPaper();
@@ -599,5 +622,5 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { bookLevel, bookDepth, safeHttpUrl };
+  module.exports = { bookLevel, bookDepth, isClobReady, safeHttpUrl };
 }

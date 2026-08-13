@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { bookDepth, bookLevel, safeHttpUrl } = require("../web/assets/app.js");
+const { bookDepth, bookLevel, isClobReady, safeHttpUrl } = require("../web/assets/app.js");
 
 test("normalizes unordered CLOB levels before selecting top of book", () => {
   const book = {
@@ -19,4 +19,13 @@ test("only permits absolute HTTP(S) resolution links", () => {
   assert.equal(safeHttpUrl("https://example.com/rules"), "https://example.com/rules");
   assert.equal(safeHttpUrl("javascript:alert(1)"), "#");
   assert.equal(safeHttpUrl("not a url"), "#");
+});
+
+test("only marks fully ready and funded markets as CLOB-ready", () => {
+  const base = { enableOrderBook: true, acceptingOrders: true, ready: true, funded: true, tokens: ["token"] };
+  assert.equal(isClobReady(base), true);
+  for (const key of ["enableOrderBook", "acceptingOrders", "ready", "funded"]) {
+    assert.equal(isClobReady({ ...base, [key]: false }), false, key);
+  }
+  assert.equal(isClobReady({ ...base, tokens: [] }), false);
 });

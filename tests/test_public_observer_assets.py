@@ -36,8 +36,13 @@ def test_public_observer_only_uses_public_market_hosts() -> None:
 
 def test_public_observer_only_requests_ready_clob_books() -> None:
     content = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
-    assert "market.enableOrderBook && market.acceptingOrders" in content
-    assert "market.ready === true && market.funded === true" in content
+    assert "function isClobReady(market)" in content
+    assert "market?.enableOrderBook" in content
+    assert "market?.ready === true" in content
+    assert "market?.funded === true" in content
+    assert ".filter(isClobReady)" in content
+    assert "state.books.clear()" in content
+    assert 'module.exports = { bookLevel, bookDepth, isClobReady, safeHttpUrl }' in content
 
 
 def test_public_observer_preserves_missing_numbers_and_escapes_invalid_dates() -> None:
@@ -58,7 +63,7 @@ def test_public_observer_guards_paper_storage_and_refresh_races() -> None:
 
 def test_public_observer_exposes_node_orderbook_harness() -> None:
     content = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
-    assert "module.exports = { bookLevel, bookDepth, safeHttpUrl }" in content
+    assert "module.exports = { bookLevel, bookDepth, isClobReady, safeHttpUrl }" in content
     assert "sort((a, b) => side === \"bids\" ? b.price - a.price : a.price - b.price)" in content
 
 
