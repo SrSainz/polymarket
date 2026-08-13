@@ -48,3 +48,9 @@ def test_public_observer_guards_paper_storage_and_refresh_races() -> None:
     assert 'escapeHtml(entry.side)' in content
     assert "state.refreshPending = true" in content
     assert "state.requestId += 1" in content
+
+
+def test_public_observer_exposes_node_orderbook_harness() -> None:
+    content = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
+    assert "module.exports = { bookLevel, bookDepth, safeHttpUrl }" in content
+    assert "sort((a, b) => side === \"bids\" ? b.price - a.price : a.price - b.price)" in content

@@ -197,14 +197,29 @@ function parseBookLevel(level) {
   return { price: null, size: null };
 }
 
-function bookLevel(book, side, index = 0) {
+function bookLevels(book, side) {
   const levels = Array.isArray(book?.[side]) ? book[side] : [];
-  return parseBookLevel(levels[index]);
+  return levels
+    .map(parseBookLevel)
+    .filter((level) => level.price !== null && level.size !== null)
+    .sort((a, b) => side === "bids" ? b.price - a.price : a.price - b.price);
+}
+
+function bookLevel(book, side, index = 0) {
+  return bookLevels(book, side)[index] || { price: null, size: null };
 }
 
 function bookDepth(book, side) {
-  const levels = Array.isArray(book?.[side]) ? book[side] : [];
-  return levels.slice(0, 3).reduce((total, level) => total + (parseBookLevel(level).size || 0), 0);
+  return bookLevels(book, side).slice(0, 3).reduce((total, level) => total + level.size, 0);
+}
+
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "#";
+  } catch {
+    return "#";
+  }
 }
 
 async function loadBookSnapshot(event) {
@@ -403,7 +418,7 @@ function renderDetail() {
     ${scoreBlock}
     <div class="market-table-head"><span>Mercado</span><span>Precios</span><span>Libro</span></div>
     <div class="market-table">${markets.map((market) => renderDetailMarket(market)).join("") || `<div class="table-empty">No hay mercados para este filtro.</div>`}</div>
-    <div class="source-grid"><div><span>Resolución</span><a href="${escapeHtml(event.resolutionSource || "#")}" target="_blank" rel="noreferrer">Fuente oficial ↗</a></div><div><span>Liquidez Gamma</span><strong>${formatUsd(event.liquidity)}</strong></div><div><span>Datos</span><strong>Gamma + CLOB público</strong></div><div><span>Última lectura</span><strong>${formatAgo(state.lastUpdatedAt)}</strong></div></div>
+    <div class="source-grid"><div><span>Resolución</span><a href="${escapeHtml(safeHttpUrl(event.resolutionSource))}" target="_blank" rel="noreferrer">Fuente oficial ↗</a></div><div><span>Liquidez Gamma</span><strong>${formatUsd(event.liquidity)}</strong></div><div><span>Datos</span><strong>Gamma + CLOB público</strong></div><div><span>Última lectura</span><strong>${formatAgo(state.lastUpdatedAt)}</strong></div></div>
     <p class="detail-note">Esto no es una recomendación ni una orden. El precio mostrado puede cambiar; no calculamos rentabilidad sin una fuente externa de cuotas y costes ejecutables.</p>`;
   document.querySelectorAll("[data-paper-market]").forEach((button) => button.addEventListener("click", () => savePaper(button.dataset.paperMarket, button.dataset.paperSide)));
 }
@@ -544,7 +559,13 @@ function bindEvents() {
   $("clearPaperBtn").addEventListener("click", () => { state.paper = []; writePaper(); renderPaper(); });
 }
 
-bindEvents();
-startSportsSocket();
-refresh();
-state.refreshTimer = window.setInterval(refresh, REFRESH_MS);
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  bindEvents();
+  startSportsSocket();
+  refresh();
+  state.refreshTimer = window.setInterval(refresh, REFRESH_MS);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { bookLevel, bookDepth, safeHttpUrl };
+}
