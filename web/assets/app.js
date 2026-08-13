@@ -582,13 +582,22 @@ function startSportsSocket() {
 }
 
 function renderAll() {
-  const visibleIds = new Set(filteredEvents().map((event) => event.id));
-  if (state.selectedEventId && !visibleIds.has(state.selectedEventId)) {
-    state.selectedEventId = filteredEvents()[0]?.id || "";
+  const visibleEvents = filteredEvents();
+  const visibleIds = new Set(visibleEvents.map((event) => event.id));
+  const nextSelectedEventId = visibleEvents[0]?.id || "";
+  const selectionChanged = state.selectedEventId !== nextSelectedEventId && (
+    !state.selectedEventId || !visibleIds.has(state.selectedEventId)
+  );
+  if (selectionChanged) {
+    state.selectedEventId = nextSelectedEventId;
+    state.books.clear();
   }
   renderEvents();
   renderDetail();
   renderPaper();
+  if (selectionChanged) {
+    void loadBookSnapshot(state.events.find((event) => event.id === state.selectedEventId)).then(renderAll);
+  }
 }
 
 function escapeHtml(value) {
