@@ -54,3 +54,12 @@ def test_public_observer_exposes_node_orderbook_harness() -> None:
     content = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
     assert "module.exports = { bookLevel, bookDepth, safeHttpUrl }" in content
     assert "sort((a, b) => side === \"bids\" ? b.price - a.price : a.price - b.price)" in content
+
+
+def test_public_observer_exposes_visual_filter_controls() -> None:
+    html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
+    assert 'data-view-filter="live"' in html
+    assert 'id="sortSelect"' in html
+    assert 'state.viewFilter === "live"' in js
+    assert '$("sortSelect").addEventListener' in js

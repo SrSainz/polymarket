@@ -13,6 +13,8 @@ const state = {
   selectedEventId: "",
   search: "",
   marketType: "all",
+  viewFilter: "all",
+  sortBy: "liquidity",
   hasUserSelectedSeries: false,
   paper: readPaper(),
   lastUpdatedAt: 0,
@@ -335,12 +337,31 @@ function marketMatchesFilter(market) {
   return market.type === state.marketType || market.type.startsWith(`${state.marketType}_`);
 }
 
+function eventMatchesView(event) {
+  const className = eventState(event).className;
+  if (state.viewFilter === "live") return className === "state-live";
+  if (state.viewFilter === "upcoming") return ["state-next", "state-waiting"].includes(className);
+  return true;
+}
+
 function filteredEvents() {
   const query = state.search.trim().toLowerCase();
-  return state.events.filter((event) => {
+  const events = state.events.filter((event) => {
     const matchesSearch = !query || `${event.title} ${event.sport} ${event.description}`.toLowerCase().includes(query);
     const matchesType = event.markets.some(marketMatchesFilter);
-    return matchesSearch && matchesType;
+    const status = eventState(event);
+    const label = status.label;
+    const matchesView = state.viewFilter === "all"
+      || (state.viewFilter === "live" && status.className === "state-live")
+      || (state.viewFilter === "upcoming" && (label === "PRÓXIMO" || label === "EN ESPERA"));
+    return matchesSearch && matchesType && eventMatchesView(event);
+  });
+  return events.sort((a, b) => {
+    if (state.sortBy === "start") {
+      return (new Date(a.startDate).getTime() || Number.MAX_SAFE_INTEGER) - (new Date(b.startDate).getTime() || Number.MAX_SAFE_INTEGER);
+    }
+    if (state.sortBy === "volume") return (b.volume24hr || 0) - (a.volume24hr || 0);
+    return (b.liquidity || 0) - (a.liquidity || 0);
   });
 }
 
@@ -554,6 +575,16 @@ function bindEvents() {
   $("leagueSelect").addEventListener("change", async (event) => { state.hasUserSelectedSeries = true; state.selectedSeries = event.target.value; state.selectedEventId = ""; state.requestId += 1; await refresh(); });
   $("marketTypeSelect").addEventListener("change", (event) => { state.marketType = event.target.value; renderAll(); });
   $("searchInput").addEventListener("input", (event) => { state.search = event.target.value; renderAll(); });
+  $("sortSelect").addEventListener("change", (event) => { state.sortBy = event.target.value; renderAll(); });
+  document.querySelectorAll("[data-view-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.viewFilter = button.dataset.viewFilter;
+    document.querySelectorAll("[data-view-filter]").forEach((item) => {
+      const active = item.dataset.viewFilter === state.viewFilter;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-pressed", String(active));
+    });
+    renderAll();
+  }));
   $("refreshBtn").addEventListener("click", refresh);
   $("alertRetryBtn").addEventListener("click", refresh);
   $("clearPaperBtn").addEventListener("click", () => { state.paper = []; writePaper(); renderPaper(); });
