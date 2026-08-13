@@ -3,1045 +3,159 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Polysainz BTC5m</title>
+    <meta name="description" content="Observatorio deportivo de mercados Polymarket. Lectura y paper, sin ejecucion real." />
+    <title>Polysainz | Sports desk</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
-  <link rel="stylesheet" href="/assets/styles.css?v=20260403-live-home25" />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260813-sports1" />
   </head>
   <body>
     <div class="app-shell">
-      <header class="topbar shell-card">
-        <div class="brand">
-          <div class="brand-heading">
-            <p class="kicker">Polysainz</p>
-            <h1>BTC5m</h1>
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">P</div>
+          <div>
+            <p class="eyebrow">POLYSAINZ / SPORTS DESK</p>
+            <h1>Mercados deportivos, sin ruido.</h1>
+            <p class="brand-subtitle">Un radar de Polymarket para estudiar precios, liquidez y eventos antes de arriesgar capital.</p>
           </div>
-          <div class="brand-meta">
-            <span id="runtimeBadge" class="soft-badge">Local DB</span>
-            <span id="tradingBadge" class="soft-badge accent-badge">PAPER</span>
-            <span id="strategyBadge" class="soft-badge accent-badge">BTC 5m</span>
-          </div>
-          <p id="headerTimestamp" class="topbar-note">sincronizando</p>
-          <p id="headerBuildMeta" class="topbar-note">ui audit pendiente</p>
         </div>
-
-        <details class="control-drawer">
-          <summary>
-            <span>Conexion y refresco</span>
-            <span class="badge">ajustes</span>
-          </summary>
-          <div class="control-grid">
-            <label class="toolbar-field toolbar-field-wide" for="apiBaseInput">
-              <span class="refresh-label">Backend API</span>
-              <input id="apiBaseInput" type="text" placeholder="https://nas.polysainz.com" />
-            </label>
-            <label class="toolbar-field" for="refreshSeconds">
-              <span class="refresh-label">Auto-refresh (s)</span>
-              <input id="refreshSeconds" type="number" min="3" max="300" value="10" />
-            </label>
-            <div class="toolbar-actions">
-              <button id="apiBaseBtn" type="button" class="secondary-btn">Guardar API</button>
-              <button id="refreshBtn" type="button">Refrescar</button>
-              <button id="resetBtn" type="button" class="secondary-btn">Reiniciar runtime</button>
-              <button id="resetCompareBtn" type="button" class="danger-btn" hidden>Limpiar compare</button>
-              <button id="wipeRuntimeBtn" type="button" class="danger-btn">Borrado total</button>
-            </div>
-            <div class="toolbar-field toolbar-field-wide control-status">
-              <span class="refresh-label">Live Control Center</span>
-              <div class="control-badges">
-                <span id="liveControlBadge" class="soft-badge">SOLO PAPER</span>
-                <span id="liveSummaryBadge" class="soft-badge">Resumen Telegram: --</span>
-                <span id="backendConnectionBadge" class="soft-badge">NAS: --</span>
-              </div>
-              <p id="backendConnectionMeta" class="control-note">Estado del backend del NAS pendiente.</p>
-              <div class="toolbar-actions">
-                <button id="armLiveBtn" type="button">Armar live</button>
-                <button id="pauseLiveBtn" type="button" class="danger-btn">Pausar live</button>
-                <button id="summaryNowBtn" type="button" class="secondary-btn">Resumen ahora</button>
-              </div>
-              <p id="liveControlMeta" class="control-note">Sin control runtime aun.</p>
-            </div>
-          </div>
-        </details>
+        <div class="topbar-actions">
+          <span id="modeBadge" class="status-pill status-paper"><span class="status-dot"></span> SOLO PAPER</span>
+          <span id="feedBadge" class="status-pill"><span class="status-dot"></span> CONECTANDO</span>
+          <button id="refreshBtn" class="icon-button" type="button" title="Actualizar mercados" aria-label="Actualizar mercados">↻</button>
+        </div>
       </header>
 
-      <main class="layout">
-        <section class="shadow-simple-grid" id="shadowSimpleOverview">
-          <article class="panel shadow-main-panel" id="shadowMainPanel">
-            <div class="shadow-main-head">
-              <div class="shadow-main-copy">
-                <p class="hero-kicker">Live BTC5m</p>
-                <div class="shadow-main-title-row">
-                  <h2 id="shadowHeroStatus" class="shadow-main-title">Cargando shadow...</h2>
-                  <span id="shadowStateBadge" class="shadow-state-badge">sin datos</span>
-                </div>
-                <p id="shadowHeroMarket" class="shadow-main-market">Sin mercado activo.</p>
-                <p id="shadowHeroReason" class="shadow-main-text">
-                  Estamos leyendo el estado actual del bot para enseñarte solo lo importante.
-                </p>
-              </div>
-            <div class="shadow-chip-row">
-                <span id="shadowWindowTime" class="soft-badge">Ventana -</span>
-                <span id="shadowReferenceBadge" class="soft-badge">Referencia -</span>
-                <span id="shadowActionBadge" class="soft-badge">Accion -</span>
-              </div>
-            </div>
-
-            <div class="shadow-stage-shell" id="shadowStageShell">
-              <div class="shadow-stage-top">
-                <div class="shadow-stage-signal">
-                  <span id="shadowStagePulse" class="shadow-stage-pulse" aria-hidden="true"></span>
-                  <div class="shadow-stage-copy">
-                    <p class="shadow-stage-kicker">Pulso de la ventana</p>
-                    <strong id="shadowStageHeadline" class="shadow-stage-headline">-</strong>
-                    <p id="shadowStageMeta" class="shadow-stage-meta">-</p>
-                  </div>
-                </div>
-
-                <div class="shadow-stage-stats">
-                  <article class="shadow-stage-stat">
-                    <span>Tiempo</span>
-                    <strong id="shadowStageTimeValue">-</strong>
-                    <small id="shadowStageTimeMeta">-</small>
-                  </article>
-                  <article class="shadow-stage-stat">
-                    <span>Edge neto</span>
-                    <strong id="shadowStageEdgeValue">-</strong>
-                    <small id="shadowStageEdgeMeta">-</small>
-                  </article>
-                  <article class="shadow-stage-stat">
-                    <span>Riesgo usado</span>
-                    <strong id="shadowStageRiskValue">-</strong>
-                    <small id="shadowStageRiskMeta">-</small>
-                  </article>
-                </div>
-              </div>
-
-              <div class="shadow-stage-progress-shell">
-                <div class="shadow-stage-progress" aria-hidden="true">
-                  <span id="shadowStageProgressFill" class="shadow-stage-progress-fill"></span>
-                </div>
-                <div class="shadow-stage-progress-meta">
-                  <span>Apertura</span>
-                  <span id="shadowStageProgressNow">-</span>
-                  <span>Cierre</span>
-                </div>
-              </div>
-
-              <div class="shadow-balance-grid">
-                <article class="shadow-balance-card">
-                  <p class="shadow-stage-kicker">Reparto objetivo</p>
-                  <div class="shadow-balance-row">
-                    <span>Sube</span>
-                    <strong id="shadowTargetUpValue">-</strong>
-                  </div>
-                  <div class="shadow-balance-rail is-up" aria-hidden="true">
-                    <span id="shadowTargetUpFill" class="shadow-balance-fill"></span>
-                  </div>
-                  <div class="shadow-balance-row">
-                    <span>Baja</span>
-                    <strong id="shadowTargetDownValue">-</strong>
-                  </div>
-                  <div class="shadow-balance-rail is-down" aria-hidden="true">
-                    <span id="shadowTargetDownFill" class="shadow-balance-fill"></span>
-                  </div>
-                </article>
-
-                <article class="shadow-balance-card">
-                  <p class="shadow-stage-kicker">Reparto actual</p>
-                  <div class="shadow-balance-row">
-                    <span>Sube</span>
-                    <strong id="shadowActualUpValue">-</strong>
-                  </div>
-                  <div class="shadow-balance-rail is-up" aria-hidden="true">
-                    <span id="shadowActualUpFill" class="shadow-balance-fill"></span>
-                  </div>
-                  <div class="shadow-balance-row">
-                    <span>Baja</span>
-                    <strong id="shadowActualDownValue">-</strong>
-                  </div>
-                  <div class="shadow-balance-rail is-down" aria-hidden="true">
-                    <span id="shadowActualDownFill" class="shadow-balance-fill"></span>
-                  </div>
-                </article>
-              </div>
-            </div>
-
-            <div class="shadow-focus-grid">
-              <article class="shadow-focus-card" id="shadowDecisionCard">
-                <p class="shadow-focus-label">Que hacer ahora</p>
-                <strong id="shadowDecisionTitle" class="shadow-focus-title">-</strong>
-                <p id="shadowDecisionMeta" class="shadow-focus-meta">-</p>
-              </article>
-
-              <article class="shadow-focus-card" id="shadowConstraintCard">
-                <p class="shadow-focus-label">Bloqueo real</p>
-                <strong id="shadowConstraintTitle" class="shadow-focus-title">-</strong>
-                <p id="shadowConstraintMeta" class="shadow-focus-meta">-</p>
-              </article>
-
-              <article class="shadow-focus-card" id="shadowBudgetCard">
-                <p class="shadow-focus-label">Riesgo de esta ventana</p>
-                <strong id="shadowBudgetTitle" class="shadow-focus-title">-</strong>
-                <p id="shadowBudgetMeta" class="shadow-focus-meta">-</p>
-              </article>
-            </div>
-
-            <div class="shadow-hero-grid">
-              <article class="shadow-pnl-card shadow-window-card" id="shadowWindowPnlCard">
-                <p class="shadow-card-kicker">Estos 5 minutos</p>
-                <strong id="shadowWindowPnl" class="shadow-pnl-value">-</strong>
-                <p id="shadowWindowHeadline" class="shadow-card-headline">Leyendo la ventana actual.</p>
-                <div class="shadow-meter" aria-hidden="true">
-                  <span id="shadowWindowMeterNegative" class="shadow-meter-fill shadow-meter-fill-negative"></span>
-                  <span id="shadowWindowMeterPositive" class="shadow-meter-fill shadow-meter-fill-positive"></span>
-                  <span class="shadow-meter-center"></span>
-                </div>
-                <p id="shadowWindowMeta" class="shadow-card-meta">Sin posicion abierta todavia.</p>
-                <p id="shadowWindowBreakdown" class="shadow-card-meta shadow-card-meta-strong">-</p>
-              </article>
-
-              <article class="shadow-pnl-card shadow-total-card" id="shadowTotalPnlCard">
-                <p class="shadow-card-kicker">PnL total</p>
-                <strong id="shadowTotalPnl" class="shadow-pnl-value">-</strong>
-                <p id="shadowTotalHeadline" class="shadow-card-headline">Resultado total del simulador.</p>
-                <div id="shadowTotalChart" class="shadow-trend-chart"></div>
-                <p id="shadowTotalMeta" class="shadow-card-meta">Sin historial reciente todavia.</p>
-                <div class="shadow-total-split">
-                  <span id="shadowTodayPnl">Hoy -</span>
-                  <span id="shadowClosedPnl">Cerrado -</span>
-                  <span id="shadowLivePnl">En vivo -</span>
-                </div>
-              </article>
-            </div>
-          </article>
-
-          <div class="shadow-side-grid">
-            <article class="panel shadow-mini-card" id="shadowMoneyCard">
-              <div class="subpanel-head">
-                <h3>Dinero</h3>
-                <span class="badge">caja</span>
-              </div>
-              <strong id="shadowEquityValue" class="shadow-mini-value">-</strong>
-              <ul class="shadow-mini-list">
-                <li><span>Cash libre</span><strong id="shadowCashFreeValue">-</strong></li>
-                <li><span>Disponible para comprar</span><strong id="shadowOperableValue">-</strong></li>
-                <li><span>Dinero metido ahora</span><strong id="shadowExposureNowValue">-</strong></li>
-              </ul>
-              <p id="shadowMoneyMeta" class="mini-meta">Sin snapshot de balance todavia.</p>
-            </article>
-
-            <article class="panel shadow-mini-card" id="shadowPositionCard">
-              <div class="subpanel-head">
-                <h3>Posicion actual</h3>
-                <span class="badge">ventana</span>
-              </div>
-              <strong id="shadowPositionStateValue" class="shadow-mini-value">-</strong>
-              <ul id="shadowPositionList" class="shadow-mini-list shadow-position-list"></ul>
-              <p id="shadowPositionMeta" class="mini-meta">Sin patas abiertas.</p>
-            </article>
-
-            <article class="panel shadow-mini-card" id="shadowHealthCard">
-              <div class="subpanel-head">
-                <h3>Salud del bot</h3>
-                <span class="badge">runtime</span>
-              </div>
-              <strong id="shadowHealthStatusValue" class="shadow-mini-value">-</strong>
-              <ul class="shadow-mini-list">
-                <li><span>Latencia</span><strong id="shadowHealthLatencyValue">-</strong></li>
-                <li><span>Edge neto</span><strong id="shadowHealthEdgeValue">-</strong></li>
-                <li><span>Referencia</span><strong id="shadowHealthReferenceValue">-</strong></li>
-                <li><span>Fee taker</span><strong id="shadowHealthFeeValue">-</strong></li>
-              </ul>
-              <p id="shadowHealthMeta" class="mini-meta">Esperando diagnostico.</p>
-            </article>
-
-            <article class="panel shadow-mini-card shadow-edge-card" id="shadowEdgeCard">
-              <div class="subpanel-head">
-                <h3>Edge real</h3>
-                <span class="badge">fee + slippage</span>
-              </div>
-              <strong id="shadowEdgeStatusValue" class="shadow-mini-value">-</strong>
-              <p id="shadowEdgeHeadline" class="shadow-card-headline">Leyendo coste real de entrada.</p>
-              <div class="shadow-meter shadow-edge-meter" aria-hidden="true">
-                <span id="shadowEdgeMeterNegative" class="shadow-meter-fill shadow-meter-fill-negative"></span>
-                <span id="shadowEdgeMeterPositive" class="shadow-meter-fill shadow-meter-fill-positive"></span>
-                <span class="shadow-meter-center"></span>
-              </div>
-              <div class="shadow-edge-pills">
-                <span id="shadowEdgeGrossValue" class="shadow-edge-pill">Bruto -</span>
-                <span id="shadowEdgeFeeValue" class="shadow-edge-pill">Fee -</span>
-                <span id="shadowEdgeSlipValue" class="shadow-edge-pill">Slippage -</span>
-                <span id="shadowEdgeModeValue" class="shadow-edge-pill">Modo -</span>
-              </div>
-              <p id="shadowEdgeMeta" class="mini-meta">Sin edge calculado todavia.</p>
-            </article>
-
-            <article class="panel shadow-mini-card" id="shadowRecentCard">
-              <div class="subpanel-head">
-                <h3>Ultimas ventanas</h3>
-                <span class="badge">reciente</span>
-              </div>
-              <strong id="shadowRecentStatusValue" class="shadow-mini-value">-</strong>
-              <div id="shadowRecentBars" class="shadow-recent-bars"></div>
-              <p id="shadowRecentMeta" class="mini-meta">Aun no hay suficientes cierres recientes.</p>
-            </article>
+      <main>
+        <section class="control-strip panel">
+          <div class="control-intro">
+            <span class="eyebrow">MODO DE TRABAJO</span>
+            <strong>Lectura pública + registro paper</strong>
+            <span id="lastUpdated">Sin datos cargados</span>
           </div>
+          <label class="select-control">
+            <span>Liga</span>
+            <select id="leagueSelect" aria-label="Seleccionar liga"></select>
+          </label>
+          <label class="select-control">
+            <span>Mercado</span>
+            <select id="marketTypeSelect" aria-label="Filtrar tipo de mercado">
+              <option value="all">Todos</option>
+              <option value="moneyline">Ganador</option>
+              <option value="spreads">Hándicap</option>
+              <option value="totals">Totales</option>
+              <option value="match_handicap">Match handicap</option>
+            </select>
+          </label>
+          <label class="search-control">
+            <span>Buscar</span>
+            <input id="searchInput" type="search" placeholder="Equipo, liga o evento..." autocomplete="off" />
+          </label>
         </section>
 
-        <section class="tournament-board" id="tournamentBoard" hidden>
-          <article class="panel tournament-hero-card" id="tournamentHeroCard">
-            <div class="subpanel-head">
-              <div>
-                <h3>Camino a live</h3>
-                <p class="panel-copy">Gate real, variante candidata y siguiente paso antes de volver a armar.</p>
-              </div>
-              <span id="tournamentStatusBadge" class="badge">sin datos</span>
-            </div>
-            <div class="tournament-hero-grid">
-              <div class="tournament-score-shell">
-                <p class="compare-focus-kicker">Ready for live</p>
-                <strong id="tournamentHeadline" class="tournament-headline">-</strong>
-                <p id="tournamentHeroMeta" class="mini-meta">-</p>
-                <div class="tournament-score-row">
-                  <div class="tournament-score-value">
-                    <span id="tournamentScoreValue">0</span>
-                    <small>/100</small>
-                  </div>
-                  <div class="tournament-score-copy">
-                    <span id="tournamentChecksValue">0/0 checks</span>
-                    <span id="tournamentWindowsValue">0 compartidas</span>
-                  </div>
-                </div>
-                <div class="tournament-progress" aria-hidden="true">
-                  <span id="tournamentScoreFill" class="tournament-progress-fill"></span>
-                </div>
-              </div>
+        <section id="alertPanel" class="alert-panel" hidden>
+          <strong id="alertTitle">Feed temporalmente no disponible</strong>
+          <span id="alertMessage">Conservamos el último estado conocido.</span>
+          <button id="alertRetryBtn" type="button" class="text-button">Reintentar</button>
+        </section>
 
-              <div class="tournament-recommendation-shell">
-                <p class="compare-focus-kicker">Que haria ahora el sistema</p>
-                <strong id="tournamentRecommendationLabel" class="tournament-headline">-</strong>
-                <p id="tournamentRecommendationSummary" class="shadow-card-headline">-</p>
-                <div class="shadow-edge-pills tournament-chip-row">
-                  <span id="tournamentActiveVariant" class="shadow-edge-pill">Activa -</span>
-                  <span id="tournamentCandidateVariant" class="shadow-edge-pill">Candidata -</span>
-                  <span id="tournamentGeneratedAt" class="shadow-edge-pill">Actualizado -</span>
-                </div>
-                <p id="tournamentNextStep" class="mini-meta">-</p>
-              </div>
-            </div>
+        <section class="metric-grid" aria-label="Resumen del observatorio">
+          <article class="metric-card accent-blue">
+            <span class="metric-label">Eventos activos</span>
+            <strong id="eventCount">-</strong>
+            <small id="eventCountMeta">Selecciona una liga</small>
           </article>
-
-          <article class="panel tournament-guard-card" id="tournamentGuardCard">
-            <div class="subpanel-head">
-              <div>
-                <h3>Guard de armado</h3>
-                <p class="panel-copy">Conexion, feed, ledger y residuos que tienen que estar bien antes de live.</p>
-              </div>
-              <span id="tournamentGuardBadge" class="badge">-</span>
-            </div>
-            <p id="tournamentGuardMeta" class="mini-meta">-</p>
-            <div id="tournamentGuardGrid" class="tournament-guard-grid"></div>
+          <article class="metric-card accent-orange">
+            <span class="metric-label">En directo</span>
+            <strong id="liveCount">-</strong>
+            <small id="liveCountMeta">Marcador público</small>
           </article>
-
-          <article class="panel tournament-leaderboard-card" id="tournamentLeaderboardCard">
-            <div class="subpanel-head">
-              <div>
-                <h3>Torneo de variantes</h3>
-                <p class="panel-copy">Ranking visual de las variantes que estamos comparando antes de volver a live.</p>
-              </div>
-              <span id="tournamentLeaderboardBadge" class="badge">-</span>
-            </div>
-            <p id="tournamentLeaderboardMeta" class="mini-meta">-</p>
-            <div id="tournamentLeaderboardList" class="tournament-leaderboard-list"></div>
+          <article class="metric-card accent-green">
+            <span class="metric-label">Liquidez visible</span>
+            <strong id="liquidityValue">-</strong>
+            <small>Referencia Gamma, no saldo disponible</small>
           </article>
-
-          <article class="panel tournament-reasons-card" id="tournamentReasonsCard">
-            <div class="subpanel-head">
-              <div>
-                <h3>Bloqueos y fortalezas</h3>
-                <p class="panel-copy">Lo que hoy nos frena y lo que ya esta suficientemente bien encaminado.</p>
-              </div>
-              <span id="tournamentReasonsBadge" class="badge">-</span>
-            </div>
-            <div class="tournament-reason-columns">
-              <div class="tournament-reason-column">
-                <p class="compare-focus-kicker">Bloquea live</p>
-                <ul id="tournamentBlockersList" class="tournament-reason-list"></ul>
-              </div>
-              <div class="tournament-reason-column">
-                <p class="compare-focus-kicker">Ya va bien</p>
-                <ul id="tournamentStrengthsList" class="tournament-reason-list tournament-reason-list-positive"></ul>
-              </div>
-            </div>
+          <article class="metric-card accent-violet">
+            <span class="metric-label">Hipótesis paper</span>
+            <strong id="paperCount">0</strong>
+            <small>Guardadas en este navegador</small>
           </article>
         </section>
 
-        <section class="cards metrics-strip">
-          <article class="card metric-card card-primary">
-            <p class="card-label" id="liveCashLabel">Capital live</p>
-            <p class="card-value" id="liveCashBalance">-</p>
-            <p class="card-subvalue" id="liveCashMeta">disponible -</p>
-          </article>
-
-          <article class="card metric-card noise-card">
-            <p class="card-label">Diario PnL</p>
-            <p class="card-value" id="livePnlToday">-</p>
-            <p class="card-subvalue">operaciones hoy <span id="liveExecutionsToday">0</span></p>
-          </article>
-
-          <article class="card metric-card noise-card">
-            <p id="pnlLabel" class="card-label">Ganancia / perdida total</p>
-            <p class="card-value" id="pnl">-</p>
-            <p class="card-subvalue" id="pnlBreakdown">cerrado - / en vivo -</p>
-          </article>
-
-          <article class="card metric-card metric-card-status">
-            <p id="heroFeedLabel" class="card-label">Salud del sistema</p>
-            <p class="card-value card-value-compact" id="heroFeedSource">-</p>
-            <p class="card-subvalue" id="heroFeedMeta">backend -</p>
-          </article>
-
-          <article class="card metric-card noise-card">
-            <p class="card-label" id="strategyModeLabel">Estado ahora</p>
-            <p class="card-value card-value-compact" id="strategyModeCard">-</p>
-            <p class="card-subvalue" id="strategyCardMeta">sin setup</p>
-          </article>
-
-          <article class="card metric-card">
-            <p class="card-label" id="exposureLabel">Dinero metido en esta ventana</p>
-            <p class="card-value" id="exposure">-</p>
-            <p class="card-subvalue" id="exposureMark">total live -</p>
-          </article>
-
-          <article class="card metric-card">
-            <p class="card-label" id="openPositionsLabel">Patas abiertas en esta ventana</p>
-            <p class="card-value" id="openPositions">-</p>
-            <p class="card-subvalue" id="openPositionsMeta">totales live -</p>
-          </article>
-
-          <article class="card metric-card noise-card">
-            <p id="pendingSignalsLabel" class="card-label">Siguientes compras</p>
-            <p class="card-value" id="pendingSignals">-</p>
-            <p class="card-subvalue">intentos de la ventana actual</p>
-          </article>
-        </section>
-
-        <section class="hero panel panel-hero noise-section" id="overviewSection">
-          <div class="hero-main">
-            <p class="hero-kicker">System Status</p>
-            <h2 class="hero-title" id="strategyHeroTitle">Sin mercado activo aun.</h2>
-            <p id="systemNotice" class="hero-text">
-              Vista operativa del motor BTC5m: mercado, reparto, salud del feed y rentabilidad del bot live.
-            </p>
+        <section class="workspace-grid">
+          <div class="feed-column">
+            <div class="section-heading">
+              <div>
+                <span class="eyebrow">RADAR DE EVENTOS</span>
+                <h2>Lo que está ocurriendo</h2>
+              </div>
+              <span id="resultCount" class="count-chip">-</span>
+            </div>
+            <div id="eventsList" class="events-list" aria-live="polite"></div>
           </div>
 
-          <div class="hero-inline-stats">
-            <article class="hero-inline-card">
-              <span class="hero-stat-label" id="heroTargetLabel">Reparto actual</span>
-              <strong id="heroTargetOutcome">-</strong>
-            </article>
-            <article class="hero-inline-card">
-              <span class="hero-stat-label" id="heroTriggerLabel">Tiempo de ventana</span>
-              <strong id="heroTriggerSeen">-</strong>
-            </article>
-            <article class="hero-inline-card">
-              <span class="hero-stat-label" id="heroCashLabel">Capital operativo</span>
-              <strong id="heroCashBalance">-</strong>
-              <small id="heroCashMeta" class="hero-stat-meta">capital total -</small>
-            </article>
-            <article class="hero-inline-card">
-              <span class="hero-stat-label">Ultima actualizacion</span>
-              <strong id="lastUpdatedHero">Realtime</strong>
-              <small class="hero-stat-meta">snapshot backend, motor y feed</small>
-            </article>
-          </div>
+          <aside class="detail-column">
+            <div class="section-heading detail-heading">
+              <div>
+                <span class="eyebrow">FICHA DE MERCADO</span>
+                <h2 id="detailTitle">Selecciona un evento</h2>
+              </div>
+              <span id="detailState" class="state-tag">-</span>
+            </div>
+            <div id="detailPanel" class="detail-panel empty-state">
+              <div class="empty-icon">◎</div>
+              <strong>Aquí aparecerá el libro de observación</strong>
+              <p>Verás precio, spread, liquidez, reglas y frescura. Las acciones de esta página son paper y no envían órdenes.</p>
+            </div>
+          </aside>
         </section>
 
-        <section class="compare-section" id="runtimeCompareSection" hidden>
-          <article class="panel compare-panel">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Paper vs Shadow</h2>
-                <p class="panel-copy">Misma ventana, mismo setup, distinto bankroll.</p>
-              </div>
-              <span id="runtimeCompareBadge" class="badge">sin comparar</span>
-            </div>
-            <p id="runtimeCompareMeta" class="mini-meta">Esperando una ventana comparable.</p>
-            <p id="runtimeCompareDbMeta" class="mini-meta">db runtime_compare.db pendiente.</p>
-            <div class="compare-now-grid">
-              <article class="compare-kpi compare-kpi-inline">
-                <span class="compare-kpi-label">Paper precio / fair</span>
-                <strong id="comparePaperCurrentPrice" class="compare-kpi-value compare-kpi-value-compact">-</strong>
-                <small id="comparePaperCurrentMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi compare-kpi-inline">
-                <span class="compare-kpi-label">Shadow precio / fair</span>
-                <strong id="compareShadowCurrentPrice" class="compare-kpi-value compare-kpi-value-compact">-</strong>
-                <small id="compareShadowCurrentMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi compare-kpi-inline">
-                <span class="compare-kpi-label">Budget actual</span>
-                <strong id="compareBudgetNow" class="compare-kpi-value compare-kpi-value-compact">-</strong>
-                <small id="compareBudgetNowMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi compare-kpi-inline">
-                <span class="compare-kpi-label">Reparto actual</span>
-                <strong id="compareRatioNow" class="compare-kpi-value compare-kpi-value-compact">-</strong>
-                <small id="compareRatioNowMeta" class="compare-kpi-note">-</small>
-              </article>
-            </div>
-            <article class="compare-focus-card">
-              <p class="compare-focus-kicker">Lo clave ahora</p>
-              <h3 id="compareFocusHeadline" class="compare-focus-headline">-</h3>
-              <p id="compareFocusMeta" class="compare-focus-meta">-</p>
-            </article>
-            <article id="compareReadinessCard" class="compare-readiness-card is-warming">
-              <div class="compare-readiness-top">
-                <p class="compare-focus-kicker">Ready for Live</p>
-                <span id="compareReadinessBadge" class="badge">warming</span>
-              </div>
-              <h3 id="compareReadinessHeadline" class="compare-focus-headline">-</h3>
-              <p id="compareReadinessMeta" class="compare-focus-meta">-</p>
-              <ul id="compareReadinessList" class="mini-list compare-readiness-list"></ul>
-            </article>
-            <div class="compare-intel-grid">
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Latencia operativa</span>
-                <strong id="compareLatencyValue" class="compare-kpi-value compare-kpi-value-compact">-</strong>
-                <small id="compareLatencyMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Edge neto</span>
-                <strong id="compareEdgeValue" class="compare-kpi-value compare-kpi-value-compact">-</strong>
-                <small id="compareEdgeMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Break-even estimado</span>
-                <strong id="compareBreakevenValue" class="compare-kpi-value compare-kpi-value-compact">-</strong>
-                <small id="compareBreakevenMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Referencia efectiva</span>
-                <strong id="compareReferenceValue" class="compare-kpi-value compare-kpi-value-compact">-</strong>
-                <small id="compareReferenceMeta" class="compare-kpi-note">-</small>
-              </article>
-            </div>
-            <div class="compare-lifecycle-grid">
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Dos patas visibles</span>
-                <strong id="compareTwoSided" class="compare-kpi-value">-</strong>
-                <small id="compareTwoSidedMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Ventanas cojas</span>
-                <strong id="compareOneSided" class="compare-kpi-value">-</strong>
-                <small id="compareOneSidedMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Cierre por settlement</span>
-                <strong id="compareSettlement" class="compare-kpi-value">-</strong>
-                <small id="compareSettlementMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Cadencia media</span>
-                <strong id="compareCadence" class="compare-kpi-value">-</strong>
-                <small id="compareCadenceMeta" class="compare-kpi-note">-</small>
-              </article>
-            </div>
-            <div class="compare-kpi-grid">
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">PnL comparable paper</span>
-                <strong id="comparePaperPnl" class="compare-kpi-value">-</strong>
-                <small id="comparePaperMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">PnL comparable shadow</span>
-                <strong id="compareShadowPnl" class="compare-kpi-value">-</strong>
-                <small id="compareShadowMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Brecha comparable</span>
-                <strong id="compareGapPnl" class="compare-kpi-value">-</strong>
-                <small id="compareGapPnlMeta" class="compare-kpi-note">-</small>
-              </article>
-              <article class="compare-kpi">
-                <span class="compare-kpi-label">Participacion</span>
-                <strong id="compareGapActivity" class="compare-kpi-value">-</strong>
-                <small id="compareGapActivityMeta" class="compare-kpi-note">-</small>
-              </article>
-            </div>
-            <div class="compare-charts-grid">
-              <article class="compare-chart-card">
-                <div class="subpanel-head">
-                  <h3>Paper a lo largo del tiempo</h3>
-                  <span class="badge">paper</span>
-                </div>
-                <p id="comparePaperChartMeta" class="mini-meta">sin historial todavia</p>
-                <div id="comparePaperChart" class="compare-chart-shell"></div>
-              </article>
-              <article class="compare-chart-card">
-                <div class="subpanel-head">
-                  <h3>Shadow a lo largo del tiempo</h3>
-                  <span class="badge">shadow</span>
-                </div>
-                <p id="compareShadowChartMeta" class="mini-meta">sin historial todavia</p>
-                <div id="compareShadowChart" class="compare-chart-shell"></div>
-              </article>
-            </div>
-            <div class="compare-subsection compare-subsection-compact">
-              <div class="subpanel-head">
-                <h3>Diferencias recientes</h3>
-                <span id="compareWindowCount" class="badge">0 ventanas</span>
-              </div>
-              <ul id="compareDeltaList" class="mini-list compare-delta-list"></ul>
-            </div>
-            <details id="compareCurrentWindowDetails" class="panel panel-details compare-details">
-              <summary class="panel-head">
-                <div>
-                  <h3>Detalle de la ventana actual</h3>
-                  <p class="panel-copy">Budget, fair, reparto y tickets de esta ventana en paper y shadow.</p>
-                </div>
-                <span class="badge">abrir</span>
-              </summary>
-              <div class="compare-grid">
-                <article class="compare-card">
-                  <div class="subpanel-head">
-                    <h3>Paper</h3>
-                    <span id="comparePaperMode" class="badge">-</span>
-                  </div>
-                  <ul id="comparePaperList" class="mini-list"></ul>
-                  <div class="compare-subsection">
-                    <h4>Tickets y aperturas</h4>
-                    <ul id="comparePaperStats" class="mini-list"></ul>
-                  </div>
-                </article>
-                <article class="compare-card">
-                  <div class="subpanel-head">
-                    <h3>Shadow</h3>
-                    <span id="compareShadowMode" class="badge">-</span>
-                  </div>
-                  <ul id="compareShadowList" class="mini-list"></ul>
-                  <div class="compare-subsection">
-                    <h4>Tickets y aperturas</h4>
-                    <ul id="compareShadowStats" class="mini-list"></ul>
-                  </div>
-                </article>
-              </div>
-            </details>
-          </article>
-        </section>
-
-        <section class="strategy-grid" id="strategySection">
-          <article class="panel strategy-card strategy-status-card">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Estado actual</h2>
-                <p class="panel-copy">Ventana, operabilidad y motivo del bot.</p>
-              </div>
-            </div>
-            <div class="status-stack">
-              <div class="status-box">
-                <span>Mercado en juego</span>
-                <strong id="labWindowValue">-</strong>
-              </div>
-              <div class="status-box">
-                <span>Estado ahora</span>
-                <strong id="labOperabilityValue">-</strong>
-              </div>
-              <div class="status-box">
-                <span>Estado del sistema</span>
-                <strong id="labFeedValue">-</strong>
-              </div>
-            </div>
-            <div class="status-meta-grid">
-              <div class="allocation-row">
-                <span>Modo</span>
-                <strong id="labModeValue">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span>Budget restante</span>
-                <strong id="labBudgetRemaining">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span>Minimo efectivo</span>
-                <strong id="labEffectiveMin">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span>Bloqueo real</span>
-                <strong id="labBlockGate">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span>Motivo operativo</span>
-                <strong id="labOperabilityReason">-</strong>
-              </div>
-            </div>
-            <div class="progress">
-              <span id="labWindowFill" class="progress-fill progress-fill-btc" style="width: 0%"></span>
-            </div>
-            <p id="labMeta" class="mini-meta">sin datos del mercado actual</p>
-          </article>
-
-          <article class="panel strategy-card activity-card noise-panel">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Trading Activity</h2>
-                <p class="panel-copy">Reparto actual y ventanas resueltas del motor.</p>
-              </div>
-              <span id="selectedWalletsCount" class="badge">0</span>
-            </div>
-            <div class="activity-columns">
-              <div class="activity-block">
-                <div class="subpanel-head">
-                  <h3>Reparto actual</h3>
-                  <span id="riskBlocksCount" class="badge">0</span>
-                </div>
-                <ul id="selectedWalletsList" class="mini-list"></ul>
-                <p id="selectedWalletsMeta" class="mini-meta">sin reparto actual</p>
-              </div>
-              <div class="activity-block">
-                <div class="subpanel-head">
-                  <h3>Ventanas cerradas</h3>
-                </div>
-                <ul id="riskBlocksList" class="mini-list"></ul>
-                <p id="riskBlocksMeta" class="mini-meta">sin ventanas cerradas aun</p>
-              </div>
-            </div>
-          </article>
-
-          <article class="panel strategy-card market-card">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Mercado</h2>
-                <p class="panel-copy">Referencia, fair y edge observado.</p>
-              </div>
-            </div>
-            <div class="allocation-bars">
-              <div class="allocation-row">
-                <span id="labSpotCurrentLabel">Current price Chainlink/Polymarket</span>
-                <strong id="labSpotCurrent">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span id="labFastSpotLabel">Spot externo rapido</span>
-                <strong id="labChainlinkPrice">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span id="labBeatLabel">Price to beat oficial</span>
-                <strong id="labSpotAnchor">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span id="labBeatDeltaLabel">Polymarket vs beat oficial</span>
-                <strong id="labSpotDelta">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span id="labFastBeatDeltaLabel">Spot rapido vs beat oficial</span>
-                <strong id="labChainlinkDelta">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span id="labAnchorDriftLabel">Ancla propia vs oficial</span>
-                <strong id="labAnchorDrift">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span>Fair Up / Down</span>
-                <strong id="labSpotFair">-</strong>
-              </div>
-              <div class="allocation-row">
-                <span>Edge visible</span>
-                <strong id="labEdgeValue">-</strong>
-              </div>
-              <div class="progress">
-                <span id="labExposureFill" class="progress-fill progress-fill-core" style="width: 0%"></span>
-              </div>
-            </div>
-          </article>
-        </section>
-
-        <section class="microstructure-grid noise-section" id="microstructureSection">
-          <article class="panel">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Buy / Sell Pressure</h2>
-                <p class="panel-copy">Presion direccional interna, spot externo y CVD del bracket.</p>
-              </div>
-              <span id="microPressureBadge" class="badge">tick</span>
-            </div>
-            <ul id="microPressureList" class="mini-list"></ul>
-            <p id="microPressureMeta" class="mini-meta">sin presion observable todavia</p>
-          </article>
-
-          <article class="panel">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Window Readiness</h2>
-                <p class="panel-copy">Score operativo, regimen, EV maker/taker y bloqueo de decision.</p>
-              </div>
-              <span id="microDecisionBadge" class="badge">no-trade</span>
-            </div>
-            <ul id="microDecisionList" class="mini-list"></ul>
-            <p id="microDecisionMeta" class="mini-meta">esperando primera decision</p>
-          </article>
-
-          <article class="panel">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Liquidation Monitor</h2>
-                <p class="panel-copy">Burst 30s/5m y cinta reciente de liquidaciones BTC.</p>
-              </div>
-              <span id="microLiquidationBadge" class="badge">0</span>
-            </div>
-            <ul id="microLiquidationList" class="mini-list"></ul>
-            <p id="microLiquidationMeta" class="mini-meta">sin liquidaciones capturadas</p>
-          </article>
-
-          <article class="panel">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Latency / Health</h2>
-                <p class="panel-copy">Lag de mercado, edad del spot, compute y estado del snapshot.</p>
-              </div>
-              <span id="microLatencyBadge" class="badge">idle</span>
-            </div>
-            <ul id="microLatencyList" class="mini-list"></ul>
-            <p id="microLatencyMeta" class="mini-meta">sin trazas recientes</p>
-          </article>
-        </section>
-
-        <section class="bucket-overview noise-section">
-          <article class="panel bucket-summary bucket-summary-btc">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Ventana viva</h2>
-                <p class="panel-copy">Exposicion y PnL de las patas abiertas ahora.</p>
-              </div>
-              <span id="btcBucketCount" class="badge">0 pos.</span>
-            </div>
-            <div class="bucket-stats">
-              <div class="bucket-stat">
-                <span>Exposicion</span>
-                <strong id="btcBucketExposure">-</strong>
-              </div>
-              <div class="bucket-stat">
-                <span>PnL vivo</span>
-                <strong id="btcBucketPnl">-</strong>
-              </div>
-            </div>
-          </article>
-
-          <article class="panel bucket-summary bucket-summary-core">
-            <div class="panel-head panel-head-tight">
-              <div>
-                <h2>Resoluciones del dia</h2>
-                <p class="panel-copy">Ventanas ya cerradas y resultado agregado.</p>
-              </div>
-              <span id="generalBucketCount" class="badge">0 pos.</span>
-            </div>
-            <div class="bucket-stats">
-              <div class="bucket-stat">
-                <span>Notional</span>
-                <strong id="generalBucketExposure">-</strong>
-              </div>
-              <div class="bucket-stat">
-                <span>Resultado</span>
-                <strong id="generalBucketPnl">-</strong>
-              </div>
-            </div>
-          </article>
-        </section>
-
-        <details class="panel panel-details details-drawer" id="deepDiveSection">
-          <summary class="panel-head">
+        <section class="paper-section panel">
+          <div class="section-heading">
             <div>
-              <h2>Diagnostico avanzado</h2>
-              <p class="panel-copy">Posiciones, ejecuciones y tablas para revisar el motor por debajo.</p>
+              <span class="eyebrow">CUADERNO PAPER</span>
+              <h2>Hipótesis guardadas</h2>
             </div>
-            <span class="badge">abrir</span>
-          </summary>
-
-          <div class="details-stack">
-            <section class="mini-panels noise-section">
-              <article class="panel">
-                <div class="panel-head panel-head-tight">
-                  <h2>Detalle y trazabilidad</h2>
-                </div>
-                <div class="donut-row">
-                  <div id="exposureDonut" class="donut-chart"></div>
-                  <ul id="exposureLegend" class="donut-legend"></ul>
-                </div>
-                <p id="exposureDonutMeta" class="mini-meta">sin datos</p>
-              </article>
-
-              <article class="panel">
-                <div class="panel-head panel-head-tight">
-                  <h2>Ultimos resultados</h2>
-                  <span id="opsPnlCount" class="badge">0</span>
-                </div>
-                <ul id="opsPnlList" class="mini-list"></ul>
-                <p id="opsPnlMeta" class="mini-meta">ultimas operaciones</p>
-              </article>
-
-              <article class="panel">
-                <div class="panel-head panel-head-tight">
-                  <h2>Comparativa de variantes</h2>
-                  <span id="strategySetupsCount" class="badge">0</span>
-                </div>
-                <ul id="strategySetupsList" class="mini-list"></ul>
-                <p id="strategySetupsMeta" class="mini-meta">sin backtests comparables</p>
-              </article>
-
-              <article class="panel">
-                <div class="panel-head panel-head-tight">
-                  <h2>Hipotesis de wallets</h2>
-                  <span id="walletHypothesesCount" class="badge">0</span>
-                </div>
-                <ul id="walletHypothesesList" class="mini-list"></ul>
-                <p id="walletHypothesesMeta" class="mini-meta">sin hipotesis aun</p>
-              </article>
-            </section>
-
-            <section class="bucket-grid" id="positionsSection">
-              <article class="panel bucket-panel">
-                <div class="panel-head">
-                  <div>
-                    <h2 id="positionsCurrentTitle">Patas abiertas</h2>
-                    <p id="positionsCurrentCopy" class="panel-copy">Compras que siguen abiertas dentro del mercado actual.</p>
-                  </div>
-                  <span id="positionsBtcCount" class="badge">0</span>
-                </div>
-                <div class="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Mercado</th>
-                        <th>Outcome</th>
-                        <th>Monto</th>
-                        <th>Avg</th>
-                        <th>Mark</th>
-                        <th>PnL vivo</th>
-                        <th>Realized</th>
-                      </tr>
-                    </thead>
-                    <tbody id="positionsBtcBody"></tbody>
-                  </table>
-                </div>
-              </article>
-
-              <article class="panel bucket-panel noise-panel">
-                <div class="panel-head">
-                  <div>
-                    <h2 id="positionsArchiveTitle">Otras patas / archivo</h2>
-                    <p id="positionsArchiveCopy" class="panel-copy">Operaciones fuera del mercado principal o ya desplazadas.</p>
-                  </div>
-                  <span id="positionsGeneralCount" class="badge">0</span>
-                </div>
-                <div class="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Mercado</th>
-                        <th>Outcome</th>
-                        <th>Monto</th>
-                        <th>Avg</th>
-                        <th>Mark</th>
-                        <th>PnL vivo</th>
-                        <th>Realized</th>
-                      </tr>
-                    </thead>
-                    <tbody id="positionsGeneralBody"></tbody>
-                  </table>
-                </div>
-              </article>
-            </section>
-
-            <details class="panel panel-details" open>
-              <summary class="panel-head">
-                <div>
-                  <h2 id="executionsTitle">Ejecuciones recientes</h2>
-                  <p id="executionsCopy" class="panel-copy">Todas las compras y cierres que ha ido haciendo el simulador.</p>
-                </div>
-                <span class="badge">ultimas 50</span>
-              </summary>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Hora UTC</th>
-                      <th>Accion</th>
-                      <th>Modo</th>
-                      <th>Status</th>
-                      <th>Wallet fuente</th>
-                      <th>Monto USDC</th>
-                      <th>Resultado USD</th>
-                      <th>Notas</th>
-                    </tr>
-                  </thead>
-                  <tbody id="executionsBody"></tbody>
-                </table>
-              </div>
-            </details>
-
-            <details class="panel panel-details noise-section">
-              <summary class="panel-head">
-                <div>
-                  <h2>Auditoria local por ventana</h2>
-                  <p class="panel-copy">Decision por decision del bot en local: edge, EV, fase, budget y motivo del skip o la entrada.</p>
-                </div>
-                <span class="badge">ultimas 60</span>
-              </summary>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Hora UTC</th>
-                      <th>Ventana</th>
-                      <th>Estado</th>
-                      <th>Fase</th>
-                      <th>Senal</th>
-                      <th>Edge / EV</th>
-                      <th>Budget / Expo</th>
-                      <th>Nota</th>
-                    </tr>
-                  </thead>
-                  <tbody id="windowAuditBody"></tbody>
-                </table>
-              </div>
-            </details>
-
-            <details class="panel panel-details noise-section">
-              <summary class="panel-head">
-                <div>
-                  <h2>Senales</h2>
-                  <p class="panel-copy">Registro tecnico interno del motor.</p>
-                </div>
-                <span class="badge">ultimas 100</span>
-              </summary>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Hora UTC</th>
-                      <th>Mercado</th>
-                      <th>Accion</th>
-                      <th>Delta</th>
-                      <th>Status</th>
-                      <th>Nota</th>
-                    </tr>
-                  </thead>
-                  <tbody id="signalsBody"></tbody>
-                </table>
-              </div>
-            </details>
+            <button id="clearPaperBtn" class="text-button" type="button">Limpiar</button>
           </div>
-        </details>
+          <div id="paperLedger" class="paper-ledger"></div>
+        </section>
+
+        <section class="method-grid">
+          <article class="method-card panel">
+            <span class="method-number">01</span>
+            <div>
+              <span class="eyebrow">QUÉ ESTAMOS MIDIENDO</span>
+              <h3>Precio ejecutable, no una vela</h3>
+              <p>El desk enseña bid, ask, spread, profundidad y timestamps. No llama “edge” a una diferencia que no tenga cuota externa, fee y slippage.</p>
+            </div>
+          </article>
+          <article class="method-card panel">
+            <span class="method-number">02</span>
+            <div>
+              <span class="eyebrow">QUÉ NO HACE</span>
+              <h3>No hay wallet en el navegador</h3>
+              <p>No se cargan private keys, API keys, balances ni rutas de compra. Esta versión no puede firmar, enviar, cancelar ni armar órdenes.</p>
+            </div>
+          </article>
+          <article class="method-card panel">
+            <span class="method-number">03</span>
+            <div>
+              <span class="eyebrow">SIGUIENTE EVIDENCIA</span>
+              <h3>Replay antes que live</h3>
+              <p>El cuaderno paper servirá para medir calibración, CLV, fills simulados, selección adversa y drawdown por deporte y tipo de mercado.</p>
+            </div>
+          </article>
+        </section>
       </main>
 
-      <footer class="footer">
-        <p id="lastUpdated">Ultima actualizacion: -</p>
+      <footer class="footer-bar">
+        <span>Polysainz Sports Desk</span>
+        <span>Datos públicos de Polymarket · solo observación · <span id="buildLabel">build 2026.08.13</span></span>
       </footer>
     </div>
-    <script src="/assets/app.js?v=20260403-live-home25"></script>
+    <script src="/assets/app.js?v=20260813-sports1" defer></script>
   </body>
 </html>

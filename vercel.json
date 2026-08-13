@@ -5,5 +5,16 @@
     { "source": "/assets/styles.css", "destination": "/web/assets/styles.css" },
     { "source": "/assets/app.js", "destination": "/web/assets/app.js" },
     { "source": "/(.*)", "destination": "/web/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://polymarket-upload.s3.us-east-2.amazonaws.com; connect-src 'self' https://gamma-api.polymarket.com https://clob.polymarket.com wss://sports-api.polymarket.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" }
+      ]
+    }
   ]
 }

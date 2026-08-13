@@ -1,6 +1,11 @@
-# Polymarket BTC 5m Research Lab
+# Polysainz Sports Desk
 
-Research layer in Python 3.11 to design and evaluate strategies for `Bitcoin Up/Down` 5 minute markets on Polymarket.
+Read-only sports market observatory for Polymarket. The public deployment discovers sports
+events through public Gamma data, reads public market prices, shows public sports-feed updates,
+and keeps paper hypotheses in local browser storage.
+
+The BTC5m runtime is archived. Its code and historical data remain recoverable from Git history,
+but it is not part of the public web bundle and must not be enabled through this project.
 
 The goal is not to promise profitability. The goal is to measure net expectancy under realistic assumptions:
 
@@ -10,7 +15,7 @@ The goal is not to promise profitability. The goal is to measure net expectancy 
 - partial or missed fills
 - degraded market data
 
-The project uses only official and documented Polymarket surfaces:
+The observer uses only public and documented Polymarket surfaces:
 
 - Gamma API: [https://gamma-api.polymarket.com](https://gamma-api.polymarket.com)
 - CLOB API: [https://clob.polymarket.com](https://clob.polymarket.com)
@@ -30,7 +35,19 @@ The project uses only official and documented Polymarket surfaces:
 - [tests/test_discovery.py](C:/Users/sergi/Desktop/polymarket/polymarket_copy_bot/tests/test_discovery.py)
 - [tests/test_backtest_kpis.py](C:/Users/sergi/Desktop/polymarket/polymarket_copy_bot/tests/test_backtest_kpis.py)
 
-## What it implements
+## What the public observer implements
+
+- Sports league and event discovery through Gamma.
+- Market type, price, spread, visible liquidity, minimum size, fee metadata and resolution source.
+- Public sports WebSocket scoreboard updates with stale-state handling.
+- Search and league/market filters.
+- Local paper notebook clearly labelled as simulation.
+- Strictly no wallet, private key, authenticated CLOB client or order route in the web bundle.
+
+The public observer does not place, sign, cancel or arm orders. Existing Polymarket credentials remain
+server-side and are not required for this read-only surface.
+
+## Research layer retained for later paper work
 
 - `underround_arb`: double-leg underround arbitrage when `YES + NO < 1 - buffer` after fees, slippage and adverse selection.
 - `market_making`: two-sided quote joining on bid-side with inventory control and cancel/replace cadence.
@@ -263,17 +280,13 @@ If this research layer evolves into a production service:
 - use CI for pytest, replay smoke tests and packaging checks
 - keep live trading behind explicit feature flags and secret management
 
-## NAS live deployment
+## Archived BTC5m deployment
 
-To make the public dashboard serve the `live` runtime instead of `paper`, use the user-level `systemd` units in [deploy/systemd/README.md](C:/Users/sergi/Desktop/polymarket/polymarket_copy_bot/deploy/systemd/README.md).
+The previous BTC5m live dashboard and systemd units are retained only for historical recovery.
+Do not start `polymarket-live.service` or `polymarket-dashboard-live.service` while evaluating
+the sports observer. See [archive/btc5m/README.md](C:/Users/sergi/Desktop/polymarket/polymarket_copy_bot/archive/btc5m/README.md).
 
-The important detail is that the public port must run:
-
-```bash
-python run.py dashboard --runtime-mode live
-```
-
-and not the default paper dashboard.
+The BTC5m runtime was last referenced at commit `eb21efc`.
 
 ## Limitations
 
