@@ -50,6 +50,7 @@ select, input { width: 100%; border: 1px solid var(--line); border-radius: 12px;
 select:focus, input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(103,183,255,.12); }
 input::placeholder { color: var(--dim); }
 .alert-panel { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 13px 16px; border: 1px solid rgba(255,143,137,.3); border-radius: 14px; color: var(--danger); background: rgba(104, 35, 48, .28); }
+.alert-panel[hidden] { display: none; }
 .alert-panel span { color: var(--muted); font-size: 13px; }
 .alert-panel .text-button { margin-left: auto; }
 .text-button { border: 0; color: var(--blue); background: transparent; font: 600 12px var(--mono); }

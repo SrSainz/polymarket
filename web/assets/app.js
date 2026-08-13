@@ -13,6 +13,7 @@ const state = {
   selectedEventId: "",
   search: "",
   marketType: "all",
+  hasUserSelectedSeries: false,
   paper: readPaper(),
   lastUpdatedAt: 0,
   loading: false,
@@ -243,20 +244,39 @@ async function loadEvents() {
     return;
   }
   const requestId = ++state.requestId;
-  const params = new URLSearchParams({ series_id: state.selectedSeries, limit: "100", active: "true", closed: "false" });
-  let payload;
-  try {
-    payload = await fetchJson(`${GAMMA_API}/events?${params.toString()}`, "Eventos");
-  } catch {
-    // Some Gamma deployments reject the closed flag for older series; retry with the minimal query.
-    payload = await fetchJson(`${GAMMA_API}/events?series_id=${encodeURIComponent(state.selectedSeries)}&limit=100`, "Eventos");
+  const candidateSeries = state.hasUserSelectedSeries
+    ? [state.selectedSeries]
+    : [state.selectedSeries, ...state.sports.map((sport) => sport.series).filter((series) => series !== state.selectedSeries)].slice(0, 14);
+  let selectedEvents = [];
+  let selectedSeries = state.selectedSeries;
+  for (const series of candidateSeries) {
+    const params = new URLSearchParams({ series_id: series, limit: "100", active: "true", closed: "false" });
+    let payload;
+    try {
+      payload = await fetchJson(`${GAMMA_API}/events?${params.toString()}`, "Eventos");
+    } catch {
+      // Some Gamma deployments reject the closed flag for older series; retry with the minimal query.
+      payload = await fetchJson(`${GAMMA_API}/events?series_id=${encodeURIComponent(series)}&limit=100`, "Eventos");
+    }
+    const sport = state.sports.find((item) => item.series === series);
+    const events = unwrap(payload)
+      .map((event) => normalizeEvent(event, sport))
+      .filter((event, index) => {
+        const rawEvent = unwrap(payload)[index];
+        return rawEvent?.active !== false && rawEvent?.closed !== true && rawEvent?.archived !== true;
+      })
+      .filter((event) => event.markets.length > 0)
+      .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0));
+    if (events.length > 0 || state.hasUserSelectedSeries) {
+      selectedEvents = events;
+      selectedSeries = series;
+      break;
+    }
   }
   if (requestId !== state.requestId) return;
-  const sport = state.sports.find((item) => item.series === state.selectedSeries);
-  state.events = unwrap(payload)
-    .map((event) => normalizeEvent(event, sport))
-    .filter((event) => event.markets.length > 0)
-    .sort((a, b) => (b.volume24hr || 0) - (a.volume24hr || 0));
+  state.events = selectedEvents;
+  state.selectedSeries = selectedSeries;
+  $("leagueSelect").value = selectedSeries;
   if (!state.selectedEventId || !state.events.some((event) => event.id === state.selectedEventId)) {
     state.selectedEventId = state.events[0]?.id || "";
   }
@@ -493,7 +513,7 @@ function escapeHtml(value) {
 }
 
 function bindEvents() {
-  $("leagueSelect").addEventListener("change", async (event) => { state.selectedSeries = event.target.value; state.selectedEventId = ""; await refresh(); });
+  $("leagueSelect").addEventListener("change", async (event) => { state.hasUserSelectedSeries = true; state.selectedSeries = event.target.value; state.selectedEventId = ""; await refresh(); });
   $("marketTypeSelect").addEventListener("change", (event) => { state.marketType = event.target.value; renderAll(); });
   $("searchInput").addEventListener("input", (event) => { state.search = event.target.value; renderAll(); });
   $("refreshBtn").addEventListener("click", refresh);
