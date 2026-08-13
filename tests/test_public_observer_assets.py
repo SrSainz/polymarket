@@ -39,3 +39,12 @@ def test_public_observer_preserves_missing_numbers_and_escapes_invalid_dates() -
     assert 'value === null || value === undefined' in content
     assert 'value.trim() === ""' in content
     assert 'return escapeHtml(String(value));' in content
+
+
+def test_public_observer_guards_paper_storage_and_refresh_races() -> None:
+    content = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
+    assert "parsed.filter(isPaperEntry).slice(0, 50)" in content
+    assert 'entry.side === "YES" || entry.side === "NO"' in content
+    assert 'escapeHtml(entry.side)' in content
+    assert "state.refreshPending = true" in content
+    assert "state.requestId += 1" in content

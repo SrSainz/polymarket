@@ -24,6 +24,7 @@ const state = {
   socketRetry: 0,
   refreshTimer: null,
   requestId: 0,
+  refreshPending: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -32,10 +33,24 @@ function readPaper() {
   try {
     const raw = localStorage.getItem(PAPER_STORAGE_KEY);
     const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.filter(isPaperEntry).slice(0, 50) : [];
   } catch {
     return [];
   }
+}
+
+function isPaperEntry(entry) {
+  return Boolean(
+    entry
+      && typeof entry === "object"
+      && typeof entry.id === "string" && entry.id.length <= 200
+      && typeof entry.marketId === "string" && entry.marketId.length <= 200
+      && (entry.side === "YES" || entry.side === "NO")
+      && typeof entry.question === "string" && entry.question.length <= 500
+      && typeof entry.eventTitle === "string" && entry.eventTitle.length <= 500
+      && typeof entry.createdAt === "string" && entry.createdAt.length <= 100
+      && (entry.price === null || (typeof entry.price === "number" && Number.isFinite(entry.price)))
+  );
 }
 
 function writePaper() {
@@ -412,7 +427,7 @@ function renderPaper() {
     $("paperLedger").innerHTML = `<div class="paper-empty"><span>Sin hipótesis todavía.</span><span>Usa “+ Paper” en un mercado para guardar una entrada local sin enviar dinero.</span></div>`;
     return;
   }
-  $("paperLedger").innerHTML = state.paper.map((entry) => `<article class="paper-row"><div><span class="paper-side ${entry.side === "YES" ? "is-yes" : "is-no"}">${entry.side}</span><strong>${escapeHtml(entry.question)}</strong><small>${escapeHtml(entry.eventTitle)} · ${formatDate(entry.createdAt)}</small></div><div class="paper-price"><span>Precio registrado</span><b>${formatPrice(entry.price)}</b></div><button type="button" class="remove-paper" data-remove-paper="${escapeHtml(entry.id)}" aria-label="Eliminar hipótesis">×</button></article>`).join("");
+  $("paperLedger").innerHTML = state.paper.map((entry) => `<article class="paper-row"><div><span class="paper-side ${entry.side === "YES" ? "is-yes" : "is-no"}">${escapeHtml(entry.side)}</span><strong>${escapeHtml(entry.question)}</strong><small>${escapeHtml(entry.eventTitle)} · ${formatDate(entry.createdAt)}</small></div><div class="paper-price"><span>Precio registrado</span><b>${formatPrice(entry.price)}</b></div><button type="button" class="remove-paper" data-remove-paper="${escapeHtml(entry.id)}" aria-label="Eliminar hipótesis">×</button></article>`).join("");
   document.querySelectorAll("[data-remove-paper]").forEach((button) => button.addEventListener("click", () => {
     state.paper = state.paper.filter((entry) => entry.id !== button.dataset.removePaper);
     writePaper();
@@ -455,7 +470,10 @@ function clearAlert() {
 }
 
 async function refresh() {
-  if (state.loading) return;
+  if (state.loading) {
+    state.refreshPending = true;
+    return;
+  }
   state.loading = true;
   setFeedStatus("loading", " ACTUALIZANDO");
   try {
@@ -474,6 +492,10 @@ async function refresh() {
     renderAll();
   } finally {
     state.loading = false;
+    if (state.refreshPending) {
+      state.refreshPending = false;
+      void refresh();
+    }
   }
 }
 
@@ -514,7 +536,7 @@ function escapeHtml(value) {
 }
 
 function bindEvents() {
-  $("leagueSelect").addEventListener("change", async (event) => { state.hasUserSelectedSeries = true; state.selectedSeries = event.target.value; state.selectedEventId = ""; await refresh(); });
+  $("leagueSelect").addEventListener("change", async (event) => { state.hasUserSelectedSeries = true; state.selectedSeries = event.target.value; state.selectedEventId = ""; state.requestId += 1; await refresh(); });
   $("marketTypeSelect").addEventListener("change", (event) => { state.marketType = event.target.value; renderAll(); });
   $("searchInput").addEventListener("input", (event) => { state.search = event.target.value; renderAll(); });
   $("refreshBtn").addEventListener("click", refresh);
