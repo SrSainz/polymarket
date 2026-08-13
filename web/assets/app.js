@@ -61,6 +61,7 @@ function parseList(value) {
 }
 
 function numberOrNull(value) {
+  if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -81,7 +82,7 @@ function formatUsd(value) {
 function formatDate(value) {
   if (!value) return "Fecha no disponible";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
+  if (Number.isNaN(date.getTime())) return escapeHtml(String(value));
   return new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 

@@ -32,3 +32,10 @@ def test_public_observer_only_uses_public_market_hosts() -> None:
     assert "https://clob.polymarket.com" in content
     assert "wss://sports-api.polymarket.com/ws" in content
     assert "nas.polysainz.com" not in content
+
+
+def test_public_observer_preserves_missing_numbers_and_escapes_invalid_dates() -> None:
+    content = (ROOT / "web" / "assets" / "app.js").read_text(encoding="utf-8")
+    assert 'value === null || value === undefined' in content
+    assert 'value.trim() === ""' in content
+    assert 'return escapeHtml(String(value));' in content
