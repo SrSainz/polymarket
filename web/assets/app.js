@@ -15,7 +15,7 @@ const state = {
   marketType: "all",
   viewFilter: "all",
   horizon: "3d",
-  sortBy: "liquidity",
+  sortBy: "start",
   detailOpen: false,
   hasUserSelectedSeries: false,
   paper: readPaper(),
@@ -503,6 +503,7 @@ function selectEvent(eventId, openDetail = false) {
   state.detailOpen = openDetail;
   state.books.clear();
   renderAll();
+  if (openDetail) window.setTimeout(() => $("detailCloseBtn")?.focus(), 0);
   void loadBookSnapshot(state.events.find((event) => event.id === state.selectedEventId)).then(renderAll);
 }
 
@@ -524,7 +525,7 @@ function renderEventsCompact() {
     const question = market?.question?.replace(/^Will /i, "") || "Mercado sin titulo";
     const outcomes = market ? `<span>${escapeHtml(marketOutcomeLabel(market, 0))} <b>${formatPrice(market.prices[0])}</b></span><span>${escapeHtml(marketOutcomeLabel(market, 1))} <b>${formatPrice(market.prices[1])}</b></span>` : "";
     return `<article class="event-card compact-event-card${selected}" data-event-id="${escapeHtml(event.id)}">
-      <button type="button" class="event-card-main" data-select-event="${escapeHtml(event.id)}" aria-expanded="${event.id === state.selectedEventId}" aria-controls="detailColumn">
+      <button type="button" class="event-card-main" data-select-event="${escapeHtml(event.id)}" aria-expanded="${Boolean(state.detailOpen && event.id === state.selectedEventId)}" aria-controls="detailColumn">
         <div class="event-card-top"><div class="event-card-kicker"><span class="league-label">${escapeHtml(event.sport)}</span><span class="event-time">${escapeHtml(formatEventTime(event.startDate))}</span></div><span class="state-tag ${status.className}">${status.label}</span></div>
         <div class="event-title-row"><div><h3>${escapeHtml(teamsLabel(event))}</h3><p>${escapeHtml(event.title)} ${score}</p></div><span class="event-arrow" aria-hidden="true">↗</span></div>
         <div class="event-quote"><div class="event-quote-label"><span>${escapeHtml(formatMarketType(market?.type))}</span><small>${escapeHtml(question)}</small></div><div class="event-probability"><div class="probability-track"><i style="width: ${meter}%"></i></div><strong>${formatProbability(probability)}</strong></div></div>
@@ -540,7 +541,11 @@ function syncDetailVisibility() {
   const column = $("detailColumn");
   const backdrop = $("detailBackdrop");
   const isOpen = Boolean(state.detailOpen && state.selectedEventId);
+  const mobile = window.matchMedia("(max-width: 900px)").matches;
   column.classList.toggle("is-open", isOpen);
+  column.setAttribute("role", mobile && isOpen ? "dialog" : "region");
+  column.setAttribute("aria-modal", String(mobile && isOpen));
+  column.setAttribute("aria-hidden", String(mobile && !isOpen));
   backdrop.hidden = !isOpen;
   document.body.classList.toggle("detail-is-open", isOpen);
 }
@@ -719,6 +724,16 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 }
 
+function closeDetail() {
+  const selectedEventId = state.selectedEventId;
+  state.detailOpen = false;
+  syncDetailVisibility();
+  window.setTimeout(() => {
+    const button = document.querySelector(`[data-select-event="${CSS.escape(selectedEventId)}"]`);
+    button?.focus();
+  }, 0);
+}
+
 function bindEvents() {
   $("leagueSelect").addEventListener("change", async (event) => { state.hasUserSelectedSeries = true; state.selectedSeries = event.target.value; state.selectedEventId = ""; state.requestId += 1; await refresh(); });
   document.querySelectorAll("[data-horizon]").forEach((button) => button.addEventListener("click", () => {
@@ -744,12 +759,11 @@ function bindEvents() {
   }));
   $("refreshBtn").addEventListener("click", refresh);
   $("alertRetryBtn").addEventListener("click", refresh);
-  $("detailCloseBtn").addEventListener("click", () => { state.detailOpen = false; syncDetailVisibility(); });
-  $("detailBackdrop").addEventListener("click", () => { state.detailOpen = false; syncDetailVisibility(); });
+  $("detailCloseBtn").addEventListener("click", closeDetail);
+  $("detailBackdrop").addEventListener("click", closeDetail);
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.detailOpen) {
-      state.detailOpen = false;
-      syncDetailVisibility();
+      closeDetail();
     }
   });
   $("clearPaperBtn").addEventListener("click", () => { state.paper = []; writePaper(); renderPaper(); });
