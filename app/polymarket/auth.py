@@ -5,17 +5,16 @@ from app.settings import EnvSettings
 
 def build_authenticated_clob_client(env: EnvSettings):
     """
-    Builds an authenticated py-clob-client instance.
+    Builds an authenticated py-clob-client-v2 instance.
 
     This is used only when LIVE_TRADING=true.
-    Requires installing py-clob-client separately.
+    Requires installing py-clob-client-v2 separately.
     """
     try:
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import ApiCreds
+        from py_clob_client_v2 import ApiCreds, ClobClient
     except ImportError as error:
         raise RuntimeError(
-            "py-clob-client is required for live trading. Install it manually before running live mode."
+            "py-clob-client-v2 is required for live trading. Install it before running live mode."
         ) from error
 
     if not env.polymarket_private_key:
@@ -36,7 +35,7 @@ def build_authenticated_clob_client(env: EnvSettings):
             api_passphrase=env.polymarket_api_passphrase,
         )
     else:
-        creds = client.create_or_derive_api_creds()
+        creds = client.create_or_derive_api_key()
 
     client.set_api_creds(creds)
     return client

@@ -47,6 +47,61 @@ The observer uses only public and documented Polymarket surfaces:
 The public observer does not place, sign, cancel or arm orders. Existing Polymarket credentials remain
 server-side and are not required for this read-only surface.
 
+## Daily advisor (safe foundation)
+
+The separate `app/advisor/` package is the first foundation for a daily opportunity workflow. It:
+
+- abstains unless an independently sourced, calibrated probability interval is supplied;
+- prices proposals using executable quote, fees, slippage, liquidity and a conservative probability bound;
+- persists an immutable proposal and one-time confirmation code without storing the code in SQLite;
+- validates a signed, allowlisted WhatsApp reply against the exact outbound message ID;
+- claims execution once, revalidates the quote, reserves the daily loss budget atomically and keeps ambiguous
+  provider responses for reconciliation.
+
+The risk ledger uses UTC calendar days: open reservations remain counted across midnight, while a realized loss is
+settled into the UTC day in which it is observed. A reconciliation operator must resolve ambiguous provider results
+through the explicit store reconciliation operation before releasing or settling a reservation; keys are server-side
+and should be rotated through deployment secrets.
+An order reported as `cancelled` is not treated as a zero-fill result: it remains reserved until reconciliation
+confirms `filled_size=0` or identifies an order/fill to settle.
+
+It does not discover sports markets, invent probability estimates, send WhatsApp messages or place orders by
+default. `ADVISOR_ENABLED=false`, `ADVISOR_LIVE_ENABLED=false`, `ADVISOR_BROKER_CONFIGURED=false`,
+`LIVE_TRADING=false`, paper mode and dry-run remain the required baseline. Do not set the live flags until the
+model has out-of-sample calibration evidence, the WhatsApp channel is legally and operationally eligible, and the
+CLOB client has been audited for the current Polymarket API version.
+
+The optional `SportsMarketDiscovery` adapter uses the public Gamma market list and public CLOB order books, while
+`DailyAdvisorRunner` connects it to a supplied independent probability model and the durable WhatsApp outbox.
+`DailyAdvisorScheduler` runs at most once per UTC day. The probability model is intentionally an explicit dependency:
+the system will not infer probability from the market price or fabricate sports predictions. `PolymarketCLOBSubmitter`
+is an explicit, fail-closed adapter for the existing authenticated client; ambiguous responses remain pending for
+reconciliation and are never retried automatically.
+
+`JsonProbabilityModel` is the safe default adapter. Set `ADVISOR_EVIDENCE_PATH` to a server-side JSON artifact with
+`predictions` keyed by the exact `market_id`, `condition_id`, `token_id` and `outcome`, plus `probability`,
+`lower_probability`, `upper_probability`, `model_name`, `model_version`, `calibrated`, `sample_size`, `brier_score`,
+`as_of`, `source_refs` and `independent`. It does not train or forecast; missing, duplicated, stale or uncalibrated
+records produce no trade proposal. The artifact must be generated and validated out of band from real sports data.
+
+The public Vercel site must not receive these server-side keys. The advisor database and webhook belong on the
+private NAS or another authenticated backend, not in the static browser bundle.
+
+The server-side entrypoint is `polymarket-advisor`. It loads `.env`, keeps the SQLite ledger on the NAS, and never
+prints confirmation codes or secrets:
+
+```bash
+polymarket-advisor status
+polymarket-advisor daily
+polymarket-advisor scheduler
+polymarket-advisor webhook --host 127.0.0.1 --port 8787
+```
+
+`daily` and `scheduler` require `ADVISOR_BANKROLL_USDC > 0`. They only create proposals when the independent
+evidence artifact passes all gates. The webhook is a separate private process; expose it through an authenticated
+reverse proxy and do not publish the SQLite file or WhatsApp secrets to Vercel. The live execution worker is not
+started by this CLI and remains behind the explicit live gates plus manual confirmation.
+
 ## Research layer retained for later paper work
 
 - `underround_arb`: double-leg underround arbitrage when `YES + NO < 1 - buffer` after fees, slippage and adverse selection.

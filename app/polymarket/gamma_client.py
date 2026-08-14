@@ -44,6 +44,48 @@ class GammaClient:
             return None
         return self._hydrate_market_event(market)
 
+    def list_markets(
+        self,
+        *,
+        active: bool = True,
+        closed: bool = False,
+        limit: int = 100,
+        offset: int = 0,
+        tag_id: str | int | None = None,
+        sports_market_types: tuple[str, ...] = (),
+    ) -> list[dict[str, Any]]:
+        """Return a bounded public Gamma page for discovery adapters."""
+        safe_limit = max(1, min(int(limit), 500))
+        safe_offset = max(0, int(offset))
+        params: dict[str, Any] = {
+            "active": str(bool(active)).lower(),
+            "closed": str(bool(closed)).lower(),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        }
+        if tag_id is not None and str(tag_id).strip():
+            params["tag_id"] = str(tag_id).strip()
+        safe_types = tuple(str(value).strip() for value in sports_market_types if str(value).strip())
+        if safe_types:
+            params["sports_market_types"] = list(dict.fromkeys(safe_types))
+        response = self.session.get(
+            f"{self.base_url}/markets",
+            params=params,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            return []
+        return [dict(item) for item in payload if isinstance(item, dict)]
+
+    def list_sports(self) -> list[dict[str, Any]]:
+        """Return Gamma's sports metadata used to obtain server-side tags."""
+        response = self.session.get(f"{self.base_url}/sports", timeout=self.timeout)
+        response.raise_for_status()
+        payload = response.json()
+        return [dict(item) for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+
     def get_event_by_id(self, event_id: str) -> dict[str, Any] | None:
         event_key = str(event_id or "").strip()
         if not event_key:

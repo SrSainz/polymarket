@@ -32,7 +32,7 @@ class CLOBClient:
         self._book_summary_cache_seconds = 30.0
         self._min_order_size_cache: dict[str, tuple[float, float]] = {}
         self._fee_rate_cache_seconds = 30.0
-        self._fee_rate_cache: dict[str, tuple[float, float]] = {}
+        self._fee_rate_cache: dict[str, tuple[float | None, float]] = {}
 
     def track_assets(self, token_ids: list[str] | tuple[str, ...]) -> None:
         if self.market_feed is None:
@@ -107,9 +107,9 @@ class CLOBClient:
         cached = self._fee_rate_cache.get(token_key)
         now = time.time()
         if cached is not None and now < cached[1]:
-            return cached[0] if cached[0] > 0 else None
+            return cached[0]
 
-        fee_bps = 0.0
+        fee_bps: float | None = None
         try:
             response = self.session.get(
                 f"{self.base_url}/fee-rate",
@@ -119,12 +119,22 @@ class CLOBClient:
             response.raise_for_status()
             payload = response.json()
             if isinstance(payload, dict):
-                fee_bps = _safe_float(payload.get("base_fee") or payload.get("fee_rate_bps") or payload.get("feeRateBps"))
+                raw_fee = next(
+                    (
+                        payload.get(key)
+                        for key in ("base_fee", "fee_rate_bps", "feeRateBps")
+                        if payload.get(key) is not None
+                    ),
+                    None,
+                )
+                parsed_fee = _parse_nonnegative_float(raw_fee)
+                if parsed_fee is not None:
+                    fee_bps = parsed_fee
         except requests.RequestException:
-            fee_bps = 0.0
+            fee_bps = None
 
         self._fee_rate_cache[token_key] = (fee_bps, now + self._fee_rate_cache_seconds)
-        return fee_bps if fee_bps > 0 else None
+        return fee_bps
 
     def _fetch_book_payload(self, token_id: str) -> dict[str, Any]:
         response = self.session.get(
@@ -143,9 +153,9 @@ class CLOBClient:
         client = build_authenticated_clob_client(self.env)
 
         try:
-            from py_clob_client.clob_types import AssetType, BalanceAllowanceParams
+            from py_clob_client_v2 import AssetType, BalanceAllowanceParams
         except ImportError as error:
-            raise RuntimeError("py-clob-client install is incomplete for balance queries.") from error
+            raise RuntimeError("py-clob-client-v2 install is incomplete for balance queries.") from error
 
         asset_type = getattr(AssetType, "COLLATERAL", "COLLATERAL")
         params = _build_balance_params(BalanceAllowanceParams, asset_type)
@@ -172,53 +182,49 @@ class CLOBClient:
 
         client = build_authenticated_clob_client(self.env)
 
-        if hasattr(client, "create_market_order") and hasattr(client, "post_order"):
-            try:
-                from py_clob_client.clob_types import MarketOrderArgs, OrderType
-                from py_clob_client.order_builder.constants import BUY, SELL
-            except ImportError as error:
-                raise RuntimeError("py-clob-client install is incomplete for market order types.") from error
+        try:
+            from py_clob_client_v2 import MarketOrderArgs, OrderType, Side
+        except ImportError as error:
+            raise RuntimeError("py-clob-client-v2 install is incomplete for market order types.") from error
 
-            side_upper = side.upper().strip()
-            if side_upper not in {"BUY", "SELL"}:
-                raise RuntimeError(f"Unsupported side: {side}")
-            side_const = BUY if side_upper == "BUY" else SELL
-            order_type_name = str(order_type or "FOK").upper().strip()
-            order_type_value = getattr(OrderType, order_type_name, None)
-            if order_type_value is None:
-                raise RuntimeError(f"Unsupported order type: {order_type}")
+        side_upper = side.upper().strip()
+        if side_upper not in {"BUY", "SELL"}:
+            raise RuntimeError(f"Unsupported side: {side}")
+        side_const = Side.BUY if side_upper == "BUY" else Side.SELL
+        order_type_name = str(order_type or "FOK").upper().strip()
+        order_type_value = getattr(OrderType, order_type_name, None)
+        if order_type_value is None:
+            raise RuntimeError(f"Unsupported order type: {order_type}")
 
-            # py-clob-client expects amount in USDC for BUY market orders.
-            amount = float(notional) if side_upper == "BUY" and notional and notional > 0 else float(size)
-            if amount <= 0:
-                raise RuntimeError("Order amount must be > 0.")
+        # V2 expects USDC notional for BUY and conditional-token shares for SELL.
+        amount = float(notional) if side_upper == "BUY" and notional and notional > 0 else float(size)
+        if amount <= 0:
+            raise RuntimeError("Order amount must be > 0.")
 
-            order_args = MarketOrderArgs(
-                token_id=token_id,
-                amount=amount,
-                side=side_const,
-                price=float(limit_price) if limit_price and limit_price > 0 else 0.0,
+        order_args = MarketOrderArgs(
+            token_id=token_id,
+            amount=amount,
+            side=side_const,
+            price=float(limit_price) if limit_price and limit_price > 0 else 0.0,
+            order_type=order_type_value,
+        )
+        try:
+            return client.create_and_post_market_order(
+                order_args=order_args,
                 order_type=order_type_value,
             )
-            try:
-                signed_order = client.create_market_order(order_args)
-                return client.post_order(signed_order, orderType=order_type_value)
-            except Exception as error:  # noqa: BLE001
-                message = str(error or "")
-                lower_message = message.lower()
-                if "invalid signature" in lower_message:
-                    raise RuntimeError(
-                        "invalid signature from CLOB. Verify POLYMARKET_SIGNATURE_TYPE and POLYMARKET_FUNDER match the wallet account type."
-                    ) from error
-                if "unauthorized/invalid api key" in lower_message:
-                    raise RuntimeError(
-                        "invalid api key credentials. Clear POLYMARKET_API_KEY/SECRET/PASSPHRASE to derive fresh creds or set valid values."
-                    ) from error
-                raise
-
-        raise RuntimeError(
-            "py-clob-client API mismatch. Expected create_market_order/post_order methods are unavailable."
-        )
+        except Exception as error:  # noqa: BLE001
+            message = str(error or "")
+            lower_message = message.lower()
+            if "invalid signature" in lower_message:
+                raise RuntimeError(
+                    "invalid signature from CLOB. Verify POLYMARKET_SIGNATURE_TYPE and POLYMARKET_FUNDER match the wallet account type."
+                ) from error
+            if "unauthorized/invalid api key" in lower_message:
+                raise RuntimeError(
+                    "invalid api key credentials. Clear POLYMARKET_API_KEY/SECRET/PASSPHRASE to derive fresh creds or set valid values."
+                ) from error
+            raise
 
     def place_limit_order(
         self,
@@ -238,12 +244,11 @@ class CLOBClient:
         if side_upper not in {"BUY", "SELL"}:
             raise RuntimeError(f"Unsupported side: {side}")
         try:
-            from py_clob_client.clob_types import OrderArgs, OrderType
-            from py_clob_client.order_builder.constants import BUY, SELL
+            from py_clob_client_v2 import OrderArgs, OrderType, Side
         except ImportError as error:
-            raise RuntimeError("py-clob-client install is incomplete for limit order types.") from error
+            raise RuntimeError("py-clob-client-v2 install is incomplete for limit order types.") from error
 
-        side_const = BUY if side_upper == "BUY" else SELL
+        side_const = Side.BUY if side_upper == "BUY" else Side.SELL
         order_type_name = str(order_type or "GTC").upper().strip()
         order_type_value = getattr(OrderType, order_type_name, None)
         if order_type_value is None:
@@ -255,53 +260,49 @@ class CLOBClient:
             size=float(size),
             side=side_const,
         )
-        if hasattr(client, "create_and_post_order"):
-            return client.create_and_post_order(order_args, orderType=order_type_value, postOnly=bool(post_only))
-        if hasattr(client, "create_order") and hasattr(client, "post_order"):
-            signed_order = client.create_order(order_args)
-            return client.post_order(signed_order, orderType=order_type_value, postOnly=bool(post_only))
-        raise RuntimeError("py-clob-client API mismatch. Expected create limit order methods are unavailable.")
+        return client.create_and_post_order(
+            order_args=order_args,
+            order_type=order_type_value,
+            post_only=bool(post_only),
+        )
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         if not self.env.live_trading:
             raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to manage orders.")
         client = build_authenticated_clob_client(self.env)
-        if hasattr(client, "cancel_order"):
-            response = client.cancel_order(order_id)
-            return response if isinstance(response, dict) else {"canceled": [order_id]}
-        raise RuntimeError("py-clob-client API mismatch. Expected cancel_order().")
+        try:
+            from py_clob_client_v2 import OrderPayload
+        except ImportError as error:
+            raise RuntimeError("py-clob-client-v2 install is incomplete for order cancellation.") from error
+        response = client.cancel_order(OrderPayload(orderID=str(order_id)))
+        return response if isinstance(response, dict) else {"canceled": [order_id]}
 
     def cancel_all(self, *, market: str = "", asset_id: str = "") -> dict[str, Any]:
         if not self.env.live_trading:
             raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to manage orders.")
         client = build_authenticated_clob_client(self.env)
         if market or asset_id:
-            if hasattr(client, "cancel_market_orders"):
-                payload = {}
-                if market:
-                    payload["market"] = market
-                if asset_id:
-                    payload["asset_id"] = asset_id
-                response = client.cancel_market_orders(payload)
-                return response if isinstance(response, dict) else {"canceled": []}
-            raise RuntimeError("py-clob-client API mismatch. Expected cancel_market_orders().")
-        if hasattr(client, "cancel_all"):
-            response = client.cancel_all()
+            try:
+                from py_clob_client_v2 import OrderMarketCancelParams
+            except ImportError as error:
+                raise RuntimeError("py-clob-client-v2 install is incomplete for market cancellation.") from error
+            response = client.cancel_market_orders(
+                OrderMarketCancelParams(market=market or None, asset_id=asset_id or None)
+            )
             return response if isinstance(response, dict) else {"canceled": []}
-        raise RuntimeError("py-clob-client API mismatch. Expected cancel_all().")
+        response = client.cancel_all()
+        return response if isinstance(response, dict) else {"canceled": []}
 
     def list_open_orders(self, *, market: str = "", asset_id: str = "") -> list[dict[str, Any]]:
         if not self.env.live_trading:
             raise RuntimeError("Live trading is disabled. Set LIVE_TRADING=true to query orders.")
         client = build_authenticated_clob_client(self.env)
-        if not hasattr(client, "get_open_orders"):
-            raise RuntimeError("py-clob-client API mismatch. Expected get_open_orders().")
-        params = {}
-        if market:
-            params["market"] = market
-        if asset_id:
-            params["asset_id"] = asset_id
-        rows = client.get_open_orders(params or None, True)
+        try:
+            from py_clob_client_v2 import OpenOrderParams
+        except ImportError as error:
+            raise RuntimeError("py-clob-client-v2 install is incomplete for open-order queries.") from error
+        params = OpenOrderParams(market=market or None, asset_id=asset_id or None)
+        rows = client.get_open_orders(params if market or asset_id else None, only_first_page=True)
         return [_normalize_order_status(row) for row in (rows or [])]
 
 
@@ -415,6 +416,16 @@ def _safe_float(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _parse_nonnegative_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 and parsed == parsed else None
 
 
 def _coerce_positive_float(value: object) -> float:
