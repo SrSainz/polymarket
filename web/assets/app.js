@@ -14,7 +14,9 @@ const state = {
   search: "",
   marketType: "all",
   viewFilter: "all",
+  horizon: "3d",
   sortBy: "liquidity",
+  detailOpen: false,
   hasUserSelectedSeries: false,
   paper: readPaper(),
   lastUpdatedAt: 0,
@@ -102,6 +104,22 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return escapeHtml(String(value));
   return new Intl.DateTimeFormat("es-ES", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function formatEventTime(value) {
+  if (!value) return "Hora no disponible";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Hora no disponible";
+  return new Intl.DateTimeFormat("es-ES", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }).format(date);
+}
+
+function formatProbability(value) {
+  const number = numberOrNull(value);
+  return number === null ? "-" : `${Math.round(number * 100)}%`;
+}
+
+function horizonLabel() {
+  return state.horizon === "today" ? "Hoy" : "Proximas 72 horas";
 }
 
 function formatAgo(timestamp) {
@@ -351,6 +369,21 @@ function eventState(event) {
   return { label: "PRÓXIMO", className: "state-next", score };
 }
 
+function eventWithinHorizon(event) {
+  const start = new Date(event.startDate).getTime();
+  if (!Number.isFinite(start)) return false;
+  const now = Date.now();
+  const status = eventState(event);
+  const isActive = status.className === "state-live" || status.className === "state-stale" || status.className === "state-waiting";
+  if (state.horizon === "today") {
+    const today = new Date(now);
+    const tomorrow = new Date(today);
+    tomorrow.setHours(24, 0, 0, 0);
+    return (start >= now && start < tomorrow.getTime()) || (isActive && start >= now - 6 * 60 * 60 * 1000);
+  }
+  return (start >= now && start <= now + 72 * 60 * 60 * 1000) || (isActive && start >= now - 6 * 60 * 60 * 1000);
+}
+
 function marketMatchesFilter(market) {
   if (state.marketType === "all") return true;
   return market.type === state.marketType || market.type.startsWith(`${state.marketType}_`);
@@ -368,11 +401,16 @@ function filteredEvents() {
   const events = state.events.filter((event) => {
     const matchesSearch = !query || `${event.title} ${event.sport} ${event.description}`.toLowerCase().includes(query);
     const matchesType = event.markets.some(marketMatchesFilter);
-    return matchesSearch && matchesType && eventMatchesView(event);
+    return matchesSearch && matchesType && eventMatchesView(event) && eventWithinHorizon(event);
   });
   return events.sort((a, b) => {
+    const aStart = new Date(a.startDate).getTime();
+    const bStart = new Date(b.startDate).getTime();
+    const aSameDay = Number.isFinite(aStart) && new Date(aStart).toDateString() === new Date().toDateString();
+    const bSameDay = Number.isFinite(bStart) && new Date(bStart).toDateString() === new Date().toDateString();
+    if (aSameDay !== bSameDay) return aSameDay ? -1 : 1;
     if (state.sortBy === "start") {
-      return (new Date(a.startDate).getTime() || Number.MAX_SAFE_INTEGER) - (new Date(b.startDate).getTime() || Number.MAX_SAFE_INTEGER);
+      return (aStart || Number.MAX_SAFE_INTEGER) - (bStart || Number.MAX_SAFE_INTEGER);
     }
     if (state.sortBy === "volume") return (b.volume24hr || 0) - (a.volume24hr || 0);
     return (b.liquidity || 0) - (a.liquidity || 0);
@@ -432,6 +470,81 @@ function renderMiniMarket(market) {
   return `<div class="mini-market"><span class="market-type">${escapeHtml(formatMarketType(market.type))}</span><span class="mini-question">${escapeHtml(market.question.replace(/^Will /i, ""))}</span><span class="price-pair"><b>${formatPrice(yes)}</b><span>/</span><b>${formatPrice(no)}</b></span></div>`;
 }
 
+function primaryMarket(event) {
+  return event?.markets.find(marketMatchesFilter) || event?.markets[0] || null;
+}
+
+function marketProbability(market) {
+  const prices = (market?.prices || []).filter((price) => price !== null);
+  return prices.length ? Math.max(...prices) : null;
+}
+
+function marketOutcomeLabel(market, index) {
+  const outcome = market?.outcomes?.[index];
+  return outcome ? String(outcome) : index === 0 ? "SI" : "NO";
+}
+
+function renderSummaryCompact(events) {
+  const live = events.filter((event) => eventState(event).label.includes("DIRECT")).length;
+  const liquidity = events.reduce((total, event) => total + (event.liquidity || 0), 0);
+  const sportName = state.sports.find((sport) => sport.series === state.selectedSeries)?.name || "Deportes";
+  $("eventCount").textContent = String(events.length);
+  $("eventCountMeta").textContent = `${horizonLabel()} · ${sportName}`;
+  $("liveCount").textContent = String(live);
+  $("liveCountMeta").textContent = live ? "Marcador publico" : "Sin directo ahora";
+  $("liquidityValue").textContent = formatUsd(liquidity);
+  $("paperCount").textContent = String(state.paper.length);
+  $("navPaperCount").textContent = String(state.paper.length);
+  $("resultCount").textContent = `${events.length} ${events.length === 1 ? "evento" : "eventos"}`;
+}
+
+function selectEvent(eventId, openDetail = false) {
+  state.selectedEventId = eventId;
+  state.detailOpen = openDetail;
+  state.books.clear();
+  renderAll();
+  void loadBookSnapshot(state.events.find((event) => event.id === state.selectedEventId)).then(renderAll);
+}
+
+function renderEventsCompact() {
+  const events = filteredEvents();
+  state.filteredEvents = events;
+  renderSummaryCompact(events);
+  if (!events.length) {
+    $("eventsList").innerHTML = `<div class="empty-feed"><div class="empty-icon">⌁</div><strong>No hay eventos en este horizonte</strong><p>Prueba "Hoy", "3 dias", otra liga o cambia el filtro de mercado.</p></div>`;
+    return;
+  }
+  $("eventsList").innerHTML = events.map((event) => {
+    const status = eventState(event);
+    const market = primaryMarket(event);
+    const selected = event.id === state.selectedEventId ? " is-selected" : "";
+    const probability = marketProbability(market);
+    const meter = probability === null ? 0 : Math.round(Math.min(1, Math.max(0, probability)) * 100);
+    const score = status.score?.score ? `<span class="score-chip">${escapeHtml(status.score.score)}</span>` : "";
+    const question = market?.question?.replace(/^Will /i, "") || "Mercado sin titulo";
+    const outcomes = market ? `<span>${escapeHtml(marketOutcomeLabel(market, 0))} <b>${formatPrice(market.prices[0])}</b></span><span>${escapeHtml(marketOutcomeLabel(market, 1))} <b>${formatPrice(market.prices[1])}</b></span>` : "";
+    return `<article class="event-card compact-event-card${selected}" data-event-id="${escapeHtml(event.id)}">
+      <button type="button" class="event-card-main" data-select-event="${escapeHtml(event.id)}" aria-expanded="${event.id === state.selectedEventId}" aria-controls="detailColumn">
+        <div class="event-card-top"><div class="event-card-kicker"><span class="league-label">${escapeHtml(event.sport)}</span><span class="event-time">${escapeHtml(formatEventTime(event.startDate))}</span></div><span class="state-tag ${status.className}">${status.label}</span></div>
+        <div class="event-title-row"><div><h3>${escapeHtml(teamsLabel(event))}</h3><p>${escapeHtml(event.title)} ${score}</p></div><span class="event-arrow" aria-hidden="true">↗</span></div>
+        <div class="event-quote"><div class="event-quote-label"><span>${escapeHtml(formatMarketType(market?.type))}</span><small>${escapeHtml(question)}</small></div><div class="event-probability"><div class="probability-track"><i style="width: ${meter}%"></i></div><strong>${formatProbability(probability)}</strong></div></div>
+        <div class="event-outcomes">${outcomes}</div>
+        <div class="event-meta"><span>Liquidez <b>${formatUsd(event.liquidity)}</b></span><span>24h <b>${formatUsd(event.volume24hr)}</b></span><span>${event.markets.length} mercados</span></div>
+      </button>
+    </article>`;
+  }).join("");
+  document.querySelectorAll("[data-select-event]").forEach((button) => button.addEventListener("click", () => selectEvent(button.dataset.selectEvent, true)));
+}
+
+function syncDetailVisibility() {
+  const column = $("detailColumn");
+  const backdrop = $("detailBackdrop");
+  const isOpen = Boolean(state.detailOpen && state.selectedEventId);
+  column.classList.toggle("is-open", isOpen);
+  backdrop.hidden = !isOpen;
+  document.body.classList.toggle("detail-is-open", isOpen);
+}
+
 function renderDetail() {
   const event = state.events.find((item) => item.id === state.selectedEventId);
   if (!event) {
@@ -479,6 +592,7 @@ function renderDetailMarket(market) {
 
 function renderPaper() {
   $("paperCount").textContent = String(state.paper.length);
+  $("navPaperCount").textContent = String(state.paper.length);
   if (!state.paper.length) {
     $("paperLedger").innerHTML = `<div class="paper-empty"><span>Sin hipótesis todavía.</span><span>Usa “+ Paper” en un mercado para guardar una entrada local sin enviar dinero.</span></div>`;
     return;
@@ -592,9 +706,10 @@ function renderAll() {
     state.selectedEventId = nextSelectedEventId;
     state.books.clear();
   }
-  renderEvents();
+  renderEventsCompact();
   renderDetail();
   renderPaper();
+  syncDetailVisibility();
   if (selectionChanged) {
     void loadBookSnapshot(state.events.find((event) => event.id === state.selectedEventId)).then(renderAll);
   }
@@ -606,6 +721,15 @@ function escapeHtml(value) {
 
 function bindEvents() {
   $("leagueSelect").addEventListener("change", async (event) => { state.hasUserSelectedSeries = true; state.selectedSeries = event.target.value; state.selectedEventId = ""; state.requestId += 1; await refresh(); });
+  document.querySelectorAll("[data-horizon]").forEach((button) => button.addEventListener("click", () => {
+    state.horizon = button.dataset.horizon;
+    document.querySelectorAll("[data-horizon]").forEach((item) => {
+      const active = item.dataset.horizon === state.horizon;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-pressed", String(active));
+    });
+    renderAll();
+  }));
   $("marketTypeSelect").addEventListener("change", (event) => { state.marketType = event.target.value; renderAll(); });
   $("searchInput").addEventListener("input", (event) => { state.search = event.target.value; renderAll(); });
   $("sortSelect").addEventListener("change", (event) => { state.sortBy = event.target.value; renderAll(); });
@@ -620,6 +744,14 @@ function bindEvents() {
   }));
   $("refreshBtn").addEventListener("click", refresh);
   $("alertRetryBtn").addEventListener("click", refresh);
+  $("detailCloseBtn").addEventListener("click", () => { state.detailOpen = false; syncDetailVisibility(); });
+  $("detailBackdrop").addEventListener("click", () => { state.detailOpen = false; syncDetailVisibility(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.detailOpen) {
+      state.detailOpen = false;
+      syncDetailVisibility();
+    }
+  });
   $("clearPaperBtn").addEventListener("click", () => { state.paper = []; writePaper(); renderPaper(); });
 }
 

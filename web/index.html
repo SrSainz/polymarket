@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Observatorio deportivo de mercados Polymarket. Lectura y paper, sin ejecucion real." />
+    <meta name="description" content="Panel compacto de oportunidades deportivas en Polymarket. Lectura y paper, sin ejecucion real." />
     <title>Polysainz | Sports desk</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/assets/styles.css?v=20260813-sports2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260814-sports3" />
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell compact-app">
       <header class="topbar">
         <a class="brand-lockup" href="/" aria-label="Polysainz Sports Desk">
           <span class="brand-mark" aria-hidden="true">P</span>
@@ -21,65 +21,69 @@
           </span>
         </a>
         <nav class="desk-nav" aria-label="Navegacion principal">
-          <a class="is-active" href="#radar">Radar</a>
-          <a href="#paper">Cuaderno paper</a>
-          <a href="#method">Método</a>
+          <a class="is-active" href="#radar">Agenda</a>
+          <a href="#paper">Registro <span id="navPaperCount">0</span></a>
+          <a href="#method">Como funciona</a>
         </nav>
         <div class="topbar-actions">
-          <span id="modeBadge" class="status-pill status-paper"><span class="status-dot"></span> SOLO OBSERVACIÓN</span>
+          <span id="modeBadge" class="status-pill status-paper"><span class="status-dot"></span> SOLO OBSERVACION</span>
           <span id="feedBadge" class="status-pill"><span class="status-dot"></span> CONECTANDO</span>
           <button id="refreshBtn" class="icon-button" type="button" title="Actualizar mercados" aria-label="Actualizar mercados">↻</button>
         </div>
       </header>
 
       <main>
-        <section class="hero-row">
-          <div class="hero-copy">
-            <span class="eyebrow">RADAR DE MERCADO</span>
-            <h1>Deporte en contexto.<br /><em>Precios con evidencia.</em></h1>
-            <p>Una mesa de lectura para seguir eventos, liquidez y libro ejecutable en Polymarket antes de arriesgar capital.</p>
+        <section class="desk-intro">
+          <div class="desk-intro-copy">
+            <span class="eyebrow">SPORTS DESK / DAILY VIEW</span>
+            <h1>Encuentra la mejor lectura.<br /><em>Decide sin ruido.</em></h1>
+            <p>Eventos deportivos de hoy y las proximas 72 horas, ordenados para abrir el detalle en un solo clic.</p>
           </div>
-          <div class="hero-note">
-            <span class="signal-line"><i></i> SISTEMA EN MODO PAPER</span>
-            <strong>Lee primero. Decide después.</strong>
-            <span>Sin wallet, sin órdenes y sin datos privados en este navegador.</span>
+          <div class="desk-intro-note">
+            <span class="signal-line"><i></i> MODO OBSERVACION</span>
+            <strong id="advisorStatus">Analisis antes de apostar</strong>
+            <span>La propuesta diaria llegara aqui cuando conectemos la API privada y la confirmacion por WhatsApp.</span>
           </div>
         </section>
 
-        <section class="command-bar panel" aria-label="Controles del radar">
+        <section class="command-bar panel compact-command" aria-label="Filtros del radar">
           <div class="command-context">
-            <span class="eyebrow">FUENTE</span>
-            <strong>Gamma + CLOB público</strong>
+            <span class="eyebrow">FUENTE PUBLICA</span>
+            <strong>Gamma + CLOB</strong>
             <span id="lastUpdated">Sin datos cargados</span>
+          </div>
+          <div id="horizonFilter" class="segmented-control" role="group" aria-label="Horizonte temporal">
+            <button type="button" data-horizon="today" aria-pressed="false">Hoy</button>
+            <button type="button" class="is-active" data-horizon="3d" aria-pressed="true">3 dias</button>
           </div>
           <div id="viewFilter" class="view-filter" role="group" aria-label="Filtrar estado">
             <button type="button" class="is-active" data-view-filter="all" aria-pressed="true">Todos</button>
             <button type="button" data-view-filter="live" aria-pressed="false">En directo</button>
-            <button type="button" data-view-filter="upcoming" aria-pressed="false">Próximos</button>
+            <button type="button" data-view-filter="upcoming" aria-pressed="false">Proximos</button>
           </div>
           <label class="compact-control">
             <span>Liga</span>
             <select id="leagueSelect" aria-label="Seleccionar liga"></select>
           </label>
-          <label class="compact-control">
+          <label class="compact-control optional-mobile-filter">
             <span>Mercado</span>
             <select id="marketTypeSelect" aria-label="Filtrar tipo de mercado">
               <option value="all">Todos</option>
               <option value="moneyline">Ganador</option>
-              <option value="spreads">Hándicap</option>
+              <option value="spreads">Handicap</option>
               <option value="totals">Totales</option>
               <option value="match_handicap">Match handicap</option>
             </select>
           </label>
-          <label class="compact-control compact-search">
+          <label class="compact-control compact-search optional-mobile-filter">
             <span>Buscar</span>
             <input id="searchInput" type="search" placeholder="Equipo o evento..." autocomplete="off" />
           </label>
-          <label class="compact-control compact-sort">
+          <label class="compact-control compact-sort optional-mobile-filter">
             <span>Orden</span>
             <select id="sortSelect" aria-label="Ordenar eventos">
-              <option value="liquidity">Más liquidez</option>
-              <option value="start">Próximo inicio</option>
+              <option value="start">Proximo inicio</option>
+              <option value="liquidity">Mas liquidez</option>
               <option value="volume">Volumen 24h</option>
             </select>
           </label>
@@ -87,20 +91,20 @@
 
         <section id="alertPanel" class="alert-panel" hidden>
           <strong id="alertTitle">Feed temporalmente no disponible</strong>
-          <span id="alertMessage">Conservamos el último estado conocido.</span>
+          <span id="alertMessage">Conservamos el ultimo estado conocido.</span>
           <button id="alertRetryBtn" type="button" class="text-button">Reintentar</button>
         </section>
 
-        <section class="signal-strip" aria-label="Resumen del observatorio">
+        <section class="signal-strip compact-signals" aria-label="Resumen del observatorio">
           <article class="signal-cell signal-blue">
-            <span class="metric-label">Eventos activos</span>
+            <span class="metric-label">Oportunidades</span>
             <strong id="eventCount">-</strong>
-            <small id="eventCountMeta">Selecciona una liga</small>
+            <small id="eventCountMeta">En las proximas 72 horas</small>
           </article>
           <article class="signal-cell signal-orange">
             <span class="metric-label">En directo</span>
             <strong id="liveCount">-</strong>
-            <small id="liveCountMeta">Marcador público</small>
+            <small id="liveCountMeta">Marcador publico</small>
           </article>
           <article class="signal-cell signal-green">
             <span class="metric-label">Liquidez visible</span>
@@ -108,82 +112,96 @@
             <small>Referencia Gamma, no saldo</small>
           </article>
           <article class="signal-cell signal-violet">
-            <span class="metric-label">Hipótesis paper</span>
+            <span class="metric-label">En registro</span>
             <strong id="paperCount">0</strong>
             <small>Solo en este navegador</small>
           </article>
         </section>
 
-        <section id="radar" class="workspace-grid">
-          <aside class="feed-column" aria-label="Radar de eventos">
-            <div class="section-heading">
+        <section id="radar" class="desk-grid">
+          <section class="opportunities-panel panel" aria-label="Radar de eventos">
+            <div class="panel-heading">
               <div>
-                <span class="eyebrow">RADAR DE EVENTOS</span>
-                <h2>La agenda que importa</h2>
+                <span class="eyebrow">AGENDA</span>
+                <h2>Oportunidades para revisar</h2>
               </div>
-              <span id="resultCount" class="count-chip">-</span>
+              <div class="panel-heading-side">
+                <span class="click-hint">Pincha una tarjeta</span>
+                <span id="resultCount" class="count-chip">-</span>
+              </div>
             </div>
-            <div class="feed-caption"><span class="live-pip"></span><span>Selección automática por liquidez</span><span class="feed-caption-rule"></span><span>Actualización 60s</span></div>
+            <div class="feed-caption compact-caption"><span class="live-pip"></span><span>Se prioriza el inicio mas cercano</span><span class="feed-caption-rule"></span><span>Actualiza 60s</span></div>
             <div id="eventsList" class="events-list" aria-live="polite"></div>
-          </aside>
+          </section>
 
-          <section class="detail-column" aria-label="Detalle del evento seleccionado">
-            <div class="section-heading detail-heading">
-              <div>
-                <span class="eyebrow">EVENTO SELECCIONADO</span>
-                <h2 id="detailTitle">Selecciona un evento</h2>
+          <section id="detailColumn" class="detail-column panel" aria-label="Detalle del evento seleccionado">
+            <div class="detail-shell">
+              <div class="panel-heading detail-heading">
+                <div>
+                  <span class="eyebrow">DETALLE</span>
+                  <h2 id="detailTitle">Selecciona un evento</h2>
+                </div>
+                <div class="detail-heading-actions">
+                  <span id="detailState" class="state-tag">-</span>
+                  <button id="detailCloseBtn" class="detail-close" type="button" aria-label="Cerrar detalle">×</button>
+                </div>
               </div>
-              <span id="detailState" class="state-tag">-</span>
-            </div>
-            <div id="detailPanel" class="detail-panel empty-state">
-              <div class="empty-icon">◎</div>
-              <strong>Aquí aparecerá el mercado seleccionado</strong>
-              <p>Precio, spread, profundidad y frescura. Las acciones de esta página son paper y no envían órdenes.</p>
+              <div id="detailPanel" class="detail-panel empty-state">
+                <div class="empty-icon">◎</div>
+                <strong>Selecciona una tarjeta</strong>
+                <p>Precio, libro y liquidez apareceran aqui. Las acciones son paper y no envian ordenes.</p>
+              </div>
             </div>
           </section>
         </section>
 
-        <section id="paper" class="paper-section panel">
-          <div class="paper-heading">
-            <div>
-              <span class="eyebrow">CUADERNO PAPER</span>
-              <h2>Hipótesis guardadas</h2>
+        <button id="detailBackdrop" class="detail-backdrop" type="button" aria-label="Cerrar detalle" hidden></button>
+
+        <section class="lower-grid">
+          <section id="paper" class="paper-section panel">
+            <div class="paper-heading">
+              <div>
+                <span class="eyebrow">REGISTRO LOCAL</span>
+                <h2>Mis hipotesis</h2>
+              </div>
+              <div class="paper-heading-meta"><span>Paper / sin dinero</span><button id="clearPaperBtn" class="text-button" type="button">Limpiar</button></div>
             </div>
-            <div class="paper-heading-meta"><span>Persistencia local</span><button id="clearPaperBtn" class="text-button" type="button">Limpiar todo</button></div>
-          </div>
-          <div id="paperLedger" class="paper-ledger"></div>
+            <div id="paperLedger" class="paper-ledger"></div>
+          </section>
+
+          <aside class="advisor-card panel" aria-label="Flujo futuro de propuesta diaria">
+            <div class="advisor-card-top">
+              <span class="eyebrow">SIGUIENTE CAPA</span>
+              <span class="future-tag">PROXIMAMENTE</span>
+            </div>
+            <h2>Una propuesta al dia,<br /><em>tu decides.</em></h2>
+            <p>Analisis de eventos deportivos, fecha cercana y probabilidad estimada. La propuesta se enviara por WhatsApp para confirmar si, no y cuanto.</p>
+            <div class="advisor-steps">
+              <span><b>01</b> Analizar</span>
+              <span><b>02</b> Avisar</span>
+              <span><b>03</b> Confirmar</span>
+            </div>
+            <div class="advisor-lock"><span class="status-dot"></span> Sin ejecucion automatica desde esta web</div>
+          </aside>
         </section>
 
-        <section id="method" class="method-section">
-          <div class="section-heading method-heading">
-            <div>
-              <span class="eyebrow">MÉTODO</span>
-              <h2>Qué estás viendo</h2>
+        <section id="method" class="method-section compact-method">
+          <details>
+            <summary><span><span class="eyebrow">AYUDA RAPIDA</span><strong>Como leer este panel</strong></span><span class="summary-action">Abrir guia +</span></summary>
+            <div class="method-grid">
+              <article class="method-card"><span class="method-number">01</span><div><h3>Mercado</h3><p>El precio publico expresa la probabilidad implicita, no una garantia ni una recomendacion.</p></div></article>
+              <article class="method-card"><span class="method-number">02</span><div><h3>Detalle</h3><p>Abre una tarjeta para revisar libro, spread, liquidez y fuente antes de guardar una hipotesis.</p></div></article>
+              <article class="method-card"><span class="method-number">03</span><div><h3>Registro</h3><p>El cuaderno vive en este navegador. No contiene wallet, credenciales ni ordenes reales.</p></div></article>
             </div>
-            <span class="method-rule"></span>
-          </div>
-          <div class="method-grid">
-            <article class="method-card">
-              <span class="method-number">01</span>
-              <div><h3>Precio ejecutable</h3><p>Bid, ask, spread y profundidad CLOB. No confundimos una referencia Gamma con un fill.</p></div>
-            </article>
-            <article class="method-card">
-              <span class="method-number">02</span>
-              <div><h3>Solo observación</h3><p>No hay private keys, balances, wallet ni rutas de compra en el navegador.</p></div>
-            </article>
-            <article class="method-card">
-              <span class="method-number">03</span>
-              <div><h3>Replay antes que live</h3><p>El paper sirve para medir calibración, CLV, fills simulados y drawdown.</p></div>
-            </article>
-          </div>
+          </details>
         </section>
       </main>
 
       <footer class="footer-bar">
         <span>Polysainz / Sports Desk</span>
-        <span>Datos públicos de Polymarket · solo observación · <span id="buildLabel">build 2026.08.13</span></span>
+        <span>Datos publicos de Polymarket · solo observacion · <span id="buildLabel">build 2026.08.14</span></span>
       </footer>
     </div>
-    <script src="/assets/app.js?v=20260813-sports2" defer></script>
+    <script src="/assets/app.js?v=20260814-sports3" defer></script>
   </body>
 </html>
